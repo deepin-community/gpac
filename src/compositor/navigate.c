@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -25,7 +25,6 @@
 
 #include "nodes_stacks.h"
 #include "visual_manager.h"
-#include <gpac/options.h>
 
 
 #ifndef GPAC_DISABLE_3D
@@ -369,7 +368,7 @@ static Bool compositor_handle_navigation_3d(GF_Compositor *compositor, GF_Event 
 	if (!cam->navigate_mode && !(keys & GF_KEY_MOD_ALT) ) return 0;
 	x = y = 0;
 	/*renorm between -1, 1*/
-	if (ev->type<=GF_EVENT_MOUSEWHEEL) {
+	if (ev->type <= GF_EVENT_LAST_MOUSE) {
 		x = gf_divfix( INT2FIX(ev->mouse.x - (s32) compositor->visual->width/2), INT2FIX(compositor->visual->width));
 		y = gf_divfix( INT2FIX(ev->mouse.y - (s32) compositor->visual->height/2), INT2FIX(compositor->visual->height));
 	}
@@ -558,7 +557,7 @@ static Bool compositor_handle_navigation_3d(GF_Compositor *compositor, GF_Event 
 					/*+ or - 10 cm*/
 					compositor->focdist += INT2FIX(key_inv);
 					cam->flags |= CAM_IS_DIRTY;
-					fprintf(stderr, "AutoStereo view distance %f - focus %f\n", FIX2FLT(compositor->video_out->dispdist)/100, FIX2FLT(compositor->focdist)/100);
+					GF_LOG(GF_LOG_INFO, GF_LOG_COMPOSE, ("AutoStereo view distance %f - focus %f\n", FIX2FLT(compositor->video_out->dispdist)/100, FIX2FLT(compositor->focdist)/100));
 					gf_sc_invalidate(compositor, NULL);
 					return 1;
 				}
@@ -598,7 +597,7 @@ static Bool compositor_handle_navigation_3d(GF_Compositor *compositor, GF_Event 
 			if (keys & GF_KEY_MOD_ALT) {
 				if ( (keys & GF_KEY_MOD_SHIFT) && (compositor->visual->nb_views > 1) ) {
 					compositor->interoccular_offset += FLT2FIX(0.5) * key_inv;
-					fprintf(stderr, "AutoStereo interoccular distance %f\n", FIX2FLT(compositor->iod + compositor->interoccular_offset));
+					GF_LOG(GF_LOG_INFO, GF_LOG_COMPOSE, ("AutoStereo interoccular distance %f\n", FIX2FLT(compositor->iod + compositor->interoccular_offset)));
 					cam->flags |= CAM_IS_DIRTY;
 					gf_sc_invalidate(compositor, NULL);
 					return 1;
@@ -651,7 +650,8 @@ static Bool compositor_handle_navigation_3d(GF_Compositor *compositor, GF_Event 
 			break;
 		case GF_KEY_D:
 			if (keys & GF_KEY_MOD_CTRL) {
-				compositor->tvtd = !compositor->tvtd;
+				if (compositor->tvtd==TILE_DEBUG_FULL) compositor->tvtd = 0;
+				else compositor->tvtd ++;
 				gf_sc_invalidate(compositor, NULL);
 				return 1;
 			}
@@ -738,7 +738,7 @@ static Bool compositor_handle_navigation_2d(GF_VisualManager *visual, GF_Event *
 
 	x = y = 0;
 	/*renorm between -1, 1*/
-	if (ev->type<=GF_EVENT_MOUSEWHEEL) {
+	if (ev->type <= GF_EVENT_LAST_MOUSE) {
 		x = INT2FIX(ev->mouse.x);
 		y = INT2FIX(ev->mouse.y);
 	}

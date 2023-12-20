@@ -75,14 +75,15 @@ static GF_Err BM_ParseMultipleIndexedReplace(GF_BifsDecoder *codec, GF_BitStream
 
 		if (field.fieldType==GF_SG_VRML_SFNODE) {
 			inf->new_node = gf_bifs_dec_node(codec, bs, field.NDTtype);
-			if (codec->LastError) goto err;
+			e = codec->LastError;
 			inf->field_ptr = &inf->new_node;
-			gf_node_register(inf->new_node, NULL);
+			if (inf->new_node)
+				gf_node_register(inf->new_node, NULL);
 		} else {
 			field.far_ptr = inf->field_ptr = gf_sg_vrml_field_pointer_new(inf->fieldType);
 			e = gf_bifs_dec_sf_field(codec, bs, node, &field, GF_TRUE);
-			if (e) goto err;
 		}
+		if (e) goto err;
 		count--;
 	}
 err:
@@ -178,7 +179,12 @@ static GF_Err BM_ParseGlobalQuantizer(GF_BifsDecoder *codec, GF_BitStream *bs, G
 	codec->scenegraph->global_qp = NULL;
 
 	if (gf_node_get_tag(node) != TAG_MPEG4_QuantizationParameter) {
-		gf_node_unregister(node, NULL);
+		//if node was just created (num_instances == 0), unregister
+		//otherwise (USE node) don't do anything
+		if (!node->sgprivate->num_instances) {
+			node->sgprivate->num_instances = 1;
+			gf_node_unregister(node, NULL);
+		}
 		return GF_NON_COMPLIANT_BITSTREAM;
 	}
 
@@ -188,7 +194,8 @@ static GF_Err BM_ParseGlobalQuantizer(GF_BifsDecoder *codec, GF_BitStream *bs, G
 	codec->scenegraph->global_qp = node;
 
 	/*register TWICE: once for the command, and for the scenegraph globalQP*/
-	node->sgprivate->num_instances = 2;
+	gf_node_register(node, NULL);
+	gf_node_register(node, NULL);
 
 	com = gf_sg_command_new(codec->current_graph, GF_SG_GLOBAL_QUANTIZER);
 	inf = gf_sg_command_field_new(com);
@@ -337,6 +344,7 @@ static GF_Err BM_XReplace(GF_BifsDecoder *codec, GF_BitStream *bs, GF_List *com_
 	}
 	decfield.fieldIndex = inf->fieldIndex;
 	decfield.fieldType = inf->fieldType;
+	decfield.name = targetField.name;
 
 	if (inf->fieldType==GF_SG_VRML_SFNODE) {
 		decfield.far_ptr = inf->field_ptr = &inf->new_node;
@@ -531,7 +539,7 @@ GF_Err BM_ParseRouteInsert(GF_BifsDecoder *codec, GF_BitStream *bs, GF_List *com
 	/*def'ed route*/
 	if (flag) {
 		RouteID = 1 + gf_bs_read_int(bs, codec->info->config.RouteIDBits);
-		if (codec->UseName) gf_bifs_dec_name(bs, name);
+		if (codec->UseName) gf_bifs_dec_name(bs, name, 1000);
 	}
 	/*origin*/
 	node_id = 1 + gf_bs_read_int(bs, codec->info->config.NodeIDBits);
@@ -890,6 +898,8 @@ GF_Err BM_ParseCommand(GF_BifsDecoder *codec, GF_BitStream *bs, GF_List *com_lis
 	GF_Err e;
 	go = 1;
 	e = GF_OK;
+	GF_SceneGraph *cur_graph = codec->current_graph;
+	GF_Proto *cur_proto = codec->pCurrentProto;
 
 	codec->LastError = GF_OK;
 	while (go) {
@@ -908,18 +918,21 @@ GF_Err BM_ParseCommand(GF_BifsDecoder *codec, GF_BitStream *bs, GF_List *com_lis
 			e = BM_SceneReplace(codec, bs, com_list);
 			break;
 		}
-		if (e) return e;
+		if (e) break;
 		go = gf_bs_read_int(bs, 1);
 	}
 	while (gf_list_count(codec->QPs)) {
 		gf_bifs_dec_qp_remove(codec, GF_TRUE);
 	}
-	return GF_OK;
+
+	codec->current_graph = cur_graph;
+	codec->pCurrentProto = cur_proto;
+	return e;
 }
 
 void BM_EndOfStream(void *co)
 {
-	((GF_BifsDecoder *) co)->LastError = GF_IO_ERR;
+	((GF_BifsDecoder *) co)->LastError = GF_NON_COMPLIANT_BITSTREAM;
 }
 
 void gf_bs_set_eos_callback(GF_BitStream *bs, void (*EndOfStream)(void *par), void *par);
@@ -930,12 +943,19 @@ GF_Err gf_bifs_flush_command_list(GF_BifsDecoder *codec)
 	GF_BitStream *bs;
 	GF_Err e;
 	CommandBufferItem *cbi;
+	GF_SceneGraph *prev_root = codec->current_graph;
+	M_QuantizationParameter *prev_qp = codec->ActiveQP;
+	u32 prev_qp_count = gf_list_count(codec->QPs);
 	u32 NbPass = gf_list_count(codec->command_buffers);
+
+
+	codec->ActiveQP = NULL;
 	GF_List *nextPass = gf_list_new();
 	while (NbPass) {
 		while (gf_list_count(codec->command_buffers)) {
 			cbi = (CommandBufferItem *)gf_list_get(codec->command_buffers, 0);
 			gf_list_rem(codec->command_buffers, 0);
+
 			codec->current_graph = gf_node_get_graph(cbi->node);
 			e = GF_OK;
 			if (cbi->cb->bufferSize) {
@@ -945,6 +965,7 @@ GF_Err gf_bifs_flush_command_list(GF_BifsDecoder *codec)
 				gf_bs_del(bs);
 			}
 			if (!e) {
+				gf_node_unregister(cbi->node, NULL);
 				gf_free(cbi);
 				continue;
 			}
@@ -959,6 +980,7 @@ GF_Err gf_bifs_flush_command_list(GF_BifsDecoder *codec)
 					for (i=0; i<gf_list_count(codec->command_buffers); i++) {
 						CommandBufferItem *cbi2 = (CommandBufferItem *)gf_list_get(codec->command_buffers, i);
 						if (cbi2->cb == cf->field_ptr) {
+							gf_node_unregister(cbi2->node, NULL);
 							gf_free(cbi2);
 							gf_list_rem(codec->command_buffers, i);
 							i--;
@@ -978,9 +1000,17 @@ GF_Err gf_bifs_flush_command_list(GF_BifsDecoder *codec)
 		}
 		NbPass --;
 		if (NbPass > gf_list_count(codec->command_buffers)) NbPass = gf_list_count(codec->command_buffers);
+
+		//restore QP state
+		while (gf_list_count(codec->QPs) > prev_qp_count) {
+			gf_list_rem(codec->QPs, 0); //QPs are inserted at head of list
+		}
+		codec->ActiveQP = NULL;
 		codec->LastError = GF_OK;
 	}
 	gf_list_del(nextPass);
+	codec->current_graph = prev_root;
+	codec->ActiveQP = prev_qp;
 	return GF_OK;
 }
 
@@ -1016,6 +1046,7 @@ GF_Err gf_bifs_decode_command_list(GF_BifsDecoder *codec, u16 ESID, u8 *data, u3
 	/*if err or not reset conditionals*/
 	while (gf_list_count(codec->command_buffers)) {
 		CommandBufferItem *cbi = (CommandBufferItem *)gf_list_get(codec->command_buffers, 0);
+		gf_node_unregister(cbi->node, NULL);
 		gf_free(cbi);
 		gf_list_rem(codec->command_buffers, 0);
 	}

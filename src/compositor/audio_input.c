@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2018
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -43,6 +43,9 @@ static u8 *gf_audio_input_fetch_frame(void *callback, u32 *size, u32 *planar_siz
 	Fixed speed;
 	Bool done;
 	GF_AudioInput *ai = (GF_AudioInput *) callback;
+
+restart:
+
 	/*even if the stream is signaled as finished we must check it, because it may have been restarted by a mediaControl*/
 	if (!ai->stream) return NULL;
 
@@ -54,6 +57,7 @@ static u8 *gf_audio_input_fetch_frame(void *callback, u32 *size, u32 *planar_siz
 	if (done != ai->stream_finished) {
 		gf_sc_invalidate(ai->compositor, NULL);
 	}
+	ai->input_ifce.is_eos = ai->stream_finished;
 
 	/*no more data or not enough data, reset syncro drift*/
 	if (!frame) {
@@ -61,7 +65,16 @@ static u8 *gf_audio_input_fetch_frame(void *callback, u32 *size, u32 *planar_siz
 			GF_LOG(GF_LOG_DEBUG, GF_LOG_AUDIO, ("[Audio Input] No data in audio object\n"));
 		}
 		gf_mo_adjust_clock(ai->stream, 0);
-		ai->input_ifce.is_buffering = gf_mo_is_buffering(ai->stream);
+		if (!ai->stream_finished && !ai->compositor->player)
+			ai->input_ifce.is_buffering = GF_TRUE;
+		else
+			ai->input_ifce.is_buffering = gf_mo_is_buffering(ai->stream);
+		*size = 0;
+		if (!ai->stream->odm->state) ai->is_playing = GF_FALSE;
+		return NULL;
+	}
+	if (ai->stream->config_changed) {
+		gf_mo_release_data(ai->stream, 0, -1);
 		*size = 0;
 		return NULL;
 	}
@@ -77,6 +90,11 @@ static u8 *gf_audio_input_fetch_frame(void *callback, u32 *size, u32 *planar_siz
 
 	gf_mo_get_object_time(ai->stream, &obj_time);
 	obj_time += audio_delay_ms;
+
+	if (ai->compositor->audd<0) obj_time += -ai->compositor->audd;
+	else if (obj_time > (u32) ai->compositor->audd) obj_time -= ai->compositor->audd;
+	else obj_time=0;
+
 	if (ai->compositor->bench_mode) {
 		drift = 0;
 	} else {
@@ -91,11 +109,11 @@ static u8 *gf_audio_input_fetch_frame(void *callback, u32 *size, u32 *planar_siz
 		diff = ABS(drift_old);
 		diff -= ABS(drift);
 		if (diff < 0) {
-			GF_LOG(GF_LOG_INFO, GF_LOG_SYNC, ("[Audio Input] in clock discontinuity: drift old clock %d new clock %d - disabling clock adjustment\n", drift_old, drift));
+			GF_LOG(GF_LOG_INFO, GF_LOG_COMPTIME, ("[Audio Input] in clock discontinuity: drift old clock %d new clock %d - disabling clock adjustment\n", drift_old, drift));
 			drift = 0;
 			audio_delay_ms = 0;
 		} else {
-			GF_LOG(GF_LOG_INFO, GF_LOG_SYNC, ("[Audio Input] end of clock discontinuity: drift old clock %d new clock %d\n", drift_old, drift));
+			GF_LOG(GF_LOG_INFO, GF_LOG_COMPTIME, ("[Audio Input] end of clock discontinuity: drift old clock %d new clock %d\n", drift_old, drift));
 			ai->stream->odm->prev_clock_at_discontinuity_plus_one = 0;
 			if (drift<0) {
 				drift = 0;
@@ -103,31 +121,42 @@ static u8 *gf_audio_input_fetch_frame(void *callback, u32 *size, u32 *planar_siz
 		}
 	}
 
+	//flush audio (compositor in non-player mode is exiting), don't check drift
+	if (ai->compositor->flush_audio) {
+		drift = 0;
+		audio_delay_ms = 0;
+	}
+
 #ifdef ENABLE_EARLY_FRAME_DETECTION
 	/*too early (silence insertions), skip*/
 	if (drift < 0) {
-		GF_LOG(GF_LOG_INFO, GF_LOG_AUDIO, ("[Audio Input] audio too early of %d (CTS %u at OTB %u with audio delay %d ms)\n", drift + audio_delay_ms, ts, obj_time, audio_delay_ms));
-		ai->need_release = GF_FALSE;
-		gf_mo_release_data(ai->stream, 0, -1);
-		*size = 0;
-		return NULL;
+		//if not playing, start if audio is due in less than 50ms
+		if (ai->is_playing || (drift < -50)) {
+			GF_LOG(GF_LOG_INFO, GF_LOG_AUDIO, ("[Audio Input] audio too early of %d (CTS %u at OTB %u with audio delay %d ms)\n", drift + audio_delay_ms, ts, obj_time, audio_delay_ms));
+			ai->need_release = GF_FALSE;
+			gf_mo_release_data(ai->stream, 0, -1);
+			*size = 0;
+			return NULL;
+		}
 	}
 #endif
 	/*adjust drift*/
 	if (audio_delay_ms) {
 		s32 resync_delay = speed > 0 ? FIX2INT(speed * MAX_RESYNC_TIME) : FIX2INT(-speed * MAX_RESYNC_TIME);
+		if (!ai->is_playing) resync_delay = 0;
 		/*CU is way too late, discard and fetch a new one - this usually happen when media speed is more than 1*/
 		if (drift>resync_delay) {
 			GF_LOG(GF_LOG_INFO, GF_LOG_AUDIO, ("[Audio Input] Audio data too late obj time %d - CTS %d - drift %d ms - resync forced\n", obj_time - audio_delay_ms, ts, drift));
 			gf_mo_release_data(ai->stream, *size, 2);
 			ai->need_release = GF_FALSE;
-			return gf_audio_input_fetch_frame(callback, size, planar_size, audio_delay_ms);
+			//avoid recursion
+			goto restart;
 		}
 		if (ai->stream->odm && ai->stream->odm->ck)
 			resync_delay = ai->stream->odm->ck->audio_delay - drift;
 		else
 			resync_delay = -drift;
-			
+
 		if (resync_delay < 0) resync_delay = -resync_delay;
 
 		if (resync_delay > MIN_DRIFT_ADJUST) {
@@ -135,6 +164,7 @@ static u8 *gf_audio_input_fetch_frame(void *callback, u32 *size, u32 *planar_siz
 			gf_mo_adjust_clock(ai->stream, drift);
 		}
 	}
+	ai->is_playing = GF_TRUE;
 	return frame;
 }
 
@@ -187,11 +217,14 @@ static Bool gf_audio_input_get_config(GF_AudioInterface *aifc, Bool for_recf)
 
 	gf_mo_get_audio_info(ai->stream, &aifc->samplerate, &aifc->afmt , &aifc->chan, &aifc->ch_layout, &aifc->forced_layout);
 
-	if (!for_recf)
+	if (!for_recf && !ai->stream->config_changed)
 		return aifc->samplerate ? GF_TRUE : GF_FALSE;
 
 	if (aifc->samplerate && aifc->chan && aifc->afmt && ((aifc->chan<=2) || aifc->ch_layout))  {
-		ai->stream->config_changed = GF_FALSE;
+		if (ai->stream->config_changed) {
+			ai->stream->config_changed = GF_FALSE;
+			return GF_FALSE;
+		}
 		return GF_TRUE;
 	}
 	//still not ready !

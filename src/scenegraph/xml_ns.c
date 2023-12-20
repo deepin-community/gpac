@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre - Cyril Concolato
- *			Copyright (c) Telecom ParisTech 2000-2020
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / SVG Scene Graph sub-project
@@ -122,7 +122,7 @@ static const struct xml_att_def {
 	{ "audio-level", TAG_SVG_ATT_audio_level, SVG_Number_datatype, 0, GF_XMLNS_SVG },
 	{ "viewport-fill", TAG_SVG_ATT_viewport_fill, SVG_Paint_datatype, 0, GF_XMLNS_SVG },
 	{ "viewport-fill-opacity", TAG_SVG_ATT_viewport_fill_opacity, SVG_Number_datatype, 0, GF_XMLNS_SVG },
-	{ "overflow", TAG_SVG_ATT_overflow, DOM_String_datatype, 0, GF_XMLNS_SVG },
+	{ "overflow", TAG_SVG_ATT_overflow, SVG_Overflow_datatype, 0, GF_XMLNS_SVG },
 	{ "fill-opacity", TAG_SVG_ATT_fill_opacity, SVG_Number_datatype, 0, GF_XMLNS_SVG },
 	{ "stroke-opacity", TAG_SVG_ATT_stroke_opacity, SVG_Number_datatype, 0, GF_XMLNS_SVG },
 	{ "fill-rule", TAG_SVG_ATT_fill_rule, SVG_FillRule_datatype, 0, GF_XMLNS_SVG },
@@ -274,6 +274,9 @@ static const struct xml_att_def {
 	{ "overlay", TAG_SVG_ATT_overlay, SVG_Overlay_datatype, 0, GF_XMLNS_SVG },
 	{ "fullscreen", TAG_SVG_ATT_fullscreen, SVG_Boolean_datatype, 0, GF_XMLNS_SVG },
 	{ "motionTransform", TAG_SVG_ATT_motionTransform, SVG_Motion_datatype, 0, GF_XMLNS_SVG },
+	{ "clip-path", TAG_SVG_ATT_clip_path, SVG_ClipPath_datatype, 0, GF_XMLNS_SVG },
+
+
 	/*SMIL anim fill*/
 	{ "fill", TAG_SVG_ATT_smil_fill, SMIL_Fill_datatype, GF_SVG_ATTOPT_SMIL, GF_XMLNS_SVG },
 	/*regular paint fill*/
@@ -382,7 +385,7 @@ static u32 gf_xml_get_namespace(GF_DOMNode *elt, const char *attribute_name)
 	while (att) {
 		if (att->tag==TAG_DOM_ATT_any) {
 			GF_DOMFullAttribute *datt = (GF_DOMFullAttribute*)att;
-			if (datt->name && !strncmp(datt->name, "xmlns", 5) && !strcmp(datt->name+6, attribute_name)) {
+			if (datt->name && !strncmp(datt->name, "xmlns:", 6) && !strcmp(datt->name+6, attribute_name)) {
 				return gf_xml_get_namespace_id(*(DOM_String *)  datt->data);
 			}
 		}
@@ -440,9 +443,13 @@ u32 gf_xml_get_attribute_tag(GF_Node *elt, char *attribute_name, GF_NamespaceTyp
 			case TAG_SVG_animateMotion:
 			case TAG_SVG_animateTransform:
 			case TAG_SVG_animation:
+			case TAG_SVG_set:
+				return xml_attributes[i].tag;
 			case TAG_SVG_audio:
 			case TAG_SVG_video:
-			case TAG_SVG_set:
+				//"type" on audio and video is mime type, not smil anim type
+				if (xml_attributes[i].tag == TAG_SVG_ATT_transform_type)
+					break;
 				return xml_attributes[i].tag;
 			default:
 				break;
@@ -495,6 +502,7 @@ u32 gf_xml_get_attribute_tag(GF_Node *elt, char *attribute_name, GF_NamespaceTyp
 			return xml_attributes[i].tag;
 		}
 	}
+
 	return TAG_DOM_ATT_any;
 }
 
@@ -552,6 +560,7 @@ static const struct xml_elt_def {
 	{ "animateTransform", TAG_SVG_animateTransform, GF_XMLNS_SVG },
 	{ "animation", TAG_SVG_animation, GF_XMLNS_SVG },
 	{ "audio", TAG_SVG_audio, GF_XMLNS_SVG },
+	{ "clipPath", TAG_SVG_clip_path, GF_XMLNS_SVG },
 	{ "circle", TAG_SVG_circle, GF_XMLNS_SVG },
 	{ "defs", TAG_SVG_defs, GF_XMLNS_SVG },
 	{ "desc", TAG_SVG_desc, GF_XMLNS_SVG },
@@ -1045,8 +1054,12 @@ static u32 check_existing_file(char *base_file, char *ext, char *data, u32 data_
 	char szFile[GF_MAX_PATH];
 	u64 fsize;
 	FILE *f;
+	int concatres;
 
-	sprintf(szFile, "%s%04X%s", base_file, idx, ext);
+	concatres = snprintf(szFile, GF_MAX_PATH, "%s%04X%s", base_file, idx, ext);
+	if (concatres<0) {
+		GF_LOG(GF_LOG_WARNING, GF_LOG_CORE, ("Path too long (limit %d) when trying to concatenate %s and %s\n", GF_MAX_PATH, base_file, ext));
+	}
 
 	f = gf_fopen(szFile, "rb");
 	if (!f) return 0;
@@ -1081,7 +1094,10 @@ GF_Err gf_node_store_embedded_data(XMLRI *iri, const char *cache_dir, const char
 	u32 data_size=0, idx;
 	Bool existing;
 
-	if (!cache_dir || !base_filename || !iri || !iri->string || strncmp(iri->string, "data:", 5)) return GF_OK;
+	if (!cache_dir || !base_filename || !iri || !iri->string) return GF_OK;
+	if (strncmp(iri->string, "data:", 5)) return GF_OK;
+	//used in test suite
+	if (!strcmp(iri->string, "data:,void")) return GF_OK;
 
 	/*handle "data:" scheme when cache is specified*/
 	strcpy(szFile, cache_dir);
@@ -1112,7 +1128,7 @@ GF_Err gf_node_store_embedded_data(XMLRI *iri, const char *cache_dir, const char
 
 
 	data = NULL;
-	sep = strchr(iri->string, ';');
+	sep = strstr(iri->string, ";base");
 	if (!strncmp(sep, ";base64,", 8)) {
 		sep += 8;
 		data_size = 2 * (u32) strlen(sep);
@@ -1146,6 +1162,7 @@ GF_Err gf_node_store_embedded_data(XMLRI *iri, const char *cache_dir, const char
 	strcat(szFile, buf);
 	strcat(szFile, ext);
 
+	GF_Err e = GF_OK;
 	if (!existing) {
 		FILE *f = gf_fopen(szFile, "wb");
 		if (!f) {
@@ -1154,15 +1171,16 @@ GF_Err gf_node_store_embedded_data(XMLRI *iri, const char *cache_dir, const char
 			iri->string = NULL;
 			return GF_IO_ERR;
 		}
-		gf_fwrite(data, data_size, f);
+		if (gf_fwrite(data, data_size, f)!=data_size) e = GF_IO_ERR;
 		gf_fclose(f);
 	}
 	gf_free(data);
 	gf_free(iri->string);
 	iri->string = gf_strdup(szFile);
-	return GF_OK;
+	if (!iri->string) e = GF_OUT_OF_MEM;
+
+	return e;
 }
 
 
 #endif /*GPAC_DISABLE_SVG*/
-

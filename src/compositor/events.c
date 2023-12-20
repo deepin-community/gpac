@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -26,7 +26,6 @@
 #include "visual_manager.h"
 #include "nodes_stacks.h"
 #include "mpeg4_grouping.h"
-#include <gpac/options.h>
 #include <gpac/utf.h>
 
 static GF_Node *browse_parent_for_focus(GF_Compositor *compositor, GF_Node *elt, Bool prev_focus);
@@ -44,7 +43,7 @@ static void gf_sc_reset_collide_cursor(GF_Compositor *compositor)
 
 static Bool exec_text_selection(GF_Compositor *compositor, GF_Event *event)
 {
-	if (event->type>GF_EVENT_MOUSEMOVE) return GF_FALSE;
+	if (event->type > GF_EVENT_MOUSEMOVE) return GF_FALSE;
 
 	if (compositor->edited_text)
 		return GF_FALSE;
@@ -86,11 +85,12 @@ static void flush_text_node_edit(GF_Compositor *compositor, Bool final_flush)
 	}
 	if (compositor->sel_buffer_len) {
 		char *txt;
-		size_t len;
+		u32 len;
 		const u16 *lptr;
 		txt = (char*)gf_malloc(sizeof(char)*2*compositor->sel_buffer_len);
 		lptr = compositor->sel_buffer;
 		len = gf_utf8_wcstombs(txt, 2*compositor->sel_buffer_len, &lptr);
+		if (len == GF_UTF8_FAIL) len = 0;
 		txt[len] = 0;
 		*compositor->edited_text = gf_strdup(txt);
 		gf_free(txt);
@@ -131,21 +131,23 @@ static void flush_text_node_edit(GF_Compositor *compositor, Bool final_flush)
 }
 
 
+GF_EXPORT
 GF_Err gf_sc_paste_text(GF_Compositor *compositor, const char *text)
 {
 	u16 *conv_buf;
-	size_t len;
+	u32 len;
 	if (!compositor->sel_buffer || !compositor->edited_text) return GF_BAD_PARAM;
 	if (!text) return GF_OK;
-	len = strlen(text);
+	len = (u32) strlen(text);
 	if (!len) return GF_OK;
 
 	gf_sc_lock(compositor, GF_TRUE);
 
 	conv_buf = (u16*)gf_malloc(sizeof(u16)*(len+1));
 	len = gf_utf8_mbstowcs(conv_buf, len, &text);
+	if (len == GF_UTF8_FAIL) return GF_IO_ERR;
 
-	compositor->sel_buffer_alloc += (u32) len;
+	compositor->sel_buffer_alloc += len;
 	if (compositor->sel_buffer_len == compositor->sel_buffer_alloc)
 		compositor->sel_buffer_alloc++;
 
@@ -153,8 +155,8 @@ GF_Err gf_sc_paste_text(GF_Compositor *compositor, const char *text)
 	memmove(&compositor->sel_buffer[compositor->caret_pos+len], &compositor->sel_buffer[compositor->caret_pos], sizeof(u16)*(compositor->sel_buffer_len-compositor->caret_pos));
 	memcpy(&compositor->sel_buffer[compositor->caret_pos], conv_buf, sizeof(u16)*len);
 	gf_free(conv_buf);
-	compositor->sel_buffer_len += (u32) len;
-	compositor->caret_pos += (u32) len;
+	compositor->sel_buffer_len += len;
+	compositor->caret_pos += len;
 	compositor->sel_buffer[compositor->sel_buffer_len]=0;
 	flush_text_node_edit(compositor, GF_FALSE);
 	gf_sc_lock(compositor, GF_FALSE);
@@ -280,7 +282,7 @@ static Bool load_text_node(GF_Compositor *compositor, u32 cmd_type)
 							gf_node_list_insert_child(&children, t, pos);
 							res = &((GF_DOMText *)child->node)->textContent;
 						} else {
-							size_t len;
+							u32 len;
 							GF_DOMText *cur;
 
 							gf_node_list_insert_child(&children, t, pos+1);
@@ -298,6 +300,7 @@ static Bool load_text_node(GF_Compositor *compositor, u32 cmd_type)
 							cur->textContent = (char*)gf_malloc(sizeof(char)*(len+1));
 							srcp = compositor->sel_buffer;
 							len = gf_utf8_wcstombs(cur->textContent, len, &srcp);
+							if (len == GF_UTF8_FAIL) len = 0;
 							cur->textContent[len] = 0;
 							compositor->sel_buffer[compositor->caret_pos] = end;
 
@@ -306,6 +309,7 @@ static Bool load_text_node(GF_Compositor *compositor, u32 cmd_type)
 								ntext->textContent = (char*)gf_malloc(sizeof(char)*(len+1));
 								srcp = compositor->sel_buffer + compositor->caret_pos + 1;
 								len = gf_utf8_wcstombs(ntext->textContent, len, &srcp);
+								if (len == GF_UTF8_FAIL) len = 0;
 								ntext->textContent[len] = 0;
 							} else {
 								ntext->textContent = gf_strdup("");
@@ -369,15 +373,17 @@ static Bool load_text_node(GF_Compositor *compositor, u32 cmd_type)
 		compositor->sel_buffer = (u16*)gf_realloc(compositor->sel_buffer, sizeof(u16)*compositor->sel_buffer_alloc);
 
 		if (caret_pos>=0) {
-			size_t l = gf_utf8_mbstowcs(compositor->sel_buffer, compositor->sel_buffer_alloc, &src);
-			compositor->sel_buffer_len = (u32) l;
+			u32 l = gf_utf8_mbstowcs(compositor->sel_buffer, compositor->sel_buffer_alloc, &src);
+			if (l == GF_UTF8_FAIL) return GF_FALSE;
+			compositor->sel_buffer_len = l;
 			memmove(&compositor->sel_buffer[caret_pos+1], &compositor->sel_buffer[caret_pos], sizeof(u16)*(compositor->sel_buffer_len-caret_pos));
 			compositor->sel_buffer[caret_pos] = GF_CARET_CHAR;
 			compositor->caret_pos = caret_pos;
 
 		} else {
-			size_t l = gf_utf8_mbstowcs(compositor->sel_buffer, compositor->sel_buffer_alloc, &src);
-			compositor->sel_buffer_len = (u32) l;
+			u32 l = gf_utf8_mbstowcs(compositor->sel_buffer, compositor->sel_buffer_alloc, &src);
+			if (l == GF_UTF8_FAIL) return GF_FALSE;
+			compositor->sel_buffer_len = l;
 			compositor->sel_buffer[compositor->sel_buffer_len] = GF_CARET_CHAR;
 			compositor->caret_pos = compositor->sel_buffer_len;
 		}
@@ -649,7 +655,7 @@ static Bool exec_event_dom(GF_Compositor *compositor, GF_Event *event)
 
 	cursor_type = GF_CURSOR_NORMAL;
 	/*all mouse events*/
-	if (event->type<=GF_EVENT_MOUSEWHEEL) {
+	if (event->type <= GF_EVENT_LAST_MOUSE) {
 		Fixed X = compositor->hit_world_point.x;
 		Fixed Y = compositor->hit_world_point.y;
 		/*flip back to origin at top-left*/
@@ -779,7 +785,7 @@ static Bool exec_event_dom(GF_Compositor *compositor, GF_Event *event)
 			compositor->sensor_type = cursor_type;
 		}
 	}
-	else if ((event->type>=GF_EVENT_KEYUP) && (event->type<=GF_EVENT_LONGKEYPRESS)) {
+	else if ((event->type >= GF_EVENT_KEYUP) && (event->type <= GF_EVENT_LONGKEYPRESS)) {
 		GF_Node *target;
 		memset(&evt, 0, sizeof(GF_DOM_Event));
 		evt.key_flags = event->key.flags;
@@ -850,8 +856,13 @@ Bool gf_sc_exec_event_vrml(GF_Compositor *compositor, GF_Event *ev)
 	/*reset previous composite texture*/
 	if (compositor->prev_hit_appear != compositor->hit_appear) {
 		if (compositor->prev_hit_appear) {
-			compositor_compositetexture_handle_event(compositor, compositor->prev_hit_appear, ev, GF_TRUE);
-			if (!compositor->grabbed_sensor) compositor->prev_hit_appear = NULL;
+			//reset previ appear node to avoid potential recursions
+			GF_Node *hit_appear = compositor->prev_hit_appear;
+			compositor->prev_hit_appear = NULL;
+			compositor_compositetexture_handle_event(compositor, hit_appear, ev, GF_TRUE);
+			//restore if we have a hit
+			if (compositor->grabbed_sensor)
+				compositor->prev_hit_appear = hit_appear;
 		}
 	}
 
@@ -900,7 +911,7 @@ Bool gf_sc_exec_event_vrml(GF_Compositor *compositor, GF_Event *ev)
 		if (keynav) gf_sc_change_key_navigator(compositor, keynav);
 
 		/*call the sensor LAST, as this may triger a destroy of the scene the sensor is in
-		this is only true for anchors, as other other sensors output events are queued as routes untill next pass*/
+		this is only true for anchors, as other other sensors output events are queued as routes until next pass*/
 		res += hs->OnUserEvent(hs, GF_TRUE, GF_FALSE, ev, compositor);
 		if (stype == TAG_MPEG4_Anchor) check_anchor = GF_TRUE;
 #ifndef GPAC_DISABLE_X3D
@@ -989,7 +1000,7 @@ Bool gf_sc_exec_event_vrml(GF_Compositor *compositor, GF_Event *ev)
 	}
 	if (res) {
 		GF_SceneGraph *sg;
-		/*apply event cascade - this is needed for cases where several events are processed inbetween
+		/*apply event cascade - this is needed for cases where several events are processed between
 		2 simulation tick. If we don't flush the routes stack, the result will likely be wrong
 		*/
 		gf_sg_activate_routes(compositor->scene);
@@ -1057,7 +1068,7 @@ Bool visual_execute_event(GF_VisualManager *visual, GF_TraverseState *tr_state, 
 #endif
 
 	/*preprocess text selection and edition*/
-	if ((ev->type<GF_EVENT_MOUSEWHEEL) && (ev->mouse.button==GF_MOUSE_LEFT)) {
+	if ((ev->type < GF_EVENT_LAST_MOUSE_COORDS) && (ev->mouse.button==GF_MOUSE_LEFT)) {
 		if (compositor->text_selection) {
 			if (ev->type==GF_EVENT_MOUSEUP) {
 				if (compositor->store_text_state==GF_SC_TSEL_ACTIVE)
@@ -1878,7 +1889,7 @@ u32 gf_sc_focus_switch_ring(GF_Compositor *compositor, Bool move_prev, GF_Node *
 Bool gf_sc_execute_event(GF_Compositor *compositor, GF_TraverseState *tr_state, GF_Event *ev, GF_ChildNodeItem *children)
 {
 	/*filter mouse events and other events (key...)*/
-	if (ev->type>GF_EVENT_MOUSEWHEEL) {
+	if (ev->type > GF_EVENT_MOUSEWHEEL) {
 		Bool ret = GF_FALSE;
 		/*send text edit*/
 		if (compositor->edited_text) {
@@ -1978,7 +1989,7 @@ Bool gf_sc_exec_event(GF_Compositor *compositor, GF_Event *evt)
 	s32 x=0, y=0;
 	Bool switch_coords = GF_FALSE;
 	Bool ret = GF_FALSE;
-	if (evt->type<=GF_EVENT_MOUSEWHEEL) {
+	if (evt->type <= GF_EVENT_LAST_MOUSE) {
 		if (compositor->sgaze) {
 			compositor->gaze_x = evt->mouse.x;
 			compositor->gaze_y = evt->mouse.y;

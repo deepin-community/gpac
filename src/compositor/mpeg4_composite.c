@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2020
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -46,7 +46,8 @@ typedef struct
 	Bool first, unsupported;
 	GF_List *sensors, *previous_sensors, *temp_sensors, *temp_previous_sensors;
 	GF_Node *prev_hit_appear;
-
+	//revent recursions
+	Bool in_handle_event;
 	GF_TraverseState *tr_state;
 
 #ifdef GPAC_USE_TINYGL
@@ -88,6 +89,7 @@ static Bool composite2d_draw_bitmap(GF_VisualManager *visual, GF_TraverseState *
 	st = (CompositeTextureStack *) gf_node_get_private(visual->offscreen);
 
 	if (!compositor_texture_rectangles(visual, ctx->aspect.fill_texture, &ctx->bi->clip, &ctx->bi->unclip, &src_wnd, &dst_wnd, &use_blit, &has_scale)) return 1;
+	if (! ctx->aspect.fill_texture->data) return 0;
 
 	memset(&video_src, 0, sizeof(GF_VideoSurface));
 	video_src.height = ctx->aspect.fill_texture->height;
@@ -433,7 +435,7 @@ static void composite_update(GF_TextureHandler *txh)
 					&& ((compositor->offscreen_width < st->txh.width) || (compositor->offscreen_height < st->txh.height))
 				) {
 
-					GF_LOG(GF_LOG_DEBUG, GF_LOG_COMPOSE, ("[CompositeTexture] Offscreen OpenGL is not possible if no openGL context is created - use hybridGL mode for compositor\n"));
+					GF_LOG(GF_LOG_DEBUG, GF_LOG_COMPOSE, ("[CompositeTexture] Offscreen OpenGL is not possible if no OpenGL context is created - use hybridGL mode for compositor\n"));
 					st->unsupported = GF_TRUE;
 				}
 			} else {
@@ -503,6 +505,9 @@ static void composite_update(GF_TextureHandler *txh)
 	memset(st->tr_state, 0, sizeof(GF_TraverseState));
 	st->tr_state->vrml_sensors = sensor_bck;
 	st->tr_state->visual = st->visual;
+#ifndef GPAC_DISABLE_3D
+	st->tr_state->camera = &st->visual->camera;
+#endif
 	st->tr_state->invalidate_all = invalidate_all;
 
 	st->tr_state->immediate_draw = st->visual->compositor->traverse_state->immediate_draw;
@@ -737,8 +742,11 @@ Bool compositor_compositetexture_handle_event(GF_Compositor *compositor, GF_Node
 	stack = gf_node_get_private(ap->texture);
 	if (!stack->txh.tx_io) return 0;
 
-	children = NULL;
+	if (stack->in_handle_event)
+		return 0;
 
+	children = NULL;
+	stack->in_handle_event = GF_TRUE;
 
 	if (!is_flush) {
 		txcoord.x = compositor->hit_texcoords.x;
@@ -861,6 +869,7 @@ Bool compositor_compositetexture_handle_event(GF_Compositor *compositor, GF_Node
 		compositor->prev_hit_appear = prev_appear;
 		compositor->hit_appear = appear;
 	}
+	stack->in_handle_event = GF_FALSE;
 
 	return res;
 }

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2017-2018
+ *			Copyright (c) Telecom ParisTech 2017-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / filters sub-project
@@ -29,7 +29,6 @@
 #include <gpac/list.h>
 #include <gpac/thread.h>
 #include <gpac/filters.h>
-#include <gpac/user.h>
 
 #ifdef GPAC_HAS_QJS
 #include "../scenegraph/qjs_common.h"
@@ -58,6 +57,10 @@ struct __gf_prop_entry
 	u32 alloc_size;
 };
 
+//we use the same value internally but with reverse meaning
+#define GF_FS_FLAG_IMPLICIT_MODE	GF_FS_FLAG_NO_IMPLICIT
+
+
 #ifndef GF_PROPS_HASHTABLE_SIZE
 #define GF_PROPS_HASHTABLE_SIZE 0
 #endif
@@ -72,7 +75,7 @@ typedef struct
 	GF_List *properties;
 #endif
 	volatile u32 reference_count;
-	//number of references hold by packet references - since these may be destroyed at the end of the refering filter
+	//number of references hold by packet references - since these may be destroyed at the end of the referring filter
 	//the pid might be dead. This is only used for pid props maps
 	volatile u32 pckrefs_reference_count;
 	GF_FilterSession *session;
@@ -139,6 +142,32 @@ typedef struct __gf_filter_pck_inst
 } GF_FilterPacketInstance;
 
 
+/*URI relocators are used for containers like zip or ISO FF with file items. The relocator
+is in charge of translating the URI, potentially extracting the associated resource and sending
+back the new (local or not) URI. Only the interface is defined, URI translators are free to derive from them
+
+relocate a URI - if NULL is returned, this relocator is not concerned with the URI
+otherwise returns the translated URI
+*/
+
+#define GF_FS_URI_RELOCATOR	\
+	Bool (*relocate_uri)(void *__self, const char *parent_uri, const char *uri, char *out_relocated_uri, char *out_localized_uri);		\
+
+typedef struct __gf_uri_relocator GF_URIRelocator;
+
+struct __gf_uri_relocator
+{
+	GF_FS_URI_RELOCATOR
+};
+
+typedef struct
+{
+	GF_FS_URI_RELOCATOR
+	GF_FilterSession *sess;
+	char *szAbsRelocatedPath;
+} GF_FSLocales;
+
+
 //packet flags
 enum
 {
@@ -165,7 +194,9 @@ enum
 	//2 bits for crypt type
 	GF_PCK_CMD_POS = 13,
 	GF_PCK_CMD_MASK = 0x3 << GF_PCK_CMD_POS,
-	//RESERVED bits [9,12]
+	GF_PCKF_FORCE_MAIN = 1<<12,
+	//RESERVED bits [8,11]
+
 	//2 bits for is_leading
 	GF_PCK_ISLEADING_POS = 6,
 	GF_PCK_ISLEADING_MASK = 0x3 << GF_PCK_ISLEADING_POS,
@@ -221,9 +252,6 @@ struct __gf_filter_pck
 
 	//for allocated memory packets
 	u32 alloc_size;
-	//for shared memory packets: 0: cloned mem, 1: read/write mem from source filter, 2: read-only mem from filter
-	//note that packets with frame_ifce are always considered as read-only memory
-	u32 filter_owns_mem;
 	gf_fsess_packet_destructor destructor;
 	//for packet reference  packets (sharing data from other packets)
 	struct __gf_filter_pck *reference;
@@ -234,6 +262,12 @@ struct __gf_filter_pck
 	GF_PropertyMap *props;
 	//pid properties applying to this packet
 	GF_PropertyMap *pid_props;
+
+	//for shared memory packets: 0: cloned mem, 1: read/write mem from source filter, 2: read-only mem from filter
+	//note that packets with frame_ifce are always considered as read-only memory
+	u8 filter_owns_mem;
+	u8 is_dangling;
+
 };
 
 /*!
@@ -248,8 +282,10 @@ struct __gf_fs_task
 	//decrementing the counter
 	Bool notified;
 	Bool requeue_request;
-	Bool can_swap;
+	//if set, task can be pushed back in filter task list. If set to 2, filter is kept for scheduling event if mast task
+	u32 can_swap;
 	Bool blocking;
+	Bool force_main;
 
 	u64 schedule_next_time;
 
@@ -259,10 +295,31 @@ struct __gf_fs_task
 	GF_FilterPid *pid;
 	const char *log_name;
 	void *udta;
+	u32 class_type;
 };
 
 void gf_fs_post_task(GF_FilterSession *fsess, gf_fs_task_callback fun, GF_Filter *filter, GF_FilterPid *pid, const char *log_name, void *udta);
-void gf_fs_post_task_ex(GF_FilterSession *fsess, gf_fs_task_callback task_fun, GF_Filter *filter, GF_FilterPid *pid, const char *log_name, void *udta, Bool requires_main_thread, Bool force_direct_call);
+
+//task type used to free up resources when a filter task is being canceled (configure error)
+typedef enum
+{
+	//no free required
+	TASK_TYPE_NONE=0,
+	//task udta is a GF_FilterEvent
+	TASK_TYPE_EVENT,
+	//task udta is a struct _gf_filter_setup_failure (simple free needed)
+	TASK_TYPE_SETUP,
+	//task udta is a GF_UserTask structure (simple free needed), and task logname shall be freed
+	TASK_TYPE_USER,
+} GF_TaskClassType;
+
+
+/* extended version of gf_fs_post_task
+force_direct_call shall only be true for gf_filter_process_task
+*/
+void gf_fs_post_task_ex(GF_FilterSession *fsess, gf_fs_task_callback task_fun, GF_Filter *filter, GF_FilterPid *pid, const char *log_name, void *udta, Bool is_configure, Bool force_main_thread, Bool force_direct_call, GF_TaskClassType class_type);
+
+void gf_fs_post_task_class(GF_FilterSession *fsess, gf_fs_task_callback task_fun, GF_Filter *filter, GF_FilterPid *pid, const char *log_name, void *udta, GF_TaskClassType class_type);
 
 void gf_filter_pid_send_event_downstream(GF_FSTask *task);
 
@@ -273,7 +330,8 @@ typedef struct __gf_fs_thread
 	GF_Thread *th;
 	struct __gf_filter_session *fsess;
 	u32 th_id;
-	
+	u32 nb_filters_pinned;
+
 	Bool has_seen_eot; //set when no more tasks in global queue
 
 	u64 nb_tasks;
@@ -287,14 +345,23 @@ typedef struct __gf_fs_thread
 
 } GF_SessionThread;
 
+typedef enum {
+	GF_ARGTYPE_LOCAL = 0, //:arg syntax
+	GF_ARGTYPE_GLOBAL, //--arg syntax
+	GF_ARGTYPE_META, //old -+arg syntax
+	GF_ARGTYPE_META_REPORTING,
+} GF_FSArgItemType;
+
 typedef struct
 {
 	char *argname;
-	u32 type;
-	Bool found;
+	GF_FSArgItemType type;
+	const char *meta_filter, *meta_opt;
+	u8 opt_found;
+	u8 meta_state;
 } GF_FSArgItem;
 
-void gf_fs_push_arg(GF_FilterSession *session, const char *szArg, Bool was_found, u32 type);
+void gf_fs_push_arg(GF_FilterSession *session, const char *szArg, Bool was_found, GF_FSArgItemType type, GF_Filter *meta_filter, const char *sub_opt_name);
 
 enum
 {
@@ -303,6 +370,9 @@ enum
 	GF_FS_NOBLOCK
 };
 
+//#define GF_FS_ENABLE_LOCALES
+
+
 struct __gf_filter_session
 {
 	u32 flags;
@@ -310,7 +380,11 @@ struct __gf_filter_session
 	Bool direct_mode;
 	volatile u32 tasks_in_process;
 	Bool requires_solved_graph;
-	Bool no_main_thread;
+	//non blocking session mode:
+	//0: session is blocking
+	//1: session is non-blocking and first call to gf_fs_run (extra threads not started)
+	//2: session is non-blocking and not first call to gf_fs_run (extra threads started)
+	u32 non_blocking;
 
 	GF_List *registry;
 	GF_List *filters;
@@ -383,8 +457,11 @@ struct __gf_filter_session
 	u32 in_event_listener;
 
 	GF_DownloadManager *download_manager;
+
+#ifndef GPAC_DISABLE_PLAYER
 	struct _gf_ft_mgr *font_manager;
-	
+#endif
+
 	u32 default_pid_buffer_max_us, decoder_pid_buffer_max_us;
 	u32 default_pid_buffer_max_units;
 
@@ -426,7 +503,19 @@ struct __gf_filter_session
 #ifdef GPAC_HAS_QJS
 	struct JSContext *js_ctx;
 	GF_List *jstasks;
-	struct __jsfs_task *new_f_task, *del_f_task, *on_evt_task;
+	struct __jsfs_task *new_f_task, *del_f_task, *on_evt_task, *on_auth_task;
+#endif
+
+	gf_fs_on_filter_creation on_filter_create_destroy;
+	void *rt_udta;
+	Bool force_main_thread_tasks;
+
+	void *ext_gl_udta;
+	gf_fs_gl_activate ext_gl_callback;
+
+#ifdef GF_FS_ENABLE_LOCALES
+	GF_List *uri_relocators;
+	GF_FSLocales locales;
 #endif
 };
 
@@ -434,6 +523,7 @@ struct __gf_filter_session
 void jsfs_on_filter_created(GF_Filter *new_filter);
 void jsfs_on_filter_destroyed(GF_Filter *del_filter);
 Bool jsfs_on_event(GF_FilterSession *session, GF_Event *evt);
+Bool jsfs_on_auth(GF_FilterSession *session, GF_Event *evt);
 #endif
 
 void gf_fs_reg_all(GF_FilterSession *fsess, GF_FilterSession *a_sess);
@@ -447,7 +537,7 @@ typedef struct
 
 #ifndef GPAC_DISABLE_3D
 GF_Err gf_fs_check_gl_provider(GF_FilterSession *session);
-GF_Err gf_fs_set_gl(GF_FilterSession *session);
+GF_Err gf_fs_set_gl(GF_FilterSession *session, Bool do_activate);
 #endif
 
 typedef enum
@@ -459,6 +549,26 @@ typedef enum
 	GF_FILTER_ARG_EXPLICIT_SOURCE_NO_DST_INHERIT,
 	GF_FILTER_ARG_EXPLICIT_SINK,
 } GF_FilterArgType;
+
+typedef enum
+{
+	//filter cannot be cloned
+	GF_FILTER_NO_CLONE=0,
+	//filter can be cloned
+	GF_FILTER_CLONE,
+	//filter may be cloned in implicit link session mode only
+	GF_FILTER_CLONE_PROBE,
+} GF_FilterCloneType;
+
+
+typedef enum
+{
+	GF_FILTER_ENABLED = 0,
+	GF_FILTER_DISABLED,
+	GF_FILTER_DISABLED_HIDE,
+} GF_FilterDisableType;
+
+//#define DEBUG_BLOCKMODE
 
 struct __gf_filter
 {
@@ -475,13 +585,18 @@ struct __gf_filter
 	//but dynamic_source_ids still contains the unresolved pattern (eg ServiceID=*)
 	char *dynamic_source_ids;
 
+	char *restricted_source_id;
+	
 	//parent media session
 	GF_FilterSession *session;
 
 	//indicates the max number of additional input PIDs - muxers and scalable filters typically set this to (u32) -1
 	u32 max_extra_pids;
+	volatile u32 nb_sparse_pids;
 
-	void (*on_setup_error)(GF_Filter *f, void *on_setup_error_udta, GF_Err e);
+	u32 subsession_id, subsource_id;
+
+	Bool (*on_setup_error)(GF_Filter *f, void *on_setup_error_udta, GF_Err e);
 	void *on_setup_error_udta;
 	GF_Filter *on_setup_error_filter;
 
@@ -493,7 +608,9 @@ struct __gf_filter
 	char *src_args;
 	//allocated argument string of the destingation filter for filters dynamically loaded, if any
 	char *dst_args;
-
+	//filter tag
+	char *tag;
+	
 	//tasks pending for this filter. The first task in this list is also present in the filter session
 	//task list in order to avoid locking the main task list with a mutex
 	GF_FilterQueue *tasks;
@@ -502,18 +619,20 @@ struct __gf_filter
 	volatile Bool scheduled_for_next_task;
 	//set to true when the filter is being processed by a thread
 	volatile Bool in_process;
-	u32 process_th_id;
+	u32 process_th_id, restrict_th_idx;
 	//user data for the filter implementation
 	void *filter_udta;
 
 	Bool has_out_caps;
 
-	Bool disabled;
+	GF_FilterDisableType disabled;
 	//set to true before calling filter process() callback, and reset to false right after
 	Bool in_process_callback;
 	Bool no_probe;
 	Bool no_inputs;
-	
+	Bool is_blocking_source;
+	Bool force_demux;
+
 	s32 nb_pids_playing;
 
 	//list of pids connected to this filter
@@ -546,11 +665,13 @@ struct __gf_filter
 	volatile u32 in_pid_connection_pending;
 	volatile u32 out_pid_connection_pending;
 	volatile u32 pending_packets;
+	volatile u32 nb_ref_packets;
 
 	volatile u32 stream_reset_pending;
 	volatile u32 num_events_queued;
 	volatile u32 detach_pid_tasks_pending;
 	volatile u32 nb_shared_packets_out;
+	volatile u32 abort_pending;
 	GF_List *postponed_packets;
 
 	//list of blacklisted filtered registries
@@ -568,6 +689,8 @@ struct __gf_filter
 	GF_List *destination_filters;
 	//list of potential destination for which we need to perform link resolution
 	GF_List *destination_links;
+	//temp list of input PIDs during graph resolution, added during pid_init task and removed at pid_configure task
+	GF_List *temp_input_pids;
 
 	//statistics
 	//number of tasks executed by this filter
@@ -598,8 +721,14 @@ struct __gf_filter
 #endif
 
 	volatile u32 would_block; //concurrent inc/dec
+#ifdef DEBUG_BLOCKMODE
 	//sets once broken blocking mode has been detected
 	Bool blockmode_broken;
+#endif
+
+	//per-filter buffer options
+	u32 pid_buffer_max_us, pid_buffer_max_units, pid_decode_buffer_max_us;
+
 	//requested by a filter to disable blocking
 	Bool prevent_blocking;
 
@@ -607,11 +736,12 @@ struct __gf_filter
 	Bool finalized;
 	//filter is scheduled for removal: any filter connected to this filter will
 	//not be checked for graph resolution - destroy has not yet been posted
-	Bool removed;
+	//if value is 2, packets are still dispatched to this PID instance (pid reconfig)
+	u32 removed;
 	//setup has been notified
 	Bool setup_notified;
-	//filter loaded to solve a filter chain
-	Bool dynamic_filter;
+	//filter loaded to solve a filter chain - special value 2 is for dummy reframer when forcing demux
+	u32 dynamic_filter;
 	//filter block EOS queries
 	Bool block_eos;
 	//set when one input pid of the filter has been marked for removal through gf_filter_remove_src
@@ -621,7 +751,9 @@ struct __gf_filter
 	//2 means temporary sticky, used when reconfiguring filter chain
 	u32 sticky;
 	//explicitly loaded filters are usually not cloned, except if this flag is set
-	Bool clonable;
+	GF_FilterCloneType clonable;
+	//set to true during pid link resolution for filters accepting a single pid
+	Bool in_link_resolution;
 	//one of the output PID needs reconfiguration
 	volatile u32 nb_caps_renegociate;
 
@@ -666,6 +798,8 @@ struct __gf_filter
 	//for encoder filters, set to the corresponding stream type - used to discard filters during the resolution
 	u32 encoder_stream_type;
 
+	Bool act_as_sink;
+	Bool require_source_id;
 #ifndef GPAC_DISABLE_REMOTERY
 	rmtU32 rmt_hash;
 #endif
@@ -686,7 +820,7 @@ struct __gf_filter
 
 	GF_Err in_connect_err;
 
-	Bool main_thread_forced;
+	volatile u32 nb_main_thread_forced;
 	Bool no_dst_arg_inherit;
 	GF_List *source_filters;
 
@@ -701,21 +835,33 @@ struct __gf_filter
 
 	Bool event_target;
 
+	u64 last_schedule_task_time;
+
+	//set to NULL, or to the only source filter for this filter
+	//this is a helper for the graph resolver to avoid browing all input pids when checking
+	//for cycles or fetching last defined ID.
+	//typically helps for tiling case with hundreds of tiles
+	GF_Filter *single_source;
+
+	char *meta_instances;
+
 #ifdef GPAC_HAS_QJS
 	char *iname;
 	JSValue jsval;
 #endif
+	//for external bindings
+	void *rt_udta;
 };
 
 GF_Filter *gf_filter_new(GF_FilterSession *fsess, const GF_FilterRegister *freg, const char *args, const char *dst_args, GF_FilterArgType arg_type, GF_Err *err, GF_Filter *multi_sink_target, Bool dynamic_filter);
-GF_Filter *gf_filter_clone(GF_Filter *filter);
+GF_Filter *gf_filter_clone(GF_Filter *filter, GF_Filter *source_filter);
 void gf_filter_del(GF_Filter *filter);
 
 Bool gf_filter_swap_source_register(GF_Filter *filter);
 
 GF_Err gf_filter_new_finalize(GF_Filter *filter, const char *args, GF_FilterArgType arg_type);
 
-GF_Filter *gf_fs_load_source_dest_internal(GF_FilterSession *fsess, const char *url, const char *args, const char *parent_url, GF_Err *err, GF_Filter *filter, GF_Filter *dst_filter, Bool for_source, Bool no_args_inherit, Bool *probe_only);
+GF_Filter *gf_fs_load_source_dest_internal(GF_FilterSession *fsess, const char *url, const char *args, const char *parent_url, GF_Err *err, GF_Filter *filter, GF_Filter *dst_filter, Bool for_source, Bool no_args_inherit, Bool *probe_only, const GF_FilterRegister **probe_reg);
 
 void gf_filter_pid_inst_delete_task(GF_FSTask *task);
 
@@ -730,6 +876,8 @@ void gf_filter_pid_retry_caps_negotiate(GF_FilterPid *src_pid, GF_FilterPid *pid
 
 void gf_filter_reset_pending_packets(GF_Filter *filter);
 
+void gf_filter_instance_detach_pid(GF_FilterPidInst *pidi);
+
 typedef struct
 {
 	char *name;
@@ -737,6 +885,7 @@ typedef struct
 	//0: only on filter, 1: forward downstream, 2: forward upstream
 	GF_EventPropagateType recursive;
 } GF_FilterUpdate;
+
 
 //structure for input pids, in order to handle fan-outs of a pid into several filters
 struct __gf_filter_pid_inst
@@ -758,12 +907,12 @@ struct __gf_filter_pid_inst
 	Bool last_block_ended;
 	Bool first_block_started;
 	//set during play/stop/reset phases
-	Bool discard_packets;
+	volatile u32 discard_packets;
 
 	Bool force_reconfig;
 
 	//set by filter
-	Bool discard_inputs;
+	u32 discard_inputs;
 
 	//amount of media data in us in the packet queue - concurrent inc/dec
 	volatile s64 buffer_duration;
@@ -771,17 +920,21 @@ struct __gf_filter_pid_inst
 	volatile s32 detach_pending;
 
 	void *udta;
+	u32 udta_flags;
 
 	//statistics per pid instance
 	u64 last_pck_fetch_time;
 	u64 stats_start_ts, stats_start_us;
 	u32 cur_bit_size, avg_bit_rate, max_bit_rate, avg_process_rate, max_process_rate;
-	u32 nb_processed, nb_sap_processed;
+	u32 nb_processed, nb_sap_processed, nb_reagg_pck;
 	//all times in us
 	u64 total_process_time, total_sap_process_time;
 	u64 max_process_time, max_sap_process_time;
 	u64 first_frame_time;
 	Bool is_end_of_stream;
+	Bool is_playing, is_paused;
+	u8 play_queued, stop_queued;
+	
 	volatile u32 nb_eos_signaled;
 
 	Bool is_encoder_input;
@@ -805,6 +958,18 @@ struct __gf_filter_pid_inst
 
 	GF_Fraction64 last_ts_drop;
 
+	u64 last_buf_query_clock;
+	u64 last_buf_query_dur;
+
+	/*! last RT info update time - input pid only */
+	u64 last_rt_report;
+	/*! estimated round-trip time in ms - input pid only */
+	u32 rtt;
+	/*! estimated interarrival jitter in microseconds - input pid only */
+	u32 jitter;
+	/*! loss rate in per-thousand - input pid only */
+	u32 loss_rate;
+
 };
 
 struct __gf_filter_pid
@@ -824,7 +989,6 @@ struct __gf_filter_pid
 	Bool not_connected_ok;
 	Bool removed;
 	Bool direct_dispatch;
-	volatile u32 discard_input_packets;
 	volatile u32 init_task_pending;
 	volatile Bool props_changed_since_connect;
 	//number of shared packets (shared, frame interfaces or reference) still out there
@@ -848,6 +1012,9 @@ struct __gf_filter_pid
 	u64 buffer_duration;
 	//true if the pid carries raw media
 	Bool raw_media;
+	//true if pid is sparse (may not have data for a long time)
+	//a sparse pid always triggers blocking if parent filter has more than one output
+	Bool is_sparse;
 	//for stats only
 	u32 stream_type, codecid;
 
@@ -856,8 +1023,9 @@ struct __gf_filter_pid
 
 	Bool duration_init;
 	u64 last_pck_dts, last_pck_cts, min_pck_cts, max_pck_cts;
-	u32 min_pck_duration, nb_unreliable_dts;
+	u32 min_pck_duration, nb_unreliable_dts, last_pck_dur;
 	Bool recompute_dts;
+	Bool ignore_blocking;
 
 	u32 nb_pck_sent;
 	//1000x speed value
@@ -868,13 +1036,16 @@ struct __gf_filter_pid
 	Bool initial_play_done;
 	Bool is_playing;
 	void *udta;
+	u32 udta_flags;
 
 	GF_PropertyMap *caps_negociate;
-	GF_FilterPidInst *caps_negociate_pidi;
+	Bool caps_negociate_direct;
+	GF_List *caps_negociate_pidi_list;
 	GF_List *adapters_blacklist;
 	GF_Filter *caps_dst_filter;
 
 	Bool ext_not_trusted;
+	Bool user_buffer_forced;
 
 	Bool require_source_id;
 	//only used in filter_check_caps
@@ -896,6 +1067,7 @@ void gf_filter_pid_post_connect_task(GF_Filter *filter, GF_FilterPid *pid);
 
 /*internal tasks definitions*/
 void gf_filter_pid_reconfigure_task(GF_FSTask *task);
+void gf_filter_pid_reconfigure_task_discard(GF_FSTask *task);
 void gf_filter_update_arg_task(GF_FSTask *task);
 void gf_filter_pid_disconnect_task(GF_FSTask *task);
 void gf_filter_remove_task(GF_FSTask *task);
@@ -916,7 +1088,7 @@ typedef struct
 #define CAP_MATCH_LOADED_INPUT_ONLY		1
 #define CAP_MATCH_LOADED_OUTPUT_ONLY	1<<1
 
-u32 gf_filter_caps_to_caps_match(const GF_FilterRegister *src, u32 src_bundle_idx, const GF_FilterRegister *dst, GF_Filter *dst_filter, u32 *dst_bundle_idx, s32 for_dst_bundle, u32 *loaded_filter_flags, GF_CapsBundleStore *capstore);
+u32 gf_filter_caps_to_caps_match(const GF_FilterRegister *src, u32 src_bundle_idx, const GF_FilterRegister *dst, GF_Filter *dst_filter, u32 *dst_bundle_idx, u32 for_dst_bundle, u32 *loaded_filter_flags, GF_CapsBundleStore *capstore);
 Bool gf_filter_has_out_caps(const GF_FilterCapability *caps, u32 nb_caps);
 Bool gf_filter_has_in_caps(const GF_FilterCapability *caps, u32 nb_caps);
 
@@ -928,7 +1100,7 @@ void gf_filter_renegociate_output_dst(GF_FilterPid *pid, GF_Filter *filter, GF_F
 GF_Filter *gf_filter_pid_resolve_link(GF_FilterPid *pid, GF_Filter *dst, Bool *filter_reassigned);
 GF_Filter *gf_filter_pid_resolve_link_check_loaded(GF_FilterPid *pid, GF_Filter *dst, Bool *filter_reassigned, GF_List *skip_if_in_filter_list, Bool *skipped);
 
-GF_Filter *gf_filter_pid_resolve_link_for_caps(GF_FilterPid *pid, GF_Filter *dst);
+GF_Filter *gf_filter_pid_resolve_link_for_caps(GF_FilterPid *pid, GF_Filter *dst, Bool check_reconfig_only);
 u32 gf_filter_pid_resolve_link_length(GF_FilterPid *pid, GF_Filter *dst);
 
 Bool gf_filter_pid_caps_match(GF_FilterPid *src_pid, const GF_FilterRegister *freg, GF_Filter *filter_inst, u8 *priority, u32 *dst_bundle_idx, GF_Filter *dst_filter, s32 for_bundle_idx);
@@ -954,7 +1126,9 @@ const GF_PropertyEntry *gf_filter_pid_get_property_entry_str(GF_FilterPid *pid, 
 const GF_PropertyValue *gf_filter_pid_get_property_first(GF_FilterPid *pid, u32 prop_4cc);
 const GF_PropertyValue *gf_filter_pid_get_property_str_first(GF_FilterPid *pid, const char *prop_name);
 
+void gf_filter_pid_set_args(GF_Filter *filter, GF_FilterPid *pid);
 
+Bool gf_filter_aggregate_packets(GF_FilterPidInst *dst);
 enum
 {
 	EDGE_STATUS_NONE=0,
@@ -1002,6 +1176,7 @@ void gf_filter_post_process_task_internal(GF_Filter *filter, Bool use_direct_dis
 
 //get next option after path, NULL if not found
 const char *gf_fs_path_escape_colon(GF_FilterSession *sess, const char *path);
+const char *gf_fs_path_escape_colon_ex(GF_FilterSession *sess, const char *path, Bool *needs_escape, Bool for_source);
 
 void gf_fs_check_graph_load(GF_FilterSession *fsess, Bool for_load);
 
@@ -1009,6 +1184,15 @@ void gf_filter_renegociate_output_task(GF_FSTask *task);
 
 void gf_fs_unload_script(GF_FilterSession *fs, void *js_ctx);
 
+
+Bool gf_fs_check_filter_register_cap_ex(const GF_FilterRegister *f_reg, u32 incode, GF_PropertyValue *cap_input, u32 outcode, GF_PropertyValue *cap_output, Bool exact_match_only, Bool out_cap_excluded);
+
+Bool gf_filter_update_arg_apply(GF_Filter *filter, const char *arg_name, const char *arg_value, Bool is_sync_call);
+
+
+GF_List *gf_filter_pid_compute_link(GF_FilterPid *pid, GF_Filter *dst);
+
+GF_PropertyValue gf_filter_parse_prop_solve_env_var(GF_FilterSession *fs, GF_Filter *f, u32 type, const char *name, const char *value, const char *enum_values);
 #endif //_GF_FILTER_SESSION_H_
 
 

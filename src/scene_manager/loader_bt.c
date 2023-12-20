@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2019
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Management sub-project
@@ -31,8 +31,6 @@
 #include <gpac/internal/scenegraph_dev.h>
 
 #include <gpac/nodes_x3d.h>
-/*for key codes...*/
-#include <gpac/user.h>
 #include <gpac/color.h>
 
 
@@ -945,7 +943,7 @@ void gf_bt_sffield(GF_BTParser *parser, GF_FieldInfo *info, GF_Node *n)
 				char *odstr = str;
 				if (!strnicmp(str, "od://", 5)) odstr += 5;
 				else if (!strnicmp(str, "od:", 3)) odstr += 3;
-				/*be carefull, an url like "11-regression-test.mp4" will return 1 on sscanf :)*/
+				/*be careful, an url like "11-regression-test.mp4" will return 1 on sscanf :)*/
 				if (sscanf(odstr, "%u", &id) == 1) {
 					char szURL[20];
 					sprintf(szURL, "%u", id);

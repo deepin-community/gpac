@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2017
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / RTP/RTSP input filter
@@ -34,7 +34,12 @@ void rtpin_stream_ack_connect(GF_RTPInStream *stream, GF_Err e)
 	clean up the command stack*/
 	if (!stream->opid) return;
 
-	if (e != GF_OK || !stream->rtp_ch) return;
+	if (e != GF_OK || !stream->rtp_ch) {
+		stream->last_err = e;
+		if (!stream->rtpin->notif_error) stream->rtpin->notif_error = e;
+		return;
+	}
+	stream->last_err = GF_OK;
 }
 
 GF_Err rtpin_stream_init(GF_RTPInStream *stream, Bool ResetOnly)
@@ -44,13 +49,15 @@ GF_Err rtpin_stream_init(GF_RTPInStream *stream, Bool ResetOnly)
 	if (!ResetOnly) {
 		GF_Err e;
 		const char *ip_ifce = NULL;
-		if (!stream->rtpin->interleave) {
+		if (stream->rtpin->transport!=RTP_TRANSPORT_TCP_ONLY) {
 			ip_ifce = stream->rtpin->ifce;
 		}
 		if (stream->rtp_ch->rtp)
 			gf_sk_group_unregister(stream->rtpin->sockgroup, stream->rtp_ch->rtp);
 		if (stream->rtp_ch->rtcp)
 			gf_sk_group_unregister(stream->rtpin->sockgroup, stream->rtp_ch->rtcp);
+
+		gf_rtp_set_ssm(stream->rtp_ch, (const char **) stream->rtpin->ssm.vals, stream->rtpin->ssm.nb_items, (const char **) stream->rtpin->ssmx.vals, stream->rtpin->ssmx.nb_items);
 
 		e = gf_rtp_initialize(stream->rtp_ch, stream->rtpin->block_size, GF_FALSE, 0, stream->rtpin->reorder_len, stream->rtpin->reorder_delay, (char *)ip_ifce);
 		if (e) return e;
@@ -102,7 +109,7 @@ void rtpin_stream_del(GF_RTPInStream *stream)
 static void rtpin_stream_queue_pck(GF_RTPInStream *stream, GF_FilterPacket *pck, u64 cts)
 {
 	//get all packets in queue, dispatch all packets with a cts less than the cts of the packet being queued
-	//if this is teh first packet in the RTP packet
+	//if this is the first packet in the RTP packet
 	//This is only used for MPEG4, and we are sure we only have [AU(n),AU(n+i)..], [AU(n+j), AU(n+k) ...]
 	//with i,j,k >0
 	while (stream->first_in_rtp_pck) {
@@ -116,6 +123,11 @@ static void rtpin_stream_queue_pck(GF_RTPInStream *stream, GF_FilterPacket *pck,
 	}
 	stream->first_in_rtp_pck = GF_FALSE;
 	gf_list_add(stream->pck_queue, pck);
+	//flush if too high, in case we had a msimatch filtering out packets from a previous PLAY or we have TS loop
+	while (gf_list_count(stream->pck_queue)>30) {
+		GF_FilterPacket *prev = gf_list_pop_front(stream->pck_queue);
+		gf_filter_pck_send(prev);
+	}
 }
 
 static void rtp_sl_packet_cbk(void *udta, u8 *payload, u32 size, GF_SLHeader *hdr, GF_Err e)
@@ -164,11 +176,13 @@ static void rtp_sl_packet_cbk(void *udta, u8 *payload, u32 size, GF_SLHeader *hd
 	}
 
 	pck = gf_filter_pck_new_alloc(stream->opid, size, &pck_data);
+	if (!pck) return;
+	
 	memcpy(pck_data, payload, size);
 	if (hdr->decodingTimeStampFlag)
-		gf_filter_pck_set_dts(pck, hdr->decodingTimeStamp);
+		gf_filter_pck_set_dts(pck, hdr->decodingTimeStamp - stream->ts_offset);
 
-	gf_filter_pck_set_cts(pck, hdr->compositionTimeStamp);
+	gf_filter_pck_set_cts(pck, hdr->compositionTimeStamp - stream->ts_offset);
 
 	diff = (s64) hdr->compositionTimeStamp - (s64) stream->prev_cts;
 	if ((stream->rtpin->max_sleep>0) && stream->prev_cts && diff) {
@@ -200,6 +214,38 @@ static void rtp_sl_packet_cbk(void *udta, u8 *payload, u32 size, GF_SLHeader *hd
 	}
 	gf_filter_pck_set_framing(pck, hdr->accessUnitStartFlag, hdr->accessUnitEndFlag);
 
+	if (stream->depacketizer && stream->depacketizer->sl_map.config_updated) {
+		stream->depacketizer->sl_map.config_updated = 0;
+		gf_filter_pid_set_property(stream->opid, GF_PROP_PID_DECODER_CONFIG, &PROP_DATA(stream->depacketizer->sl_map.config, stream->depacketizer->sl_map.configSize) );
+	}
+	if (stream->map_utc) {
+		u64 utc_time = stream->rtp_ch->last_SR_NTP_sec;
+		utc_time <<= 32;
+		utc_time |= stream->rtp_ch->last_SR_NTP_frac;
+		utc_time = gf_net_ntp_to_utc(utc_time);
+
+		s64 ts_diff = (s64) cts;
+		ts_diff -= stream->rtp_ch->last_SR_rtp_time;
+		ts_diff = gf_timestamp_rescale_signed(ts_diff, stream->rtp_ch->TimeScale, 1000);
+		utc_time += ts_diff;
+		gf_filter_pck_set_property(pck, GF_PROP_PCK_UTC_TIME, & PROP_LONGUINT(utc_time) );
+		stream->map_utc = GF_FALSE;
+	}
+
+	if (stream->map_media_time) {
+		Double media_time = 0;
+		if (stream->rtsp) {
+			//gf_rtp_get_current_time is from init with rtsp rtp_info, so it matches current packet NPT time
+			media_time = stream->current_start + gf_rtp_get_current_time(stream->rtp_ch);
+		}
+		gf_filter_pck_set_property(pck, GF_PROP_PCK_MEDIA_TIME, &PROP_DOUBLE(media_time) );
+
+		GF_LOG(GF_LOG_INFO, GF_LOG_RTP, ("[RTP] Mapping RTP Time seq %d TS %d Media Time %g - rtp info seq %d TS %d\n",
+										 hdr->packetSequenceNumber, cts, media_time, stream->rtp_ch->rtp_first_SN, stream->rtp_ch->rtp_time
+										));
+		stream->map_media_time = GF_FALSE;
+	}
+
 	if (stream->rtp_ch->packet_loss)
 		gf_filter_pck_set_corrupted(pck, 1);
 
@@ -209,7 +255,7 @@ static void rtp_sl_packet_cbk(void *udta, u8 *payload, u32 size, GF_SLHeader *hd
 #endif
 
 	if (stream->depacketizer->sl_map.IndexDeltaLength) {
-		rtpin_stream_queue_pck(stream, pck, hdr->compositionTimeStamp);
+		rtpin_stream_queue_pck(stream, pck, hdr->compositionTimeStamp+stream->ts_offset);
 	} else {
 		gf_filter_pck_send(pck);
 	}
@@ -218,47 +264,7 @@ static void rtp_sl_packet_cbk(void *udta, u8 *payload, u32 size, GF_SLHeader *hd
 	hdr->decodingTimeStamp = dts;
 }
 
-GF_RTPInStream *rtpin_stream_new_satip(GF_RTPIn *rtp, const char *server_ip)
-{
-	GF_RTSPTransport trans;
-	GF_RTPInStream *tmp;
-	GF_SAFEALLOC(tmp, GF_RTPInStream);
-	if (!tmp) return NULL;
-	tmp->rtpin = rtp;
-	tmp->buffer = gf_malloc(sizeof(char) * rtp->block_size);
-
-	/*create an RTP channel*/
-	tmp->rtp_ch = gf_rtp_new();
-	tmp->control = gf_strdup("*");
-
-	memset(&trans, 0, sizeof(GF_RTSPTransport));
-	trans.Profile = "RTP/AVP";
-	trans.source = (char *) server_ip;
-	trans.IsUnicast = GF_TRUE;
-	trans.client_port_first = 0;
-	trans.client_port_last = 0;
-	trans.port_first = 0;
-	trans.port_last = 0;
-
-	if (gf_rtp_setup_transport(tmp->rtp_ch, &trans, NULL) != GF_OK) {
-		rtpin_stream_del(tmp);
-		return NULL;
-	}
-
-	gf_rtp_setup_payload(tmp->rtp_ch, 33, 90000);
-
-	if (rtp->disable_rtcp) tmp->flags |= RTP_ENABLE_RTCP;
-
-	/*setup NAT keep-alive*/
-	gf_rtp_enable_nat_keepalive(tmp->rtp_ch, rtp->nat_keepalive ? rtp->nat_keepalive : 30000);
-
-	tmp->range_start = 0;
-	tmp->range_end = 0;
-
-	return tmp;
-}
-
-GF_RTPInStream *rtpin_stream_new_standalone(GF_RTPIn *rtp, const char *flow_ip, u32 port)
+GF_RTPInStream *rtpin_stream_new_standalone(GF_RTPIn *rtp, const char *flow_ip, u32 port, Bool for_satip)
 {
 	GF_RTSPTransport trans;
 	GF_RTPInStream *tmp;
@@ -273,25 +279,35 @@ GF_RTPInStream *rtpin_stream_new_standalone(GF_RTPIn *rtp, const char *flow_ip, 
 	memset(&trans, 0, sizeof(GF_RTSPTransport));
 	trans.Profile = "RTP/AVP";
 	trans.source = (char *) flow_ip;
-	trans.IsUnicast = gf_sk_is_multicast_address(flow_ip);
-	trans.client_port_first = port;
-	trans.client_port_last = port+1;
-	trans.port_first = port;
-	trans.port_last = port+1;
+	if (for_satip) {
+		tmp->control = gf_strdup("*");
+
+		trans.IsUnicast = GF_TRUE;
+		//ports not set for satip
+	} else {
+		trans.IsUnicast = gf_sk_is_multicast_address(flow_ip);
+		trans.client_port_first = port;
+		trans.client_port_last = port+1;
+		trans.port_first = port;
+		trans.port_last = port+1;
+	}
 
 	if (gf_rtp_setup_transport(tmp->rtp_ch, &trans, NULL) != GF_OK) {
 		rtpin_stream_del(tmp);
 		return NULL;
 	}
 
-//	gf_rtp_setup_payload(tmp->rtp_ch, 33, 90000);
+	if (for_satip)
+		gf_rtp_setup_payload(tmp->rtp_ch, 33, 90000);
 
-	if (rtp->disable_rtcp) tmp->flags |= RTP_ENABLE_RTCP;
+	if (rtp->disable_rtcp)
+		tmp->flags |= RTP_ENABLE_RTCP;
 
 	/*setup NAT keep-alive*/
 	gf_rtp_enable_nat_keepalive(tmp->rtp_ch, rtp->nat_keepalive ? rtp->nat_keepalive : 30000);
 	tmp->range_start = 0;
 	tmp->range_end = 0;
+
 	return tmp;
 }
 
@@ -338,9 +354,13 @@ GF_RTPInStream *rtpin_stream_new(GF_RTPIn *rtp, GF_SDPMedia *media, GF_SDPInfo *
 			sscanf(att->Value, "%*d lay L%d %*s %2999s", &base_stream, buf);
 			if (!strlen(buf))
 				sscanf(att->Value, "%*d lay %2999s", buf);
+			//we only check first indicated dependency
+			char *sep = strchr(buf, ':');
+			if (sep) sep[0] = 0;
 			sscanf(buf, "L%d", &prev_stream);
 		}
 	}
+	if (!base_stream && mid) base_stream = mid;
 
 	if (range) {
 		Start = range->start;
@@ -470,7 +490,7 @@ GF_RTPInStream *rtpin_stream_new(GF_RTPIn *rtp, GF_SDPMedia *media, GF_SDPInfo *
 		if (rvc_data) {
 			if (is_gz) {
 #ifdef GPAC_DISABLE_ZLIB
-				GF_LOG(GF_LOG_WARNING, GF_LOG_MEDIA, ("Error: no zlib support - RVC not supported in RTP\n"));
+				GF_LOG(GF_LOG_WARNING, GF_LOG_RTP, ("Error: no zlib support - RVC not supported in RTP\n"));
 				gf_free(rvc_data);
 				return NULL;
 #else
@@ -493,15 +513,15 @@ static void rtpin_stream_update_stats(GF_RTPInStream *stream)
 	Float bps;
 	if (!stream->rtp_ch) return;
 
-	gf_filter_pid_set_info_str(stream->opid, "nets:loss", &PROP_FLOAT( gf_rtp_get_loss(stream->rtp_ch) ) );
+	gf_filter_pid_set_info_str(stream->opid, "rtp:loss", &PROP_FLOAT( gf_rtp_get_loss(stream->rtp_ch) ) );
 	if (stream->rtsp && (stream->flags & RTP_INTERLEAVED)) {
-		gf_filter_pid_set_info_str(stream->opid, "nets:interleaved", &PROP_UINT( gf_rtsp_get_session_port(stream->rtsp->session) ) );
-		gf_filter_pid_set_info_str(stream->opid, "nets:rtpid", &PROP_UINT( gf_rtp_get_low_interleave_id(stream->rtp_ch) ) );
-		gf_filter_pid_set_info_str(stream->opid, "nets:rctpid", &PROP_UINT( gf_rtp_get_hight_interleave_id(stream->rtp_ch) ) );
+		gf_filter_pid_set_info_str(stream->opid, "rtp:interleaved", &PROP_UINT( gf_rtsp_get_session_port(stream->rtsp->session) ) );
+		gf_filter_pid_set_info_str(stream->opid, "rtp:rtpid", &PROP_UINT( gf_rtp_get_low_interleave_id(stream->rtp_ch) ) );
+		gf_filter_pid_set_info_str(stream->opid, "rtp:rctpid", &PROP_UINT( gf_rtp_get_hight_interleave_id(stream->rtp_ch) ) );
 
 	} else {
-		gf_filter_pid_set_info_str(stream->opid, "nets:rtpp", &PROP_UINT( stream->rtp_ch->net_info.client_port_first ) );
-		gf_filter_pid_set_info_str(stream->opid, "nets:rtcpp", &PROP_UINT( stream->rtp_ch->net_info.client_port_last ) );
+		gf_filter_pid_set_info_str(stream->opid, "rtp:rtpp", &PROP_UINT( stream->rtp_ch->net_info.client_port_first ) );
+		gf_filter_pid_set_info_str(stream->opid, "rtp:rtcpp", &PROP_UINT( stream->rtp_ch->net_info.client_port_last ) );
 	}
 	if (stream->stat_stop_time) {
 		time = stream->stat_stop_time - stream->stat_start_time;
@@ -513,17 +533,17 @@ static void rtpin_stream_update_stats(GF_RTPInStream *stream)
 	bps = 8.0f * stream->rtp_bytes;
 	bps *= 1000;
 	bps /= time;
-	gf_filter_pid_set_info_str(stream->opid, "nets:bw_down", &PROP_UINT( (u32) bps ) );
+	gf_filter_pid_set_info_str(stream->opid, "rtp:bw_down", &PROP_UINT( (u32) bps ) );
 
 	bps = 8.0f * stream->rtcp_bytes;
 	bps *= 1000;
 	bps /= time;
-	gf_filter_pid_set_info_str(stream->opid, "nets:ctrl_bw_down", &PROP_UINT( (u32) bps ) );
+	gf_filter_pid_set_info_str(stream->opid, "rtp:ctrl_bw_down", &PROP_UINT( (u32) bps ) );
 
 	bps = 8.0f * gf_rtp_get_tcp_bytes_sent(stream->rtp_ch);
 	bps *= 1000;
 	bps /= time;
-	gf_filter_pid_set_info_str(stream->opid, "nets:ctrl_bw_up", &PROP_UINT( (u32) bps ) );
+	gf_filter_pid_set_info_str(stream->opid, "rtp:ctrl_bw_up", &PROP_UINT( (u32) bps ) );
 }
 
 
@@ -573,29 +593,23 @@ void rtpin_stream_on_rtp_pck(GF_RTPInStream *stream, char *pck, u32 size)
 
 		/*it may happen that we still receive packets from a previous "play" request. If this is the case,
 		filter until we reach the indicated rtptime*/
-		if (stream->rtp_ch->rtp_time
-		        && (stream->rtp_ch->rtp_first_SN > hdr.SequenceNumber)
-		        && (stream->rtp_ch->rtp_time > hdr.TimeStamp)
-		   ) {
-			GF_LOG(GF_LOG_WARNING, GF_LOG_RTP, ("[RTP] Rejecting too early packet (TS %d vs signaled rtp time %d - diff %d ms)\n",
+		if (stream->rtp_ch->rtp_time) {
+			s32 sn_diff = stream->rtp_ch->rtp_first_SN; sn_diff -= (s32) hdr.SequenceNumber;
+			s32 ts_diff = stream->rtp_ch->rtp_time; ts_diff -= (s32) hdr.TimeStamp;
+			if (sn_diff<0) sn_diff = -sn_diff;
+			if (ts_diff<0) ts_diff = -ts_diff;
+			if ((sn_diff > 100) || ((u32) ts_diff > stream->rtp_ch->TimeScale)) {
+				GF_LOG(GF_LOG_WARNING, GF_LOG_RTP, ("[RTP] Rejecting too early packet (TS %d vs signaled rtp time %d - diff %d ms)\n",
 			                                    hdr.TimeStamp, stream->rtp_ch->rtp_time, ((hdr.TimeStamp - stream->rtp_ch->rtp_time)*1000) / stream->rtp_ch->TimeScale));
-			return;
+				return;
+			}
 		}
 
 		ch_time = gf_rtp_get_current_time(stream->rtp_ch);
 
 		/*this is the first packet on the channel (no PAUSE)*/
 		if (stream->check_rtp_time == RTP_SET_TIME_RTP) {
-			Double media_time = 0;
-			if (stream->rtsp) {
-				media_time = stream->current_start + ch_time;
-			}
-			gf_filter_pid_set_property_str(stream->opid, "time:timestamp", &PROP_LONGUINT(hdr.TimeStamp) );
-			gf_filter_pid_set_property_str(stream->opid, "time:media", &PROP_DOUBLE(media_time) );
-
-			GF_LOG(GF_LOG_INFO, GF_LOG_RTP, ("[RTP] Mapping RTP Time seq %d TS %d Media Time %g - rtp info seq %d TS %d\n",
-			                                 hdr.SequenceNumber, hdr.TimeStamp, stream->current_start + ch_time, stream->rtp_ch->rtp_first_SN, stream->rtp_ch->rtp_time
-			                                ));
+			stream->map_media_time = GF_TRUE;
 
 			/*skip RTCP clock init when RTSP is used*/
 			if (stream->rtsp) stream->rtcp_init = GF_TRUE;
@@ -655,8 +669,7 @@ static void rtpin_adjust_sync(GF_RTPIn *ctx)
 
 		ntp_diff_us = max_ntp_us;
 		ntp_diff_us -= stream->init_ntp_us;
-		ntp_diff_us *= stream->rtp_ch->TimeScale;
-		ntp_diff_us /= 1000000;
+		ntp_diff_us = gf_timestamp_rescale(ntp_diff_us, 1000000, stream->rtp_ch->TimeScale);
 		stream->ts_adjust = ntp_diff_us;
 	}
 }
@@ -685,8 +698,7 @@ static void rtpin_stream_on_rtcp_pck(GF_RTPInStream *stream, char *pck, u32 size
 
 		//ntp time at origin: ntp(now) - ntp(first_pck) = rtpts(now) - rtpts(orig) -> ntp_first = ntp - rtp_diff
 		rtp_diff_us = stream->rtp_ch->last_SR_rtp_time - (stream->first_rtp_ts - 1);
-		rtp_diff_us *= 1000000;
-		rtp_diff_us /= stream->rtp_ch->TimeScale;
+		rtp_diff_us = gf_timestamp_rescale(rtp_diff_us, stream->rtp_ch->TimeScale, 1000000);
 
 		stream->init_ntp_us = ntp_clock_us - rtp_diff_us;
 
@@ -697,6 +709,9 @@ static void rtpin_stream_on_rtcp_pck(GF_RTPInStream *stream, char *pck, u32 size
 
 		if (stream->rtpin->rtcpsync)
 			rtpin_adjust_sync(stream->rtpin);
+	}
+	if (has_sr && stream->opid && (stream->status==RTP_Running)) {
+		stream->map_utc = GF_TRUE;
 	}
 
 	if (e == GF_EOS) {
@@ -735,32 +750,50 @@ u32 rtpin_stream_read(GF_RTPInStream *stream)
 		size = gf_rtp_read_rtp(stream->rtp_ch, stream->buffer, stream->rtpin->block_size);
 		if (size) {
 			tot_size += size;
-			stream->rtpin->udp_timeout = 0;
 			rtpin_stream_on_rtp_pck(stream, stream->buffer, size);
 		}
 	}
-	if (!tot_size) return 0;
 
 	/*and send the report*/
-	if (stream->flags & RTP_ENABLE_RTCP) gf_rtp_send_rtcp_report(stream->rtp_ch);
+	if (tot_size) {
+		if (stream->flags & RTP_ENABLE_RTCP) {
+			if (stream->rtpin->loss_rate>=0)
+				gf_rtp_set_loss_rate(stream->rtp_ch, (u32) stream->rtpin->loss_rate);
+			gf_rtp_send_rtcp_report(stream->rtp_ch);
+		}
+		stream->last_udp_time = 0;
+		return tot_size;
+	}
+	if (stream->paused) return 0;
 
 	/*detect timeout*/
 	if (stream->rtpin->udp_timeout) {
 		if (!stream->last_udp_time) {
 			stream->last_udp_time = gf_sys_clock();
-		} else if (stream->rtp_ch->net_info.IsUnicast) {
+		} else if (stream->rtp_bytes || !stream->rtp_ch->net_info.IsInterleaved) {
 			u32 diff = gf_sys_clock() - stream->last_udp_time;
 			if (diff >= stream->rtpin->udp_timeout) {
-				char szMessage[1024];
-				GF_LOG(GF_LOG_WARNING, GF_LOG_RTP, ("[RTP] UDP Timeout after %d ms\n", diff));
-				sprintf(szMessage, "No data received in %d ms%s", diff, stream->rtpin->autortsp ? ", retrying using TCP" : "");
-				rtpin_send_message(stream->rtpin, GF_IP_UDP_TIMEOUT, szMessage);
-				if (stream->rtpin->autortsp)
-					stream->rtpin->retry_tcp = GF_TRUE;
+				if (stream->rtp_bytes) {
+					if (! (stream->flags & RTP_EOS)) {
+						GF_LOG(GF_LOG_WARNING, GF_LOG_RTP, ("[RTP] No packet received for %d ms on stream %d, assuming EOS\n", diff, stream->ES_ID));
+						stream->flags |= RTP_EOS;
+					}
+				} else {
+					if (! (stream->flags & RTP_EOS) && !stream->rtpin->retry_rtsp) {
+						GF_LOG(GF_LOG_WARNING, GF_LOG_RTP, ("[RTP] UDP Timeout after %d ms on stream %d%s\n", diff, stream->ES_ID,
+						(stream->rtpin->session && (stream->rtpin->transport==RTP_TRANSPORT_AUTO)) ? ", retrying using TCP" : ""));
+					}
+
+					if ((stream->rtpin->transport==RTP_TRANSPORT_AUTO) && stream->rtpin->session && !stream->rtpin->retry_rtsp) {
+						stream->rtpin->retry_rtsp = RETRY_RTSP_FORCE_TCP;
+					} else {
+						stream->flags |= RTP_EOS;
+					}
+				}
 			}
 		}
 	}
-	return tot_size;
+	return 0;
 }
 
 #endif /*GPAC_DISABLE_STREAMING*/

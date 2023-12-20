@@ -9,8 +9,8 @@ var width = rect.width;
 var height = rect.height;
 
 //filter-assignable variables - if changing names, also do it in filters/dec_webvtt.c
-var xOffset = 5;
-var yOffset = 5;
+var xOffset = 0;
+var yOffset = 0; //positive towards top
 var fontSize = 20;
 var textColor = "white";
 var fontFamily = "SANS";
@@ -29,27 +29,37 @@ function reportMessage(msg) {
 }
 
 function createTextArea(settingsObj) {
+
 	var t = document.createElement("textArea");
-	t.setAttribute("x", xOffset+settingsObj.xPosition);
-	t.setAttribute("y", yOffset);
+	let x = xOffset + settingsObj.xPosition;
+	let y = -yOffset - settingsObj.linePosition;
+	t.setAttribute("x", x);
+	t.setAttribute("y", y);
 	var w, h;
-	if (settingsObj.fromTop) {
-		t.setAttribute("display-align", "before");
-		h=height-2*yOffset;
-	} else {
-		t.setAttribute("display-align", "after");
-		h = height-2*yOffset-settingsObj.linePosition;
-	}
-	w = settingsObj.size-2*xOffset;
+
+	t.setAttribute("display-align", "after");
+	h=height;
+	w = settingsObj.size;
 	t.setAttribute("height", h);
 	t.setAttribute("width", w);
-	reportMessage("Creating textArea size " + w + " x " + h);
+	reportMessage("Creating textArea size " + x + 'x' + y + '@' + w + "x" + h);
 	
 	t.setAttribute("fill", textColor);
 	t.setAttribute("font-size", fontSize);
 	t.setAttribute("font-family", fontFamily);
 	t.setAttribute("text-align", settingsObj.align);
 	t.setAttribute("line-increment", lineSpaceFactor*fontSize);
+
+/*	if (w < width) {
+		var r = document.createElement("rect");
+		r.setAttribute("height", h);
+		r.setAttribute("width", w);
+		r.setAttribute("x", xOffset+settingsObj.xPosition);
+		r.setAttribute("y", yOffset-5);
+		r.setAttribute("fill", "cyan");
+		cueArea.appendChild(r);
+	}
+*/
 	cueArea.appendChild(t);
 	reportMessage("textArea created: "+t);
 	return t;
@@ -101,43 +111,49 @@ function parseCueSettings(cueSettings){
 	}
 
 	// Compute real values
-	if (compositeCueSettings.line !== undefined) {
+	if (typeof compositeCueSettings.line != 'undefined') {
 		if (compositeCueSettings.line.match(/\%/)) {
 			obj.linePosition = parseFloat(compositeCueSettings.line.replace(/\%/ig,""));
 			if (isNaN(obj.linePosition)) {
-				obj.linePosition = nbCues*lineSpaceFactor*fontSize;
+				obj.linePosition = (nbCues + 0.5) * lineSpaceFactor*fontSize;
 			} else {
-				obj.linePosition *= height/100;
+				if (obj.linePosition<0) obj.linePosition=100;
+				else if (obj.linePosition>100) obj.linePosition=100;
+				//convert to vertical translation 
+				let h = height - 3*lineSpaceFactor*fontSize/2;
+				obj.linePosition = h - obj.linePosition*h/100 + lineSpaceFactor*fontSize/2;
 			}
 		} else {
-			obj.linePosition = parseFloat(compositeCueSettings.line)*lineIncrement;
+			obj.linePosition = parseFloat(compositeCueSettings.line);
 			if (isNaN(obj.linePosition)) {
-				obj.linePosition = nbCues*lineSpaceFactor*fontSize;
+				obj.linePosition = (nbCues + 0.5) * lineSpaceFactor*fontSize;
 			} else {
-				if (obj.linePosition > 0) {
-					obj.fromTop = true;
+				let h = (height - 2*fontSize) / lineSpaceFactor*fontSize;
+				obj.linePosition *= lineSpaceFactor*fontSize;
+				if (obj.linePosition >= 0) {
+						obj.linePosition = height - lineSpaceFactor*fontSize - obj.linePosition;
 				} else {
-					obj.fromTop = false;
-					obj.linePosition = -obj.linePosition;
+					obj.linePosition = -obj.linePosition - lineSpaceFactor*fontSize/2;
 				}
 			}
 		}
 	} else {
-		obj.linePosition = nbCues*lineSpaceFactor*fontSize;
+		obj.linePosition = (nbCues + 0.5) * lineSpaceFactor*fontSize;
 	}
-	reportMessage("linePosition: "+obj.linePosition);
-	if (compositeCueSettings.position !== undefined) {
+
+	let position_auto=true;
+	if (typeof compositeCueSettings.position != 'undefined') {
 		obj.xPosition = parseFloat(compositeCueSettings.position.replace(/\%/ig,""));
 		if (isNaN(obj.xPosition)) {
-			obj.xPosition = 50;
+			obj.xPosition = 0;
 		} else {
 			obj.xPosition *= width/100;
+			position_auto = false;
 		}
 	} else {
-		obj.xPosition = 50;
+		obj.xPosition = 0;
 	}
-	reportMessage("xPosition: "+obj.xPosition);
-	if (compositeCueSettings.size !== undefined) {
+	if (typeof compositeCueSettings.size != 'undefined') {
 		obj.size = parseFloat(compositeCueSettings.size.replace(/\%/ig,""));
 		if (isNaN(obj.size)) {
 			obj.size = 100;
@@ -145,28 +161,40 @@ function parseCueSettings(cueSettings){
 	} else {
 		obj.size = 100;
 	}
+	if (obj.size==100) position_auto = false;
 	obj.size *= width/100;
-	
-	reportMessage("size: "+obj.size);
-	if (compositeCueSettings.align !== undefined) {
-		if (compositeCueSettings.align === "middle") {
-			obj.align = "center";
-		} else if (compositeCueSettings.align === "left") {
+
+	//default to center
+	if (position_auto) {
+		obj.xPosition = width/2 - obj.size/2;
+	}
+
+	if (typeof compositeCueSettings.align != 'undefined') {
+		if (compositeCueSettings.align === "left") {
+			obj.align = "start";
+			if (position_auto) {
+				obj.xPosition = 0;
+			}
+		} else if (compositeCueSettings.align === "start") {
 			obj.align = "start";
 		} else if (compositeCueSettings.align === "right") {
 			obj.align = "end";
-		} else if (compositeCueSettings.align === "start") {
-			obj.align = "start";
+			if (position_auto) {
+				obj.xPosition = width - obj.size;
+			}
 		} else if (compositeCueSettings.align === "end") {
 			obj.align = "end";
+		/*} else if (compositeCueSettings.align === "middle") {
+			obj.align = "center";
+		*/
 		} else {
 			obj.align = "center";
 		}
 	} else {
 		obj.align = "center";
 	}
-	reportMessage("align: "+obj.align);
-	reportMessage("cue settings parsed: "+obj);
+
+	reportMessage("cue settings parsed: " + JSON.stringify(obj));
 	return obj;
 }
 
@@ -231,7 +259,7 @@ function parseCue(cueText) {
 						stack = stack.slice(0,stackScanDepth);
 					} else {
 						// Tag mismatch!
-						alert("Tag mismatch when parsing WebVTT cue: "+cueText);
+						alert("Tag mismatch when parsing WebVTT cue: "+cueText+ " tag name was " + TagName);
 					}
 				} else {
 					// Opening Tag
@@ -239,9 +267,10 @@ function parseCue(cueText) {
 					// If not, don't allow it (unless the sanitiseCueHTML option is explicitly set to false)
 				
 					if ((	currentToken.substr(1).match(SRTChunkTimestampParser)	||
-							currentToken.match(/^<v\s+[^>]+>/i)						||
-							currentToken.match(/^<c[a-z0-9\-\_\.]+>/)				||
-							currentToken.match(/^<(b|i|u|ruby|rt)>/))				) {
+							currentToken.match(/^<(v|lang)\s+[^>]+>/i)						||
+							currentToken.match(/^<c[a-zA-Z0-9\-\_\.]+>/)				||
+							currentToken.match(/^<(b|i|u|ruby|ruby|rt)>/))
+					) {
 						
 						var tmpObject = {
 							"token":	currentToken.replace(/[<\/>]+/ig,"").split(/[\s\.]+/)[0],
@@ -252,6 +281,10 @@ function parseCue(cueText) {
 						if (tmpObject.token === "v") {
 							tmpObject.voice = currentToken.match(/^<v\s*([^>]+)>/i)[1];
 						} else if (tmpObject.token === "c") {
+							var hasRealTextContent = function(textInput) {
+								return !!textInput.replace(/[^a-z0-9]+/ig,"").length;
+							};
+
 							tmpObject.classes = currentToken
 													.replace(/[<\/>\s]+/ig,"")
 													.split(/[\.]+/ig)

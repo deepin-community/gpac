@@ -1,5 +1,6 @@
 # The disclaimer in the source file is actually for the rfc2640.txt document, not the source file itself.
-gpac source: license-problem-non-free-RFC src/utils/unicode.c
+gpac source: license-problem-non-free-RFC *src/utils/unicode.c*
 
-# This file does come with full source, just has an absurdly long line
-gpac source: source-is-missing share/vis/extern/BrowserLib/Core/Code/Convert.js line length is 2028 characters (>512)
+# These files does come with full source, just has an absurdly long line
+gpac source: source-is-missing *share/gui/extensions/player/player.js*
+gpac source: source-is-missing *share/vis/extern/BrowserLib/Core/Code/Convert.js*
