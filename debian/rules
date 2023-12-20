@@ -46,7 +46,7 @@ override_dh_clean:
 	## Remove Files-Excluded (when built from checkout or non-DFSG tarball):
 	$(RM) -rv `perl -0nE 'say $$1 if m{^Files\-Excluded\:\s*(.*?)(?:\n\n|Files:|Comment:)}sm;' debian/copyright | grep -v 'debian'`
 	dh_clean config.h bin/gcc/libgpac*
-	dh_clean gpac.pc include/gpac/revision.h share/gpac.desktop
+	dh_clean gpac.pc include/gpac/revision.h
 	find $(CURDIR) -name *.opic -delete
 
 get-orig-source:

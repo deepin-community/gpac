@@ -26,7 +26,6 @@
 #include "x11_out.h"
 #include <gpac/constants.h>
 #include <gpac/utf.h>
-#include <gpac/user.h>
 #include <sys/time.h>
 #include <X11/XKBlib.h>
 #include <X11/Xatom.h>
@@ -137,7 +136,7 @@ static int X11_GetXVideoPort(GF_VideoOutput *vout, u32 pixel_format, Bool check_
 		formats = XvListImageFormats(xwin->display, adaptors[i].base_id, &num_formats);
 
 		for (j=0; j<num_formats && (selected_port == -1 ); j++) {
-			XvAttribute *attr;
+			XvAttribute *attr=NULL;
 			int k, nb_attributes;
 			u32 pformat = X11_GetPixelFormat(formats[j].id);
 
@@ -161,6 +160,11 @@ static int X11_GetXVideoPort(GF_VideoOutput *vout, u32 pixel_format, Bool check_
 									}
 					*/
 				}
+				if (attr) {
+					free(attr);
+					attr=NULL;
+				}
+
 				if (check_color && !has_color_key) continue;
 
 				if (XvGrabPort(xwin->display, port, CurrentTime) == Success) {
@@ -235,7 +239,7 @@ GF_Err X11_Blit(struct _video_out *vout, GF_VideoSurface *video_src, GF_Window *
 	}
 
 	/*different size, recreate an image*/
-	if ((xwin->overlay->width != video_src->width) || (xwin->overlay->height != video_src->height)) {
+	if (xwin->overlay && ((xwin->overlay->width != video_src->width) || (xwin->overlay->height != video_src->height))) {
 		XFree(xwin->overlay);
 		xwin->overlay = XvCreateImage(xwin->display, xwin->xvport, xwin->xv_pf_format, NULL, video_src->width, video_src->height);
 		if (!xwin->overlay) return GF_IO_ERR;
@@ -1022,6 +1026,13 @@ GF_Err X11_SetFullScreen (struct _video_out * vout, u32 bFullScreenOn, u32 * scr
 		XSetInputFocus(xWindow->display, xWindow->full_wnd, RevertToNone, CurrentTime);
 		XRaiseWindow(xWindow->display, xWindow->full_wnd);
 		XGrabKeyboard(xWindow->display, xWindow->full_wnd, True, GrabModeAsync, GrabModeAsync, CurrentTime);
+
+		GF_Event evt;
+		memset(&evt, 0, sizeof(GF_Event));
+		evt.type = GF_EVENT_SIZE;
+		evt.size.width = xWindow->w_width;
+		evt.size.height = xWindow->w_height;
+		vout->on_event(vout->evt_cbk_hdl, &evt);
 	} else {
 		*screen_width = xWindow->store_width;
 		*screen_height = xWindow->store_height;
@@ -1030,8 +1041,14 @@ GF_Err X11_SetFullScreen (struct _video_out * vout, u32 bFullScreenOn, u32 * scr
 		XUnmapWindow (xWindow->display, xWindow->full_wnd);
 		XMapWindow (xWindow->display, xWindow->wnd);
 		XUngrabKeyboard(xWindow->display, CurrentTime);
-		/*looks like this makes osmozilla crash*/
 		//if (xWindow->par_wnd) XSetInputFocus(xWindow->display, xWindow->wnd, RevertToNone, CurrentTime);
+
+		GF_Event evt;
+		memset(&evt, 0, sizeof(GF_Event));
+		evt.type = GF_EVENT_SIZE;
+		evt.size.width = xWindow->w_width;
+		evt.size.height = xWindow->w_height;
+		vout->on_event(vout->evt_cbk_hdl, &evt);
 
 		/*backbuffer resize will be done right after this is called */
 	}
@@ -1159,12 +1176,12 @@ X11_SetupWindow (GF_VideoOutput * vout)
 		break;
 	case 24:
 #ifdef GPAC_BIG_ENDIAN
-		if (xWindow->visual->red_mask==0x00FF0000)	
+		if (xWindow->visual->red_mask==0x00FF0000)
 			xWindow->pixel_format = GF_PIXEL_RGB;
 		else
 			xWindow->pixel_format = GF_PIXEL_BGR;
 #else
-		if (xWindow->visual->red_mask==0x00FF0000)	
+		if (xWindow->visual->red_mask==0x00FF0000)
 			xWindow->pixel_format = GF_PIXEL_BGR;
 		else
 			xWindow->pixel_format = GF_PIXEL_RGB;
@@ -1215,7 +1232,7 @@ X11_SetupWindow (GF_VideoOutput * vout)
 		                              xWindow->visual, 0, NULL);
 	}
 
-	if (!(xWindow->init_flags & GF_TERM_INIT_HIDE)) {
+	if (!(xWindow->init_flags & GF_VOUT_INIT_HIDE)) {
 		XMapWindow (xWindow->display, (Window) xWindow->wnd);
 	}
 
@@ -1238,7 +1255,7 @@ X11_SetupWindow (GF_VideoOutput * vout)
 		GF_LOG(GF_LOG_ERROR, GF_LOG_MMIO, ("[X11] Cannot select input focus\n"));
 	}
 	XSync(xWindow->display, False);
-	if (!(xWindow->init_flags & GF_TERM_INIT_HIDE)) {
+	if (!(xWindow->init_flags & GF_VOUT_INIT_HIDE)) {
 		XMapWindow (xWindow->display, (Window) xWindow->wnd);
 	}
 	XSizeHints *Hints = XAllocSizeHints ();
@@ -1267,7 +1284,7 @@ X11_SetupWindow (GF_VideoOutput * vout)
 	XkbSetDetectableAutoRepeat(xWindow->display, autorepeat, &supported);
 
 
-	if (xWindow->init_flags & GF_TERM_WINDOW_NO_DECORATION) {
+	if (xWindow->init_flags & GF_VOUT_WINDOW_NO_DECORATION) {
 #define PROP_MOTIF_WM_HINTS_ELEMENTS 5
 #define MWM_HINTS_DECORATIONS (1L << 1)
 		struct {
@@ -1504,12 +1521,11 @@ GF_Err X11_Setup(struct _video_out *vout, void *os_handle, void *os_display, u32
 
 	//window already setup and this restup asks for visible, show window
 	if (xWindow->wnd) {
-		if (!(xWindow->init_flags & GF_TERM_INIT_HIDE)) {
+		if (!(xWindow->init_flags & GF_VOUT_INIT_HIDE)) {
 			XMapWindow (xWindow->display, (Window) xWindow->wnd);
 		}
 	}
 
-	/*OSMOZILLA HACK*/
 	if (os_display) xWindow->no_select_input = 1;
 
 	/*the rest is done THROUGH THE MAIN RENDERER TRHEAD!!*/

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2020
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -27,11 +27,9 @@
 
 #include "visual_manager.h"
 #include "nodes_stacks.h"
-#include <gpac/options.h>
 #include "texturing.h"
 
 #include "gl_inc.h"
-
 
 #ifndef GPAC_DISABLE_3D
 void compositor_2d_hybgl_clear_surface(GF_VisualManager *visual, GF_IRect *rc, u32 BackColor, u32 is_offscreen_clear)
@@ -41,7 +39,7 @@ void compositor_2d_hybgl_clear_surface(GF_VisualManager *visual, GF_IRect *rc, u
 	if (!visual->is_attached) return;
 
 	if (!BackColor && !visual->offscreen && !is_offscreen_clear) {
-		if ( !(visual->compositor->init_flags & GF_TERM_WINDOW_TRANSPARENT)) {
+		if ( !(visual->compositor->init_flags & GF_VOUT_WINDOW_TRANSPARENT)) {
 			BackColor = visual->compositor->back_color & 0x00FFFFFF;
 		}
 	}
@@ -84,6 +82,8 @@ void compositor_2d_hybgl_flush_video(GF_Compositor *compositor, GF_IRect *area)
 	//if no object drawn since the last flush, no need to draw the texture
 	if (!compositor->visual->nb_objects_on_canvas_since_last_ogl_flush)
 		goto exit;
+
+	compositor->visual->prev_hybgl_canvas_not_empty = GF_TRUE;
 
 	memset(&a_tr_state, 0, sizeof(GF_TraverseState));
 	a_tr_state.color_mat.identity = 1;
@@ -363,7 +363,7 @@ void compositor_2d_clear_surface(GF_VisualManager *visual, GF_IRect *rc, u32 Bac
 		GF_Window src_wnd, dst_wnd;
 
 		if (!BackColor && !visual->offscreen) {
-			if ( !(visual->compositor->init_flags & GF_TERM_WINDOW_TRANSPARENT)) {
+			if ( !(visual->compositor->init_flags & GF_VOUT_WINDOW_TRANSPARENT)) {
 				BackColor = visual->compositor->back_color;
 			}
 		}
@@ -446,7 +446,7 @@ static void store_blit_times(GF_TextureHandler *txh, u32 push_time)
 		GF_LOG(GF_LOG_DEBUG, GF_LOG_COMPOSE, ("[Compositor2D] Bliting frame (CTS %d) %d ms too late\n", txh->last_frame_time, ck - txh->last_frame_time ));
 	}
 
-	GF_LOG(GF_LOG_DEBUG, GF_LOG_MEDIA, ("[2D Blitter] At %u Blit texture (CTS %u) %d ms after due date - blit in %d ms - average push time %d ms\n", ck, txh->last_frame_time, ck - txh->last_frame_time, push_time, txh->upload_time / txh->nb_frames));
+	GF_LOG(GF_LOG_DEBUG, GF_LOG_COMPTIME, ("[2D Blitter] At %u Blit texture (CTS %u) %d ms after due date - blit in %d ms - average push time %d ms\n", ck, txh->last_frame_time, ck - txh->last_frame_time, push_time, txh->upload_time / txh->nb_frames));
 #endif
 }
 
@@ -636,7 +636,6 @@ static Bool compositor_2d_draw_bitmap_ex(GF_VisualManager *visual, GF_TextureHan
 		switch (txh->pixelformat) {
 		case GF_PIXEL_RGB:
 		case GF_PIXEL_BGR:
-		case GF_PIXEL_RGBS:
 		case GF_PIXEL_RGBD:
 //		case GF_PIXEL_RGB_555:
 //		case GF_PIXEL_RGB_565:
@@ -649,27 +648,15 @@ static Bool compositor_2d_draw_bitmap_ex(GF_VisualManager *visual, GF_TextureHan
 			break;
 		case GF_PIXEL_ARGB:
 		case GF_PIXEL_RGBA:
-		case GF_PIXEL_RGBAS:
 		case GF_PIXEL_RGBDS:
 			if (hw_caps & GF_VIDEO_HW_HAS_RGBA)
 				use_soft_stretch = GF_FALSE;
 			break;
-		case GF_PIXEL_YUV:
-		case GF_PIXEL_YVYU:
-		case GF_PIXEL_YUYV:
-		case GF_PIXEL_YUVD:
-		case GF_PIXEL_YUV422:
-		case GF_PIXEL_YUV444:
-		case GF_PIXEL_YUV444_10:
-		case GF_PIXEL_YUV422_10:
-		case GF_PIXEL_YUV_10:
-		case GF_PIXEL_NV12:
-		case GF_PIXEL_NV12_10:
-		case GF_PIXEL_NV21:
-			if (hw_caps & GF_VIDEO_HW_HAS_YUV) use_soft_stretch = GF_FALSE;
-			else if (hw_caps & GF_VIDEO_HW_HAS_YUV_OVERLAY) overlay_type = 1;
-			break;
 		default:
+			if (gf_pixel_fmt_is_yuv(txh->pixelformat)) {
+				if (hw_caps & GF_VIDEO_HW_HAS_YUV) use_soft_stretch = GF_FALSE;
+				else if (hw_caps & GF_VIDEO_HW_HAS_YUV_OVERLAY) overlay_type = 1;
+			}
 			break;
 		}
 		/*disable based on settings*/
@@ -720,6 +707,8 @@ static Bool compositor_2d_draw_bitmap_ex(GF_VisualManager *visual, GF_TextureHan
 	video_src.height = txh->height;
 	video_src.width = txh->width;
 	video_src.pitch_x = 0;
+	if (!txh->stride)
+		gf_pixel_get_size_info(txh->pixelformat, txh->width, txh->height, NULL, &txh->stride, NULL, NULL, NULL);
 	video_src.pitch_y = txh->stride;
 	video_src.pixel_format = txh->pixelformat;
 #ifdef GF_SR_USE_DEPTH
@@ -858,7 +847,11 @@ static Bool compositor_2d_draw_bitmap_ex(GF_VisualManager *visual, GF_TextureHan
 		e = visual->compositor->video_out->LockBackBuffer(visual->compositor->video_out, &backbuffer, GF_TRUE);
 		if (!e) {
 			u32 push_time = gf_sys_clock();
+#ifndef GPAC_DISABLE_PLAYER
 			e = gf_stretch_bits(&backbuffer, &video_src, &dst_wnd, &src_wnd, alpha, GF_FALSE, tr_state->col_key, ctx->col_mat);
+#else
+			e = GF_NOT_SUPPORTED;
+#endif
 			store_blit_times(txh, push_time);
 			visual->compositor->video_out->LockBackBuffer(visual->compositor->video_out, &backbuffer, GF_FALSE);
 			if (e) {
@@ -1423,11 +1416,8 @@ void visual_2d_flush_overlay_areas(GF_VisualManager *visual, GF_TraverseState *t
 					gf_irect_intersect(&ctx->bi->clip, &the_clip);
 					tr_state->ctx = ctx;
 
-					if (ctx->drawable->flags & DRAWABLE_USE_TRAVERSE_DRAW) {
-						gf_node_traverse(ctx->drawable->node, tr_state);
-					} else {
-						drawable_draw(ctx->drawable, tr_state);
-					}
+					call_drawable_draw(ctx, tr_state, GF_FALSE);
+
 					ctx->bi->clip = prev_clip;
 				}
 				ctx = ctx->next;

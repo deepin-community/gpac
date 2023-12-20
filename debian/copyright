@@ -5,6 +5,7 @@ Source: http://gpac.svn.sourceforge.net/svnroot/gpac/trunk/gpac
 Files-Excluded:
  applications/deprecated
  applications/generators/WebGLGen
+ applications/gpac_android
  applications/mp4box_android
  applications/osmo4_android_studio
  applications/osmo4_ios
@@ -17,149 +18,16 @@ Files-Excluded:
 
 Files: *
 Copyright:
- 2000-2005, Jean Le Feuvre
+ 2000-2021, Jean Le Feuvre
  2006-2011, ENST
- 2010-2011, Telecom ParisTech
+ 2004-2022, Telecom ParisTech
  2000-2006, Cyril Concolato
- 2010, Romain Bouqueau
+ 2010-2016, Romain Bouqueau
  2008, Pierre Souchay
  Yi-Zhen Zhang
  2006, Andrew Voznytsa
  1999, Rainer Johanni
  2001-2002, Thomas Östreich
-License: LGPL-2.1
-
-Files: Changelog
-  change_version.sh
-  check_revision.sh
-  mkdmg.sh
-Copyright:
- 2000-2005, Jean Le Feuvre
- 2006-2011, ENST
- 2010-2011, Telecom ParisTech
- 2000-2006, Cyril Concolato
- 2010, Romain Bouqueau
- 2008, Pierre Souchay
- Yi-Zhen Zhang
- 2006, Andrew Voznytsa
- 1999, Rainer Johanni
- 2001-2002, Thomas Östreich
-License: LGPL-2+
-
-Files: applications/*
-Copyright:
- 2000-2005, Jean Le Feuvre
- 2006-2011, ENST
- 2010-2011, Telecom ParisTech
- 2000-2006, Cyril Concolato
- 2010, Romain Bouqueau
- 2008, Pierre Souchay
- Yi-Zhen Zhang
- 2006, Andrew Voznytsa
- 1999, Rainer Johanni
- 2001-2002, Thomas Östreich
-License: LGPL-2+
-
-Files: applications/generators/*
-Copyright: Telecom ParisTech 2004-2012
-License: LGPL-2+
-
-Files: applications/generators/X3D/*
-Copyright: Telecom ParisTech 2000-2012
-License: LGPL-2+
-
-Files: applications/gpac/*
-Copyright: Telecom ParisTech 2017-2020
-License: LGPL-2+
-
-Files: applications/mp4box/*
-Copyright: Telecom ParisTech 2000-2020
-License: LGPL-2+
-
-Files: applications/mp4box/live.c
-Copyright: Telecom ParisTech 2000-2019
-License: LGPL-2+
-
-Files: applications/mp4box/mp4box.h
-Copyright: Telecom ParisTech 2000-2012
-License: LGPL-2+
-
-Files: applications/mp4box/wrapper.c
-Copyright:
- 2000-2005, Jean Le Feuvre
- 2006-2011, ENST
- 2010-2011, Telecom ParisTech
- 2000-2006, Cyril Concolato
- 2010, Romain Bouqueau
- 2008, Pierre Souchay
- Yi-Zhen Zhang
- 2006, Andrew Voznytsa
- 1999, Rainer Johanni
- 2001-2002, Thomas Östreich
-License: LGPL-2+
-
-Files: applications/mp4client/carbon_events.c
-Copyright: Telecom ParisTech 2005-2012
-License: LGPL-2+
-
-Files: applications/mp4client/main.c
-Copyright: Telecom ParisTech 2005-2020
-License: LGPL-2+
-
-Files: applications/testapps/atscdmx/*
-Copyright: Telecom ParisTech 2018
-License: LGPL-2+
-
-Files: applications/testapps/bmp4demux/main.c
-Copyright: Telecom ParisTech 2013
-License: LGPL-2+
-
-Files: applications/testapps/dmbrs/*
-Copyright: Telecom ParisTech 2000-2012
-License: LGPL-2+
-
-Files: applications/testapps/fmp4demux/main.c
-Copyright: Telecom ParisTech 2013
-License: LGPL-2+
-
-Files: applications/testapps/hevcbench/*
-Copyright: Telecom ParisTech 2012
-License: LGPL-2+
-
-Files: applications/testapps/loadcompare/*
-Copyright: Telecom ParisTech 2006-2012
-License: LGPL-2+
-
-Files: applications/testapps/mpedemux/*
-Copyright: Telecom ParisTech 2007-2012
-License: LGPL-2+
-
-Files: applications/testapps/player_api/*
-Copyright: Romain Bouqueau 2015
-License: LGPL-2+
-
-Files: applications/testapps/segmp4demux/main.c
-Copyright: Telecom ParisTech 2013- / Romain Bouqueau 2013
-License: LGPL-2+
-
-Files: applications/testapps/svg2bifs/*
-Copyright: Telecom ParisTech 2006-2012
-License: LGPL-2+
-
-Files: applications/testapps/ts2hds/*
-Copyright: Romain Bouqueau 2012
-License: LGPL-2+
-
-Files: applications/testapps/ts2udp/*
-Copyright: Romain Bouqueau - GPAC Licensing 2016
-License: LGPL-2+
-
-Files: applications/testapps/udptsseg/*
-Copyright: Telecom ParisTech 2008-2012
-License: LGPL-2+
-
-Files: configure
-Copyright: 2003-2018, Telecom ParisTech
 License: LGPL-2+
 
 Files: debian/*
@@ -169,88 +37,9 @@ Copyright:
   2009-2011 Reinhard Tartler <siretart@tauware.de>
 License: LGPL-2+
 
-Files: include/*
-Copyright:
- 2000-2005, Jean Le Feuvre
- 2006-2011, ENST
- 2010-2011, Telecom ParisTech
- 2000-2006, Cyril Concolato
- 2010, Romain Bouqueau
- 2008, Pierre Souchay
- Yi-Zhen Zhang
- 2006, Andrew Voznytsa
- 1999, Rainer Johanni
- 2001-2002, Thomas Östreich
-License: LGPL-2+
-
-Files: include/gpac/*
-Copyright: Telecom ParisTech 2000-2019
-License: LGPL-2+
-
-Files: include/gpac/00_doxy.h
-Copyright: TELECOM ParisTech 2019
-License: LGPL-2+
-
 Files: include/gpac/Remotery.h
 Copyright: 2014-2018, Celtoys Ltd
 License: Apache-2.0
-
-Files: include/gpac/ait.h
-Copyright: TELECOM ParisTech 2011
-License: LGPL-2+
-
-Files: include/gpac/atsc.h
-Copyright: Telecom ParisTech 2017-2019
-License: LGPL-2+
-
-Files: include/gpac/configuration.h
-Copyright: Telecom ParisTech 2008-2012
-License: LGPL-2+
-
-Files: include/gpac/dash.h
-  include/gpac/version.h
-Copyright: Telecom ParisTech 2012-2019
-License: LGPL-2+
-
-Files: include/gpac/dsmcc.h
-Copyright: Telecom ParisTech 2011-2012
-License: LGPL-2+
-
-Files: include/gpac/dvb_mpe.h
-Copyright: Telecom ParisTech 2006-2012
-License: LGPL-2+
-
-Files: include/gpac/events.h
-  include/gpac/tools.h
-Copyright: Telecom ParisTech 2000-2020
-License: LGPL-2+
-
-Files: include/gpac/filters.h
-  include/gpac/main.h
-Copyright: Telecom ParisTech 2017-2020
-License: LGPL-2+
-
-Files: include/gpac/html5_media.h
-  include/gpac/html5_mse.h
-  include/gpac/webvtt.h
-Copyright: Telecom ParisTech 2013-2019
-License: LGPL-2+
-
-Files: include/gpac/internal/*
-Copyright: Telecom ParisTech 2000-2012
-License: LGPL-2+
-
-Files: include/gpac/internal/avilib.h
-Copyright: Thomas Östreich - June 2001, / 2002, Thomas Östreich / 1999, Rainer Johanni <Rainer@Johanni.de>
-License: LGPL-2+
-
-Files: include/gpac/internal/compositor_dev.h
-Copyright: Telecom ParisTech 2000-2018
-License: LGPL-2+
-
-Files: include/gpac/internal/m3u8.h
-Copyright: Telecom ParisTech 2010-2012, Romain Bouqueau
-License: LGPL-2+
 
 Files: include/gpac/internal/ogg.h
 Copyright: 1994-2002, the Xiph.Org Foundation http:www.xiph.org
@@ -275,60 +64,8 @@ Files: include/gpac/internal/vobsub.h
 Copyright: Falco (Ivan Vecera) 2006
 License: LGPL-2+
 
-Files: include/gpac/laser.h
-  include/gpac/mpegts.h
-Copyright: Telecom ParisTech 2006-2019
-License: LGPL-2+
-
-Files: include/gpac/modules/*
-Copyright: Telecom ParisTech 2000-2012
-License: LGPL-2+
-
-Files: include/gpac/modules/audio_out.h
-Copyright: Telecom ParisTech 2000-2018
-License: LGPL-2+
-
-Files: include/gpac/modules/hardcoded_proto.h
-Copyright: Telecom ParisTech 2012
-License: LGPL-2+
-
-Files: include/gpac/modules/video_out.h
-Copyright: Telecom ParisTech 2000-2020
-License: LGPL-2+
-
-Files: include/gpac/mpd.h
-Copyright: Telecom ParisTech 2010-2012
-License: LGPL-2+
-
-Files: include/gpac/nodes_mpeg4.h
-  include/gpac/nodes_x3d.h
-  include/gpac/token.h
-Copyright: Telecom ParisTech 2000-2012
-License: LGPL-2+
-
-Files: include/gpac/nodes_svg.h
-Copyright: 2004-2012, Telecom ParisTech
-License: LGPL-2+
-
-Files: include/gpac/scene_engine.h
-Copyright: Telecom ParisTech 2005-2019
-License: LGPL-2+
-
-Files: include/gpac/scenegraph_svg.h
-  include/gpac/svg_types.h
-Copyright: Telecom ParisTech 2004-2019
-License: LGPL-2+
-
 Files: include/wince/*
 Copyright: Microsoft Corporation.
-License: LGPL-2+
-
-Files: modules/*
-Copyright: Telecom ParisTech 2000-2012
-License: LGPL-2+
-
-Files: modules/alsa/*
-Copyright: Telecom ParisTech 2000-2019
 License: LGPL-2+
 
 Files: modules/dektec_out/*
@@ -336,527 +73,47 @@ Copyright: 2016-2020, Telecom Paris
   2014-2016, GPAC Licensing
 License: LGPL-2+
 
-Files: modules/dektec_out/dektec_video_old.cpp
-Copyright: Romain Bouqueau @ GPAC Licensing
-License: LGPL-2+
-
-Files: modules/demo_is/*
-Copyright: Telecom ParisTech 2009-2012
-License: LGPL-2+
-
-Files: modules/deprecated/old_arch/*
-Copyright: Telecom ParisTech 2011-2012
-License: LGPL-2+
-
-Files: modules/deprecated/old_arch/audio_filter/*
-Copyright: Telecom ParisTech 2010-2012
-License: LGPL-2+
-
-Files: modules/deprecated/old_arch/avcap/*
-Copyright: Telecom ParisTech 2011-20XX
-License: LGPL-2+
-
-Files: modules/deprecated/old_arch/ffmpeg_in/*
-Copyright: Telecom ParisTech 2000-2012
-License: LGPL-2+
-
-Files: modules/deprecated/old_arch/freenect/*
-Copyright: Telecom ParisTech 2011-20XX
-License: LGPL-2+
-
-Files: modules/deprecated/old_arch/gapi/*
-Copyright: Telecom ParisTech 2000-2012
-License: LGPL-2+
-
-Files: modules/deprecated/old_arch/gdip_raster/*
-Copyright: Telecom ParisTech 2000-2012
-License: LGPL-2+
-
-Files: modules/deprecated/old_arch/hyb_in/*
-Copyright: Telecom ParisTech 2010-20xx
-License: LGPL-2+
-
-Files: modules/deprecated/old_arch/libplayer/*
-Copyright: Telecom ParisTech 2005-2012
-License: LGPL-2+
-
-Files: modules/deprecated/old_arch/mse_in/*
-Copyright: Telecom ParisTech 2013
-License: LGPL-2+
-
-Files: modules/deprecated/old_arch/opencv_is/*
-Copyright: Telecom ParisTech 2009-2012
-License: LGPL-2+
-
-Files: modules/deprecated/old_arch/platinum/*
-Copyright: Telecom ParisTech 2009-2012
-License: LGPL-2+
-
-Files: modules/deprecated/old_arch/rvc_dec/*
-Copyright: Telecom ParisTech 2010-2012
-License: LGPL-2+
-
-Files: modules/deprecated/old_arch/ui_rec/*
-Copyright: Telecom ParisTech 2007-2012
-License: LGPL-2+
-
-Files: modules/deprecated/old_arch/widgetman/*
-Copyright: 2009, Telecom ParisTech.
-License: LGPL-2+
-
-Files: modules/deprecated/old_arch/widgetman/unzip.c
-Copyright: 1998-2005, Gilles Vollant
-License: LGPL-2+
-
-Files: modules/deprecated/old_arch/widgetman/unzip.h
-Copyright: 1998-2005, Gilles Vollant
-License: Zlib
-
-Files: modules/deprecated/old_arch/widgetman/wgt_load_base.js
-Copyright:
- 2000-2005, Jean Le Feuvre
- 2006-2011, ENST
- 2010-2011, Telecom ParisTech
- 2000-2006, Cyril Concolato
- 2010, Romain Bouqueau
- 2008, Pierre Souchay
- Yi-Zhen Zhang
- 2006, Andrew Voznytsa
- 1999, Rainer Johanni
- 2001-2002, Thomas Östreich
-License: LGPL-2+
-
-Files: modules/deprecated/old_arch/wiiis/*
-Copyright: Telecom ParisTech 2009-2012
-License: LGPL-2+
-
-Files: modules/directfb_out/*
-Copyright: Telecom ParisTech 2010-2012
-License: LGPL-2+
-
-Files: modules/directfb_out/directfb_out.c
-Copyright: Telecom ParisTech 2010-2020
-License: LGPL-2+
-
-Files: modules/droid_audio/*
+Files:
+ modules/droid_audio/*
+ modules/droid_cam/*
+ modules/droid_mpegv/*
+ modules/droid_out/*
+ modules/ios_cam/*
+ modules/ios_mpegv/ios_mpegv.c
 Copyright: Mines-Telecom 2009
-License: LGPL-2+
-
-Files: modules/droid_cam/*
-Copyright: Mines-Telecom 2009
-License: LGPL-2+
-
-Files: modules/droid_mpegv/*
-Copyright: Mines-Telecom 2009
-License: LGPL-2+
-
-Files: modules/droid_out/*
-Copyright: Mines-Telecom 2009
-License: LGPL-2+
-
-Files: modules/dx_hw/*
-Copyright: Telecom ParisTech 2000-2020
-License: LGPL-2+
-
-Files: modules/dx_hw/dx_audio.c
-Copyright: Telecom ParisTech 2000-2012
-License: LGPL-2+
-
-Files: modules/dx_hw/resource.h
-Copyright:
- 2000-2005, Jean Le Feuvre
- 2006-2011, ENST
- 2010-2011, Telecom ParisTech
- 2000-2006, Cyril Concolato
- 2010, Romain Bouqueau
- 2008, Pierre Souchay
- Yi-Zhen Zhang
- 2006, Andrew Voznytsa
- 1999, Rainer Johanni
- 2001-2002, Thomas Östreich
-License: LGPL-2+
-
-Files: modules/filter_export.cpp
-Copyright: Telecom ParisTech 2018
-License: LGPL-2+
-
-Files: modules/ios_cam/*
-Copyright: Mines-Telecom 2009
-License: LGPL-2+
-
-Files: modules/ios_mpegv/*
-Copyright:
- 2000-2005, Jean Le Feuvre
- 2006-2011, ENST
- 2010-2011, Telecom ParisTech
- 2000-2006, Cyril Concolato
- 2010, Romain Bouqueau
- 2008, Pierre Souchay
- Yi-Zhen Zhang
- 2006, Andrew Voznytsa
- 1999, Rainer Johanni
- 2001-2002, Thomas Östreich
-License: LGPL-2+
-
-Files: modules/ios_mpegv/ios_mpegv.c
-Copyright: Mines-Telecom 2009
-License: LGPL-2+
-
-Files: modules/jack/*
-Copyright: Telecom ParisTech 2008-2019
-License: LGPL-2+
-
-Files: modules/pulseaudio/*
-Copyright: Telecom ParisTech 2008-2019
-License: LGPL-2+
-
-Files: modules/sdl_out/audio.c
-Copyright: Telecom ParisTech 2000-2018
-License: LGPL-2+
-
-Files: modules/sdl_out/sdl_out.h
-  modules/sdl_out/video.c
-Copyright: Telecom ParisTech 2000-2020
-License: LGPL-2+
-
-Files: modules/validator/*
-Copyright: Telecom ParisTech 2010-2020
-License: LGPL-2+
-
-Files: modules/x11_out/*
-Copyright: Telecom ParisTech 2005-2020
-License: LGPL-2+
-
-Files: packagers/*
-Copyright:
- 2000-2005, Jean Le Feuvre
- 2006-2011, ENST
- 2010-2011, Telecom ParisTech
- 2000-2006, Cyril Concolato
- 2010, Romain Bouqueau
- 2008, Pierre Souchay
- Yi-Zhen Zhang
- 2006, Andrew Voznytsa
- 1999, Rainer Johanni
- 2001-2002, Thomas Östreich
 License: LGPL-2+
 
 Files: run_configure.sh
 Copyright: 1998-2002, Josip Rodin
 License: LGPL-2+
 
-Files: share/*
-Copyright:
- 2000-2005, Jean Le Feuvre
- 2006-2011, ENST
- 2010-2011, Telecom ParisTech
- 2000-2006, Cyril Concolato
- 2010, Romain Bouqueau
- 2008, Pierre Souchay
- Yi-Zhen Zhang
- 2006, Andrew Voznytsa
- 1999, Rainer Johanni
- 2001-2002, Thomas Östreich
-License: LGPL-2+
-
-Files: share/deprecated/mpegu-core.js
-  share/deprecated/mpegu-wm.js
-Copyright: 2009
-License: LGPL-2+
-
 Files: share/doc/man/*
-Copyright: 2000-2020, Telecom Paris distributed under LGPL v2.1+ - http:gpac.io
+Copyright: 2000-2020, Telecom Paris
 License: LGPL-2.1
 
 Files: share/gui/*
 Copyright: 2010-2020, Telecom Paris
 License: LGPL-2+
 
-Files: share/gui/extensions/*
-Copyright:
- 2000-2005, Jean Le Feuvre
- 2006-2011, ENST
- 2010-2011, Telecom ParisTech
- 2000-2006, Cyril Concolato
- 2010, Romain Bouqueau
- 2008, Pierre Souchay
- Yi-Zhen Zhang
- 2006, Andrew Voznytsa
- 1999, Rainer Johanni
- 2001-2002, Thomas Östreich
-License: LGPL-2+
-
 Files: share/gui/extensions/about/info.js
-Copyright: 2002-2020, Telecom Paris;
+Copyright: 2002-2020, Telecom Paris
 License: LGPL-2.1
 
 Files: share/vis/extern/BrowserLib/Core/Code/Keyboard.js
 Copyright: 2006, The Closure Library Authors.
 License: Apache-2.0
 
-Files: src/*
-Copyright: Telecom ParisTech 2000-2012
-License: LGPL-2+
-
-Files: src/bifs/field_encode.c
-Copyright: Telecom ParisTech 2000-2020
-License: LGPL-2+
-
-Files: src/compositor/audio_input.c
-  src/compositor/audio_mixer.c
-  src/compositor/audio_render.c
-  src/compositor/media_object.c
-  src/compositor/object_manager.c
-  src/compositor/scene.c
-  src/compositor/scene_ns.c
-  src/compositor/texturing.c
-Copyright: Telecom ParisTech 2000-2018
-License: LGPL-2+
-
-Files: src/compositor/clock.c
-  src/compositor/mpeg4_inline.c
-  src/compositor/mpeg4_inputsensor.c
-  src/compositor/mpeg4_mediacontrol.c
-  src/compositor/mpeg4_mediasensor.c
-  src/compositor/scene_node_init.c
-Copyright: Telecom ParisTech 2000-2017
-License: LGPL-2+
-
-Files: src/compositor/compositor.c
-  src/compositor/compositor_2d.c
-  src/compositor/compositor_3d.c
-  src/compositor/mpeg4_composite.c
-  src/compositor/mpeg4_layer_3d.c
-  src/compositor/mpeg4_textures.c
-  src/compositor/texturing_gl.c
-  src/compositor/visual_manager_3d_gl.c
-Copyright: Telecom ParisTech 2000-2020
-License: LGPL-2+
-
-Files: src/compositor/gl_inc.h
-Copyright: Telecom ParisTech 2000-2019
-License: LGPL-2+
-
-Files: src/compositor/offscreen_cache.c
-  src/compositor/offscreen_cache.h
-Copyright: Telecom ParisTech 2006-2012
-License: LGPL-2+
-
-Files: src/compositor/svg_base.c
-  src/compositor/svg_filters.c
-  src/compositor/svg_geometry.c
-  src/compositor/svg_grouping.c
-  src/compositor/svg_media.c
-  src/compositor/svg_paint_servers.c
-Copyright: Telecom ParisTech 2005-2012
-License: LGPL-2+
-
-Files: src/compositor/svg_external.c
-Copyright: Telecom ParisTech 2005-2017
-License: LGPL-2+
-
-Files: src/compositor/svg_font.c
-Copyright: Telecom ParisTech 2007-2012
-License: LGPL-2+
-
-Files: src/compositor/svg_text.c
-Copyright: Telecom ParisTech 2004-2012
-License: LGPL-2+
-
-Files: src/crypto/*
-Copyright:
- 2000-2005, Jean Le Feuvre
- 2006-2011, ENST
- 2010-2011, Telecom ParisTech
- 2000-2006, Cyril Concolato
- 2010, Romain Bouqueau
- 2008, Pierre Souchay
- Yi-Zhen Zhang
- 2006, Andrew Voznytsa
- 1999, Rainer Johanni
- 2001-2002, Thomas Östreich
-License: LGPL-2+
-
-Files: src/crypto/g_crypt.c
-Copyright: Telecom ParisTech 2000-2018
-License: LGPL-2+
-
 Files: src/crypto/g_crypt_openssl.c
 Copyright: Motion Spell 2016
-License: LGPL-2+
-
-Files: src/crypto/g_crypt_tinyaes.c
-Copyright: Telecom ParisTech 2018
-License: LGPL-2+
-
-Files: src/evg/*
-Copyright: Telecom ParisTech 2000-2019
 License: LGPL-2+
 
 Files: src/evg/ftgrays.c
 Copyright: 2000-2004, David Turner, Robert Wilhelm, and Werner Lemberg.
 License: FTL
 
-Files: src/evg/raster3d.c
-  src/evg/raster_yuv.c
-Copyright: Telecom ParisTech 2019
-License: LGPL-2+
-
-Files: src/export.cpp
-Copyright: Telecom ParisTech 2000-2020
-License: LGPL-2+
-
-Files: src/filter_core/*
-Copyright: Telecom ParisTech 2017-2018
-License: LGPL-2+
-
-Files: src/filter_core/filter.c
-  src/filter_core/filter_session.c
-  src/filter_core/filter_session_js.c
-Copyright: Telecom ParisTech 2017-2020
-License: LGPL-2+
-
-Files: src/filter_core/filter_props.c
-Copyright: Telecom ParisTech 2017-2019
-License: LGPL-2+
-
-Files: src/filters/*
-Copyright: Telecom ParisTech 2000-2017
-License: LGPL-2+
-
-Files: src/filters/base_filter_example.c
-  src/filters/in_dvb4linux.c
-  src/filters/rewrite_nalu.c
-Copyright: Telecom ParisTech 2017
-License: LGPL-2+
-
-Files: src/filters/bsrw.c
-  src/filters/dec_ttml.c
-Copyright: Telecom ParisTech 2020
-License: LGPL-2+
-
-Files: src/filters/compose.c
-  src/filters/dec_nvdec.c
-  src/filters/dmx_dash.c
-  src/filters/ff_dmx.c
-  src/filters/in_file.c
-  src/filters/in_http.c
-  src/filters/inspect.c
-  src/filters/mux_isom.c
-  src/filters/out_file.c
-  src/filters/reframer.c
-  src/filters/write_nhml.c
-Copyright: Telecom ParisTech 2017-2020
-License: LGPL-2+
-
-Files: src/filters/dasher.c
-  src/filters/encrypt_cenc_isma.c
-  src/filters/filelist.c
-  src/filters/in_atsc.c
-  src/filters/mux_ts.c
-  src/filters/out_video.c
-  src/filters/vcrop.c
-Copyright: Telecom ParisTech 2018-2020
-License: LGPL-2+
-
-Files: src/filters/dec_j2k.c
-  src/filters/dec_vorbis.c
-Copyright: Telecom ParisTech 2000-2019
-License: LGPL-2+
-
-Files: src/filters/dec_laser.c
-  src/filters/dec_mad.c
-  src/filters/dec_odf.c
-  src/filters/dmx_mpegps.c
-  src/filters/dmx_saf.c
-  src/filters/load_svg.c
-Copyright: Telecom ParisTech 2005-2017
-License: LGPL-2+
-
-Files: src/filters/dec_mediacodec.c
-  src/filters/dec_mediacodec.h
-  src/filters/dmx_ogg.c
-  src/filters/isoffin_read.c
-  src/filters/load_bt_xmt.c
-  src/filters/load_text.c
-  src/filters/reframe_adts.c
-  src/filters/reframe_amr.c
-  src/filters/reframe_nalu.c
-  src/filters/rewrite_adts.c
-Copyright: Telecom ParisTech 2000-2020
-License: LGPL-2+
-
-Files: src/filters/dec_mediacodec_jni.c
-  src/filters/dec_vtb.c
-  src/filters/isoffin.h
-  src/filters/isoffin_load.c
-  src/filters/isoffin_read_ch.c
-  src/filters/write_qcp.c
-  src/filters/write_vtt.c
-Copyright: Telecom ParisTech 2000-2018
-License: LGPL-2+
-
 Files: src/filters/dec_nvdec_sdk.c
   src/filters/dec_nvdec_sdk.h
 Copyright: 1993-2015, NVIDIA Corporation.
-License: LGPL-2+
-
-Files: src/filters/dec_openhevc.c
-  src/filters/dec_opensvc.c
-Copyright: Telecom ParisTech 2010-2017
-License: LGPL-2+
-
-Files: src/filters/dec_vtb_glctx.m
-Copyright:
- 2000-2005, Jean Le Feuvre
- 2006-2011, ENST
- 2010-2011, Telecom ParisTech
- 2000-2006, Cyril Concolato
- 2010, Romain Bouqueau
- 2008, Pierre Souchay
- Yi-Zhen Zhang
- 2006, Andrew Voznytsa
- 1999, Rainer Johanni
- 2001-2002, Thomas Östreich
-License: LGPL-2+
-
-Files: src/filters/dec_webvtt.c
-Copyright: Telecom ParisTech 2013-2017
-License: LGPL-2+
-
-Files: src/filters/decrypt_cenc_isma.c
-  src/filters/enc_jpg.c
-  src/filters/enc_png.c
-  src/filters/ff_enc.c
-  src/filters/ff_rescale.c
-  src/filters/in_pipe.c
-  src/filters/out_audio.c
-  src/filters/out_pipe.c
-  src/filters/reframe_rawpcm.c
-  src/filters/reframe_rawvid.c
-  src/filters/resample_audio.c
-  src/filters/rewind.c
-  src/filters/rewrite_mp4v.c
-  src/filters/rewrite_obu.c
-Copyright: Telecom ParisTech 2018
-License: LGPL-2+
-
-Files: src/filters/dmx_avi.c
-Copyright: Telecom ParisTech 2005-2019
-License: LGPL-2+
-
-Files: src/filters/dmx_gsf.c
-  src/filters/mux_avi.c
-  src/filters/mux_gsf.c
-  src/filters/reframe_av1.c
-Copyright: Telecom ParisTech 2018-2019
-License: LGPL-2+
-
-Files: src/filters/dmx_m2ts.c
-  src/filters/dmx_nhml.c
-  src/filters/dmx_nhnt.c
-  src/filters/dmx_vobsub.c
-Copyright: Telecom ParisTech 2005-2020
 License: LGPL-2+
 
 Files: src/filters/ff_avf.c
@@ -864,186 +121,18 @@ Files: src/filters/ff_avf.c
 Copyright: Telecom Paris 2019
 License: LGPL-2+
 
-Files: src/filters/ff_common.c
-  src/filters/ff_common.h
-  src/filters/ff_dec.c
-  src/filters/unit_test_filter.c
-  src/filters/write_generic.c
-  src/filters/write_nhnt.c
-Copyright: Telecom ParisTech 2017-2018
-License: LGPL-2+
-
 Files: src/filters/ff_mx.c
 Copyright: Telecom Paris 2019-2020
-License: LGPL-2+
-
-Files: src/filters/hevcmerge.c
-  src/filters/hevcsplit.c
-  src/filters/jsfilter.c
-  src/filters/out_sock.c
-  src/filters/reframe_flac.c
-  src/filters/reframe_prores.c
-  src/filters/vflip.c
-Copyright: Telecom ParisTech 2019
-License: LGPL-2+
-
-Files: src/filters/in_sock.c
-  src/filters/tileagg.c
-Copyright: Telecom ParisTech 2017-2019
-License: LGPL-2+
-
-Files: src/filters/out_http.c
-  src/filters/out_rtp.c
-  src/filters/out_rtsp.c
-Copyright: Telecom ParisTech 2019-2020
-License: LGPL-2+
-
-Files: src/ietf/rtp_streamer.c
-Copyright: Telecom ParisTech 2000-2020
-License: LGPL-2+
-
-Files: src/isomedia/*
-Copyright: Telecom ParisTech 2000-2019
-License: LGPL-2+
-
-Files: src/isomedia/box_code_adobe.c
-Copyright: Romain Bouqueau 2012- Telecom Paris 2019
-License: LGPL
-
-Files: src/isomedia/box_code_apple.c
-Copyright: Telecom ParisTech 2006-2019
-License: LGPL
-
-Files: src/isomedia/box_code_drm.c
-  src/isomedia/box_code_meta.c
-Copyright: Telecom ParisTech 2005-2019
-License: LGPL
-
-Files: src/isomedia/box_dump.c
-  src/isomedia/isom_read.c
-  src/isomedia/isom_store.c
-  src/isomedia/isom_write.c
-  src/isomedia/stbl_write.c
-Copyright: Telecom ParisTech 2000-2020
-License: LGPL-2+
-
-Files: src/isomedia/drm_sample.c
-Copyright: Telecom ParisTech 2005-2019
-License: LGPL-2+
-
-Files: src/isomedia/meta.c
-Copyright: Telecom ParisTech 2005-2020
-License: LGPL-2+
-
-Files: src/isomedia/ttml.c
-Copyright: Telecom ParisTech 2000-2012
-License: LGPL-2+
-
-Files: src/jsmods/*
-Copyright: Telecom ParisTech 2019
-License: LGPL-2+
-
-Files: src/jsmods/WebGLRenderingContextBase.c
-Copyright:
- 2000-2005, Jean Le Feuvre
- 2006-2011, ENST
- 2010-2011, Telecom ParisTech
- 2000-2006, Cyril Concolato
- 2010, Romain Bouqueau
- 2008, Pierre Souchay
- Yi-Zhen Zhang
- 2006, Andrew Voznytsa
- 1999, Rainer Johanni
- 2001-2002, Thomas Östreich
-License: LGPL-2+
-
-Files: src/jsmods/core.c
-  src/jsmods/scene_js.c
-  src/jsmods/xhr.c
-Copyright: Telecom ParisTech 2007-2020
-License: LGPL-2+
-
-Files: src/jsmods/storage.c
-Copyright: Telecom ParisTech 2007-2019
-License: LGPL-2+
-
-Files: src/laser/*
-Copyright: Telecom ParisTech 2005-2019
-License: LGPL-2+
-
-Files: src/laser/lsr_tables.c
-Copyright: 2004-200X Telecom ParisTech
-License: LGPL-2+
-
-Files: src/media_tools/*
-Copyright: Telecom ParisTech 2000-2020
-License: LGPL-2+
-
-Files: src/media_tools/ait.c
-Copyright: Telecom ParisTech 2011-2012
-License: LGPL-2+
-
-Files: src/media_tools/atsc_dmx.c
-Copyright: Telecom ParisTech 2018-2020
-License: LGPL-2+
-
-Files: src/media_tools/avilib.c
-Copyright: Thomas ostreich - June 2001, / 2002, Thomas ostreich / 1999, Rainer Johanni <Rainer@Johanni.de>
-License: LGPL-2+
-
-Files: src/media_tools/dash_client.c
-Copyright: Telecom ParisTech 2010-2020
-License: LGPL-2+
-
-Files: src/media_tools/dash_segmenter.c
-Copyright: Telecom ParisTech 2000-2018
-License: LGPL-2+
-
-Files: src/media_tools/dsmcc.c
-Copyright: Telecom ParisTech 2011-2020
-License: LGPL-2+
-
-Files: src/media_tools/dvb_mpe.c
-Copyright:
- 2000-2005, Jean Le Feuvre
- 2006-2011, ENST
- 2010-2011, Telecom ParisTech
- 2000-2006, Cyril Concolato
- 2010, Romain Bouqueau
- 2008, Pierre Souchay
- Yi-Zhen Zhang
- 2006, Andrew Voznytsa
- 1999, Rainer Johanni
- 2001-2002, Thomas Östreich
 License: LGPL-2+
 
 Files: src/media_tools/gpac_ogg.c
 Copyright: 1994-2002, the Xiph.Org Foundation http:www.xiph.org
 License: LGPL-2+
 
-Files: src/media_tools/html5_media.c
-  src/media_tools/html5_mse.c
-Copyright: Telecom ParisTech 2013
-License: LGPL-2+
-
-Files: src/media_tools/img.c
-  src/media_tools/isom_hinter.c
-  src/media_tools/webvtt.c
-Copyright: Telecom ParisTech 2000-2012
-License: LGPL-2+
-
-Files: src/media_tools/m3u8.c
-Copyright: Telecom ParisTech 2010-2012, Romain Bouqueau
-License: LGPL-2+
-
 Files: src/media_tools/mpeg2_ps.c
   src/media_tools/mpeg2_ps.h
 Copyright: Cisco Systems Inc. 2004.
 License: MPL-1.1
-
-Files: src/media_tools/mpegts.c
-Copyright: Telecom ParisTech 2005-2020
-License: LGPL-2+
 
 Files: src/media_tools/reedsolomon.c
 Copyright: 1991, Henry Minsky
@@ -1060,133 +149,21 @@ Comment: Copyright information is not given in the source files, however, the
  For more information see the "rscode-1.3.tgz" release tarball available at:
  http://sourceforge.net/projects/rscode/files/
 
-Files: src/media_tools/saf.c
-Copyright: Telecom ParisTech 2005-2012
-License: LGPL-2+
-
-Files: src/media_tools/vobsub.c
-Copyright: Jean Le Feuvre - Telecom ParisTech 2018_2020 / Falco (Ivan Vecera) 2006
-License: LGPL-2+
-
-Files: src/odf/ipmpx_parse.c
-  src/odf/odf_parse.c
-Copyright: Telecom ParisTech 2000-2020
-License: LGPL-2+
-
-Files: src/odf/odf_code.c
-Copyright: Telecom ParisTech 2000-2019
-License: LGPL-2+
-
 Files: src/quickjs/*
-Copyright: 2016-2020, Fabrice Bellard
-License: Expat
-
-Files: src/quickjs/GPAC_README.md
-  src/quickjs/libunicode-table.h
 Copyright:
- 2000-2005, Jean Le Feuvre
- 2006-2011, ENST
- 2010-2011, Telecom ParisTech
- 2000-2006, Cyril Concolato
- 2010, Romain Bouqueau
- 2008, Pierre Souchay
- Yi-Zhen Zhang
- 2006, Andrew Voznytsa
- 1999, Rainer Johanni
- 2001-2002, Thomas Östreich
-License: LGPL-2+
-
-Files: src/quickjs/cutils.c
-  src/quickjs/cutils.h
-Copyright: 2018, Charlie Gordon
-  2017, Fabrice Bellard
+ 2016-2021, Fabrice Bellard
+ 2017-2021, Charlie Gordon
 License: Expat
 
-Files: src/quickjs/quickjs-atom.h
-  src/quickjs/quickjs-opcode.h
-  src/quickjs/quickjs.c
-  src/quickjs/quickjs.h
-Copyright: 2017-2020, Fabrice Bellard
-  2017-2020, Charlie Gordon
-License: Expat
-
-Files: src/scene_manager/loader_bt.c
-Copyright: Telecom ParisTech 2000-2019
-License: LGPL-2+
-
-Files: src/scene_manager/loader_qt.c
-  src/scene_manager/swf_parse.c
-  src/scene_manager/swf_svg.c
-Copyright: Telecom ParisTech 2000-2020
-License: LGPL-2+
-
-Files: src/scenegraph/dom_events.c
-  src/scenegraph/smil_anim.c
-  src/scenegraph/smil_timing.c
-  src/scenegraph/svg_attributes.c
-  src/scenegraph/svg_properties.c
-Copyright: Telecom ParisTech 2004-2012
-License: LGPL-2+
-
-Files: src/scenegraph/dom_js.c
-Copyright: Telecom ParisTech 2007-2019
-License: LGPL-2+
-
-Files: src/scenegraph/html5_media_js.c
-Copyright: Telecom ParisTech 2007-2012
-License: LGPL-2+
-
-Files: src/scenegraph/html5_mse_js.c
-Copyright: Telecom ParisTech 2012
-License: LGPL-2+
-
-Files: src/scenegraph/mpeg4_valuator.c
-  src/scenegraph/vrml_js.c
-Copyright: Telecom ParisTech 2000-2019
-License: LGPL-2+
-
-Files: src/scenegraph/qjs_common.h
-Copyright: Telecom ParisTech 2019
-License: LGPL-2+
-
-Files: src/scenegraph/svg_js.c
-Copyright: Telecom ParisTech 2005-2019
-License: LGPL-2+
-
-Files: src/scenegraph/svg_types.c
-Copyright: Telecom ParisTech 2004-2019
-License: LGPL-2+
-
-Files: src/scenegraph/xml_ns.c
-Copyright: Telecom ParisTech 2000-2020
-License: LGPL
-
-Files: src/terminal/*
-Copyright: Telecom ParisTech 2000-2018
-License: LGPL-2+
+Files: src/utils/alloc.c
+Copyright:
+ 2010-2018, Telecom ParisTech
+ 1998, Todd C. Miller
+License: LGPL-2+ and custom
 
 Files: src/utils/Remotery.c
 Copyright: 2014-2018, Celtoys Ltd
 License: Apache-2.0
-
-Files: src/utils/alloc.c
-Copyright: Telecom ParisTech 2010-2018
-License: LGPL-2+
-
-Files: src/utils/bitstream.c
-  src/utils/gltools.c
-  src/utils/os_config_init.c
-  src/utils/os_divers.c
-Copyright: Telecom ParisTech 2000-2020
-License: LGPL-2+
-
-Files: src/utils/cache.c
-Copyright: Telecom ParisTech 2010-2020
-License: LGPL-2+
-
-Files: src/utils/constants.c
-Copyright: Telecom ParisTech 2017-2018
-License: LGPL-2+
 
 Files: src/utils/dlmalloc.c
 Copyright: N/A
@@ -1199,17 +176,8 @@ License: public-domain
  http://creativecommons.org/licenses/publicdomain.  Send questions,
  comments, complaints, performance data, etc to dl@cs.oswego.edu
 
-Files: src/utils/downloader.c
-  src/utils/xml_parser.c
-Copyright: Telecom ParisTech 2005-2020
-License: LGPL-2+
-
 Files: src/utils/gzio.c
 Copyright: 1995-2005, Jean-loup Gailly.
-License: LGPL-2+
-
-Files: src/utils/os_file.c
-Copyright: Telecom ParisTech 2000-2020, / Romain Bouqueau 2015
 License: LGPL-2+
 
 Files: src/utils/path2d_stroker.c
@@ -1219,16 +187,6 @@ License: FTL
 Files: src/utils/sha1.c
 Copyright: 2003-2006, Christophe Devine
 License: LGPL-2.1
-
-Files: src/utils/symbian_net.cpp
-  src/utils/symbian_os.cpp
-Copyright: Telecom ParisTech 2005-2012
-License: LGPL-2+
-
-Files: src/utils/uni_bidi.c
-  src/utils/utf.c
-Copyright: Telecom ParisTech 2007-2012
-License: LGPL-2+
 
 Files: src/utils/unicode.c
 Copyright: The Internet Society (1999).
@@ -1281,6 +239,14 @@ Files: src/utils/zutil.c
   src/utils/zutil.h
 Copyright: 1995-2005, Jean-loup Gailly.
 License: Zlib
+
+Files: share/scripts/jsf/avmix/transitions/gl-transitions/InvertedPageCurl.glsl
+Copyright: 2010, Hewlett-Packard Development Company
+License: BSD-3-Clause
+
+Files: share/scripts/jsf/avmix/transitions/gl-transitions/StereoViewer.glsl
+Copyright: 2016, Theodore K Schundler
+License: BSD-2-Clause
 
 License: Apache-2.0
  Licensed under the Apache License, Version 2.0 (the "License");
@@ -1356,23 +322,6 @@ Comment:
  .
  On Debian systems, the complete text of the GNU General Public
  License version 3 can be found in `/usr/share/common-licenses/GPL-3'.
-
-License: LGPL
- This library is free software; you can redistribute it and/or
- modify it under the terms of the GNU Library General Public
- License as published by the Free Software Foundation; either
- version 2 of the License.
- .
- This library is distributed in the hope that it will be useful,
- but WITHOUT ANY WARRANTY; without even the implied warranty of
- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- Library General Public License for more details.
- .
- You should have received a copy of the GNU Library General Public License
- along with this program.  If not, see <http://www.gnu.org/licenses/>.
- .
- On Debian systems, the complete text of the GNU Library General
- Public License can be found in `/usr/share/common-licenses/LGPL-2'.
 
 License: LGPL-2+
  This library is free software; you can redistribute it and/or
@@ -1891,3 +840,58 @@ License: Zlib
  2. Altered source versions must be plainly marked as such, and must not be
     misrepresented as being the original software.
  3. This notice may not be removed or altered from any source distribution.
+
+License: custom
+ Permission to use, copy, modify, and distribute this software for any
+ purpose with or without fee is hereby granted, provided that the above
+ copyright notice and this permission notice appear in all copies.
+
+License: BSD-2-clause
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions
+ are met:
+ .
+  1. Redistributions of source code must retain the above copyright
+     notice, this list of conditions and the following disclaimer.
+  2. Redistributions in binary form must reproduce the above copyright
+     notice, this list of conditions and the following disclaimer in the
+     documentation and/or other materials provided with the distribution.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE INSTITUTE AND CONTRIBUTORS ``AS IS'' AND
+ ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ ARE DISCLAIMED.  IN NO EVENT SHALL THE INSTITUTE OR CONTRIBUTORS BE LIABLE
+ FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ SUCH DAMAGE.
+
+License: BSD-3-clause
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions
+ are met:
+ .
+  1. Redistributions of source code must retain the above copyright
+     notice, this list of conditions and the following disclaimer.
+  2. Redistributions in binary form must reproduce the above copyright
+     notice, this list of conditions and the following disclaimer in the
+     documentation and/or other materials provided with the distribution.
+  3. Neither the name of the Institute nor the names of its contributors
+     may be used to endorse or promote products derived from this software
+     without specific prior written permission.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE INSTITUTE AND CONTRIBUTORS ``AS IS'' AND
+ ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ ARE DISCLAIMED.  IN NO EVENT SHALL THE INSTITUTE OR CONTRIBUTORS BE LIABLE
+ FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ SUCH DAMAGE.
+

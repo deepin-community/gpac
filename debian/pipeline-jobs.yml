@@ -1,0 +1,144 @@
+# Copyright salsa-ci-team and others
+# SPDX-License-Identifier: FSFAP
+# Copying and distribution of this file, with or without modification, are
+# permitted in any medium without royalty provided the copyright notice and
+# this notice are preserved. This file is offered as-is, without any warranty.
+
+extract-source:
+  stage: provisioning
+  image: $SALSA_CI_IMAGES_GBP
+  dependencies: []
+  extends:
+    - .artifacts-default-expire
+  variables:
+    DB_BUILD_PARAM: ${SALSA_CI_DPKG_BUILDPACKAGE_ARGS}
+  script:
+    - mkdir -p ${WORKING_DIR}
+
+    - gbp setup-gitattributes
+
+    - gbp pull --ignore-branch --pristine-tar --track-missing
+
+    - apt-get update && eatmydata apt-get upgrade -y
+
+    - |
+      if find . -maxdepth 3 -wholename "*/debian/source/format" -exec cat {} \; | grep -q '3.0 (gitarchive)'
+      then
+        eatmydata apt-get install --no-install-recommends -y \
+          dpkg-source-gitarchive
+        { DSC=$(dpkg-source --build . | tee /dev/fd/3 | sed -n 's/.* \(\S*.dsc$\)/\1/p') ; } 3>&1
+        dpkg-source --extract --no-check ../$DSC ${WORKING_DIR}/${DSC%.dsc}
+      else
+        # Check if we can obtain the orig from the git branches
+
+        if ! gbp export-orig --tarball-dir=${WORKING_DIR}; then
+          # Fallback using origtargz
+          origtargz -dt
+          cp ../*orig.tar* ${WORKING_DIR}
+          SALSA_CI_GBP_BUILDPACKAGE_ARGS="--git-overlay ${SALSA_CI_GBP_BUILDPACKAGE_ARGS}"
+        fi
+
+        # As of 2020-09-09, gbp doesn't have a simpler method to extract the
+        # debianized source package. Use --git-pbuilder=`/bin/true` for the moment:
+        # https://bugs.debian.org/969952
+
+        gbp buildpackage \
+          --git-ignore-branch \
+          --git-ignore-new \
+          --git-no-create-orig \
+          --git-export-dir=${WORKING_DIR} \
+          --no-check-builddeps \
+          --git-builder=/bin/true \
+          --git-no-pbuilder \
+          --git-no-hooks \
+          --git-no-purge \
+          ${SALSA_CI_GBP_BUILDPACKAGE_ARGS} |& filter-output
+      fi
+
+    - ls -lh ${WORKING_DIR}
+    - cd ${WORKING_DIR}
+    - DEBIANIZED_SOURCE=$(find . -maxdepth 3 -wholename "*/debian/changelog" | sed -e 's%/\w*/\w*$%%')
+    - |
+      if [ ! "${DEBIANIZED_SOURCE}" ] ; then
+        echo "Error: No valid debianized source tree found."
+        exit 1
+      fi
+
+    - mv ${DEBIANIZED_SOURCE} ${SOURCE_DIR}
+
+build:
+  extends: .build-package
+
+build i386:
+  extends: .build-package-i386
+
+build armel:
+  extends: .build-package-armel
+
+build armhf:
+  extends: .build-package-armhf
+
+build arm64:
+  extends: .build-package-arm64
+
+build source:
+  extends: .build-source-only
+
+test-build-any:
+  extends: .test-build-package-any
+
+test-build-all:
+  extends: .test-build-package-all
+
+test-crossbuild-arm64:
+  extends: .test-crossbuild-package-arm64
+  allow_failure: true
+
+reprotest:
+  extends: .test-reprotest
+
+lintian:
+  extends: .test-lintian
+
+autopkgtest:
+  extends: .test-autopkgtest
+
+blhc:
+  extends: .test-blhc
+
+piuparts:
+  extends: .test-piuparts
+
+missing-breaks:
+  extends: .test-missing-breaks
+
+rc-bugs:
+  extends: .test-rc-bugs
+
+aptly:
+  extends: .publish-aptly
+
+## Atomic Reprotest jobs
+atomic-reprotest:
+  extends: .test-reprotest
+  rules:
+    - if: $SALSA_CI_ENABLE_ATOMIC_REPROTEST =~ /^(1|yes|true)$/
+  variables:
+    SALSA_CI_REPROTEST_ARGS: '--variations=-all --variations=${VARIATION}'
+  parallel:
+    matrix:
+      - VARIATION:
+          - aslr
+          - build_path
+          - domain_host
+          - environment
+          - exec_path
+          - fileordering
+          - home
+          - kernel
+          - locales
+          - num_cpus
+          - time
+          - timezone
+          - umask
+          - user_group

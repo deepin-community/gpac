@@ -88,7 +88,8 @@ void gf_sg_command_del(GF_Command *com)
 			GF_CommandField *inf = (GF_CommandField *)gf_list_get(com->command_fields, 0);
 			gf_list_rem(com->command_fields, 0);
 
-			if (inf->new_node) gf_node_unregister(inf->new_node, NULL);
+			if (inf->new_node)
+				gf_node_try_destroy(com->in_scene, inf->new_node, NULL);
 			else if (inf->node_list) {
 				GF_ChildNodeItem *child;
 				child = inf->node_list;
@@ -150,8 +151,8 @@ static void gf_node_unregister_children_deactivate(GF_Node *container, GF_ChildN
 {
 	while (child) {
 		GF_ChildNodeItem *cur;
-		gf_node_unregister(child->node, container);
 		gf_node_deactivate(child->node);
+		gf_node_unregister(child->node, container);
 		cur = child;
 		child = child->next;
 		gf_free(cur);

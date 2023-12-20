@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / BIFS codec sub-project
@@ -284,7 +284,7 @@ GF_Err Q_DecCoordOnUnitSphere(GF_BifsDecoder *codec, GF_BitStream *bs, u32 NbBit
 	s32 value;
 	Fixed tang[4], delta;
 	s32 dir;
-
+	if (NbBits>32) return GF_NON_COMPLIANT_BITSTREAM;
 	if (NbComp != 2 && NbComp != 3) return GF_BAD_PARAM;
 
 	//only 2 or 3 comp in the quantized version
@@ -292,6 +292,7 @@ GF_Err Q_DecCoordOnUnitSphere(GF_BifsDecoder *codec, GF_BitStream *bs, u32 NbBit
 	if(NbComp == 2) dir -= 2 * gf_bs_read_int(bs, 1);
 
 	orient = gf_bs_read_int(bs, 2);
+	if ((orient==3) && (NbComp==2)) return GF_NON_COMPLIANT_BITSTREAM;
 
 	for(i=0; i<NbComp; i++) {
 		value = gf_bs_read_int(bs, NbBits) - (1 << (NbBits-1) );
@@ -341,7 +342,7 @@ GF_Err Q_DecRotation(GF_BifsDecoder *codec, GF_BitStream *bs, u32 NbBits, void *
 //parses a Normal vec
 GF_Err Q_DecNormal(GF_BifsDecoder *codec, GF_BitStream *bs, u32 NbBits, void *field_ptr)
 {
-	Fixed comp[3];
+	Fixed comp[4];
 	SFVec3f v;
 	GF_Err e;
 	e = Q_DecCoordOnUnitSphere(codec, bs, NbBits, 2, comp);

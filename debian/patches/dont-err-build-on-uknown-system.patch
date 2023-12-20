@@ -1,9 +1,11 @@
 Description: Don't fail build intentionally on unknown systems
 Author: Balint Reczey <balint@balintreczey.hu>
 
---- a/include/gpac/configuration.h
-+++ b/include/gpac/configuration.h
-@@ -188,8 +188,8 @@
+Index: gpac/include/gpac/configuration.h
+===================================================================
+--- gpac.orig/include/gpac/configuration.h
++++ gpac/include/gpac/configuration.h
+@@ -203,8 +203,8 @@ This section documents the base data typ
  #define GPAC_HAS_JPEG
  #define GPAC_HAS_PNG
  

@@ -2,7 +2,7 @@
  *          GPAC - Multimedia Framework C SDK
  *
  *          Authors: Cyril Concolato, Jean Le Feuvre
- *          Copyright (c) Telecom ParisTech 2000-2020
+ *          Copyright (c) Telecom ParisTech 2000-2022
  *                  All rights reserved
  *
  *  This file is part of GPAC / Scene Management sub-project
@@ -292,7 +292,7 @@ static GF_Err swf_svg_define_text(SWFReader *read, SWFText *text)
 			swf_svg_print(read, ">");
 			/*convert to UTF-8*/
 			{
-				size_t _len;
+				u32 _len;
 				u16     *str_w;
 				u16     *widestr;
 				char    *str;
@@ -306,8 +306,8 @@ static GF_Err swf_svg_define_text(SWFReader *read, SWFText *text)
 				str = (char*)gf_malloc(sizeof(char) * (gr->nbGlyphs+2));
 				widestr = str_w;
 				_len = gf_utf8_wcstombs(str, sizeof(u8) * (gr->nbGlyphs+1), (const unsigned short **) &widestr);
-				if (_len != (size_t) -1) {
-					str[(u32) _len] = 0;
+				if (_len != GF_UTF8_FAIL) {
+					str[_len] = 0;
 					swf_svg_print(read, "%s", str);
 				}
 			}
@@ -536,7 +536,7 @@ GF_Err swf_svg_write_text_sample(void *user, const u8 *data, u32 length, u64 tim
 
 	lengthWritten = (u32) gf_fwrite(data, length, svgFile);
 	if (length != lengthWritten) {
-		return GF_BAD_PARAM;
+		return GF_IO_ERR;
 	} else {
 		return GF_OK;
 	}
@@ -549,7 +549,7 @@ GF_Err swf_svg_write_text_header(void *user, const u8 *data, u32 length, Bool is
 
 	lengthWritten = (u32) gf_fwrite(data, length, svgFile);
 	if (length != lengthWritten) {
-		return GF_BAD_PARAM;
+		return GF_IO_ERR;
 	} else {
 		return GF_OK;
 	}

@@ -5,9 +5,11 @@ Forwarded: not-needed
  configure |    4 ++--
  1 file changed, 2 insertions(+), 2 deletions(-)
 
---- a/configure
-+++ b/configure
-@@ -365,7 +365,7 @@
+Index: gpac/configure
+===================================================================
+--- gpac.orig/configure
++++ gpac/configure
+@@ -503,7 +503,7 @@ for opt do
              ;;
          --cpu=*) cpu=`echo $opt | cut -d '=' -f 2`
              ;;
@@ -16,7 +18,7 @@ Forwarded: not-needed
              ;;
          --disable-opt) no_gcc_opt="yes"
              ;;
-@@ -708,7 +708,7 @@
+@@ -945,7 +945,7 @@ fi
  
  #GCC opt
  if test "$no_gcc_opt" = "no"; then

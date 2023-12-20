@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2022
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -267,6 +267,8 @@ GF_Err visual_2d_init_draw(GF_VisualManager *visual, GF_TraverseState *tr_state)
 	visual->has_modif = 0;
 	visual->has_overlays = 0;
 
+	memset(&visual->frame_bounds, 0, sizeof(GF_IRect));
+	
 	visual_2d_setup_projection(visual, tr_state);
 	if (!visual->top_clipper.width || !visual->top_clipper.height)
 		return GF_OK;
@@ -375,6 +377,7 @@ Bool gf_irect_inside(GF_IRect *rc1, GF_IRect *rc2)
 #define ra_is_empty(ra) (!((ra)->count))
 
 /*adds @rc2 to @rc1 - the new @rc1 contains the old @rc1 and @rc2*/
+GF_EXPORT
 void gf_irect_union(GF_IRect *rc1, GF_IRect *rc2)
 {
 	if (!rc1->width || !rc1->height) {
@@ -721,13 +724,14 @@ Bool visual_2d_terminate_draw(GF_VisualManager *visual, GF_TraverseState *tr_sta
 		if (!hyb_force_redraw && !hyb_force_background) {
 #ifndef GPAC_DISABLE_3D
 			//force canvas draw
-			visual->nb_objects_on_canvas_since_last_ogl_flush = 1;
+			if ((visual==visual->compositor->visual) && visual->prev_hybgl_canvas_not_empty)
+				visual->nb_objects_on_canvas_since_last_ogl_flush = 1;
 #endif
 			GF_LOG(GF_LOG_DEBUG, GF_LOG_COMPOSE, ("[Visual2D] No changes found since last frame - skipping redraw\n"));
 			goto exit;
 		}
 
-		//openGL, force redraw of complete scene but signal we shoud only draw the background, not clear the canvas (nothing to redraw except GL textures)
+		//OpenGL, force redraw of complete scene but signal we shoud only draw the background, not clear the canvas (nothing to redraw except GL textures)
 		if (hyb_force_redraw) { 
 			hyb_force_background = 2;
 			ra_add(&visual->to_redraw, &visual->surf_rect);
@@ -761,7 +765,7 @@ Bool visual_2d_terminate_draw(GF_VisualManager *visual, GF_TraverseState *tr_sta
 		bck_ctx->next = visual->context;
 		bck_ctx->flags |= CTX_BACKROUND_NOT_LAYER;
 
-		//for hybrid openGL, only redraw background but do not erase canvas
+		//for hybrid OpenGL, only redraw background but do not erase canvas
 		if (hyb_force_background==2)
 			bck_ctx->flags |= CTX_BACKROUND_NO_CLEAR;
 
@@ -774,13 +778,13 @@ Bool visual_2d_terminate_draw(GF_VisualManager *visual, GF_TraverseState *tr_sta
 	{
 
 #ifndef GPAC_DISABLE_3D
-		//cleanup openGL screen
+		//cleanup OpenGL screen
 		if (visual->compositor->hybrid_opengl) {
 			compositor_2d_hybgl_clear_surface(tr_state->visual, NULL, 0, GF_FALSE);
 		}
 #endif
 
-		//and clean dirty rect - for hybrid openGL this will clear the canvas, otherwise the 2D backbuffer
+		//and clean dirty rect - for hybrid OpenGL this will clear the canvas, otherwise the 2D backbuffer
 		count = visual->to_redraw.count;
 		for (k=0; k<count; k++) {
 			GF_IRect rc;
@@ -796,7 +800,8 @@ Bool visual_2d_terminate_draw(GF_VisualManager *visual, GF_TraverseState *tr_sta
 		visual->has_modif=0;
 #ifndef GPAC_DISABLE_3D
 		//force canvas flush
-		visual->nb_objects_on_canvas_since_last_ogl_flush = 1;
+		if ((visual==visual->compositor->visual) && visual->prev_hybgl_canvas_not_empty)
+			visual->nb_objects_on_canvas_since_last_ogl_flush = 1;
 #endif
 		goto exit;
 	}
@@ -807,7 +812,7 @@ skip_background:
 
 #ifndef GPAC_DISABLE_LOG
 	if (gf_log_tool_level_on(GF_LOG_COMPOSE, GF_LOG_DEBUG)) {
-		GF_LOG(GF_LOG_DEBUG, GF_LOG_COMPOSE, ("[Visual2D] Redraw %d / %d nodes (all: %s - %d dirty rects\n)", num_changed, num_nodes, redraw_all ? "yes" : "no", visual->to_redraw.count));
+		GF_LOG(GF_LOG_DEBUG, GF_LOG_COMPOSE, ("[Visual2D] Redraw %d / %d nodes (all: %s - %d dirty rects)\n", num_changed, num_nodes, redraw_all ? "yes" : "no", visual->to_redraw.count));
 		if (visual->to_redraw.count>1) GF_LOG(GF_LOG_DEBUG, GF_LOG_COMPOSE, ("\n"));
 
 		for (i=0; i<visual->to_redraw.count; i++) {
@@ -819,6 +824,13 @@ skip_background:
 
 	visual->draw_node_index = 0;
 
+#ifndef GPAC_DISABLE_3D
+	//consider nothing is drawn on hyblg canvas. If any of the refresh area(s) triggers painting on the canvas
+	//the variable will be set while flushing
+	if (visual==visual->compositor->visual)
+		visual->prev_hybgl_canvas_not_empty = GF_FALSE;
+#endif
+
 	ctx = visual->context;
 	while (ctx && ctx->drawable) {
 
@@ -827,12 +839,7 @@ skip_background:
 
 		/*if overlay we cannot remove the context and cannot draw directly*/
 		if (! visual_2d_overlaps_overlay(tr_state->visual, ctx, tr_state)) {
-
-			if (ctx->drawable->flags & DRAWABLE_USE_TRAVERSE_DRAW) {
-				gf_node_traverse(ctx->drawable->node, tr_state);
-			} else {
-				drawable_draw(ctx->drawable, tr_state);
-			}
+			call_drawable_draw(ctx, tr_state, GF_FALSE);
 		}
 		ctx = ctx->next;
 	}

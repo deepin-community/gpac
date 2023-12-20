@@ -2,11 +2,12 @@
 
 
 version="`grep '#define GPAC_VERSION ' \"./include/gpac/version.h\" | cut -d '"' -f 2`"
-#version_major=`grep '#define GPAC_VERSION_MAJOR ' ./include/gpac/version.h | sed 's/[^0-9]*//g'`
-#version_minor=`grep '#define GPAC_VERSION_MINOR ' ./include/gpac/version.h | sed 's/[^0-9]*//g'`
-#version_micro=`grep '#define GPAC_VERSION_MICRO ' ./include/gpac/version.h | sed 's/[^0-9]*//g'`
+version_major=`grep '#define GPAC_VERSION_MAJOR ' ./include/gpac/version.h | sed 's/[^0-9]*//g'`
+version_minor=`grep '#define GPAC_VERSION_MINOR ' ./include/gpac/version.h | sed 's/[^0-9]*//g'`
+version_micro=`grep '#define GPAC_VERSION_MICRO ' ./include/gpac/version.h | sed 's/[^0-9]*//g'`
+libgac_version="$version_major.$version_minor.$version_micro"
 
-echo "Version is $version"
+echo "Version is $version - libgpac $libgac_version"
 
 #patch README.md
 source="README.md"
@@ -15,10 +16,9 @@ rm $source
 mv ftmp $source
 
 
-#patch  applications/osmo4_ios/osmo4ios-Info.plist 
-
-source="applications/osmo4_ios/osmo4ios-Info.plist"
-sed -e "/CFBundleShortVersionString/{n;s/.*/	<string>$version<\/string>/;}" $source > ftmp
+#patch  applications/gpac/ios-Info.plist
+source="applications/gpac/ios-Info.plist"
+sed -e "/CFBundleShortVersionString/{n;s/.*/	<string>$version<\/string>/;}" $source | sed -e "/CFBundleVersion/{n;s/.*/	<string>$libgac_version<\/string>/;}" > ftmp
 rm $source
 mv ftmp $source
 
@@ -30,7 +30,7 @@ mv ftmp $source
 
 # patch file gpac.spec
 source="gpac.spec"
-sed -e "s/Version:.*/Version: $version/;" $source | sed -e "s/Release:.*/Release: $version/;" | sed -e "s/Source0:.*/Source0: gpac-$version.tar.gz%{?_with_amr:Source1:http:\/\/www.3gpp.org\/ftp\/Specs\/archive\/26_series\/26.073\/26073-700.zip}/;" > ftmp
+sed -e "s/Version:.*/Version: $version/;" $source | sed -e "s/Release:.*/Release: $version/;" | sed -e "s/Source0:.*/Source0: gpac-$version.tar.gz/;" > ftmp
 rm $source
 mv ftmp $source
 
@@ -46,8 +46,9 @@ sed -e "s/\!define GPAC_VERSION.*/\!define GPAC_VERSION $version/;" $source > ft
 rm $source
 mv ftmp $source
 
-# patch file share/doc/configuration.html
-source="share/doc/configuration.html"
-sed -e "s/GPAC Version.*</GPAC Version $version</;" $source > ftmp
+#patch  packagers/osx/GPAC.app/Contents/Info.plist
+source="packagers/osx/GPAC.app/Contents/Info.plist"
+sed -e "/CFBundleShortVersionString/{n;s/.*/	<string>$version<\/string>/;}" $source | sed -e "/CFBundleVersion/{n;s/.*/	<string>$libgac_version<\/string>/;}" > ftmp
 rm $source
 mv ftmp $source
+

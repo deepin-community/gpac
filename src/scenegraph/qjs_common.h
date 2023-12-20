@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *				Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2019
+ *			Copyright (c) Telecom ParisTech 2019-2021
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Management sub-project
@@ -23,8 +23,8 @@
  *
  */
 
-#ifndef SG_QJS_COMMONE
-#define SG_QJS_COMMONE
+#ifndef _SG_QJS_COMMON_
+#define _SG_QJS_COMMON_
 
 #include <gpac/list.h>
 #include <gpac/scenegraph.h>
@@ -56,9 +56,13 @@ JSValue js_throw_err(JSContext *ctx, s32 err);
 /* throws an error with integer property 'code' set to err and string property 'message' set to the formatted string*/
 JSValue js_throw_err_msg(JSContext *ctx, s32 err, const char *fmt, ...);
 
-void js_do_loop(JSContext *ctx);
+void js_std_loop(JSContext *ctx);
 void js_dump_error(JSContext *ctx);
+void js_dump_error_exc(JSContext *ctx, const JSValue exception_val);
+
 JSValue js_print(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+
+void js_load_constants(JSContext *ctx, JSValue global_obj);
 
 /********************************************
 
@@ -228,25 +232,30 @@ struct _gf_vrml_script_priv
 struct __gf_download_manager *jsf_get_download_manager(JSContext *c);
 struct _gf_ft_mgr *jsf_get_font_manager(JSContext *c);
 GF_Err jsf_request_opengl(JSContext *c);
-GF_Err jsf_set_gl_active(JSContext *c);
+GF_Err jsf_set_gl_active(JSContext *c, Bool do_activate);
 GF_Err jsf_get_filter_packet_planes(JSContext *c, JSValue obj, u32 *width, u32 *height, u32 *pf, u32 *stride, u32 *stride_uv, const u8 **data, const u8 **p_u, const u8 **p_v, const u8 **p_a);
 
 Bool jsf_is_packet(JSContext *c, JSValue obj);
 const char *jsf_get_script_filename(JSContext *c);
 
 
-/*definitions of C modules in gpac, potentially used by both SceneGraph and JSFilter*/
-void qjs_module_init_scenejs(JSContext *ctx);
-void qjs_module_init_storage(JSContext *ctx);
+/*special init of XHR as builtin of DOM rather than standalone module*/
 void qjs_module_init_xhr_global(JSContext *c, JSValue global);
-void qjs_module_init_xhr(JSContext *c);
-void qjs_module_init_evg(JSContext *c);
-void qjs_module_init_webgl(JSContext *c);
-void qjs_module_init_gpaccore(JSContext *c);
+
+void qjs_init_all_modules(JSContext *ctx, Bool no_webgl, Bool for_vrml);
+
+Bool gs_js_context_is_valid(JSContext *ctx);
+JSRuntime *gf_js_get_rt();
+
+const char *jsf_get_script_filename(JSContext *c);
+
+
+#define GF_JS_EXCEPTION(_ctx) \
+	js_throw_err_msg(_ctx, GF_BAD_PARAM, "Invalid value in function %s (%s@%d)", __func__, strrchr(__FILE__, GF_PATH_SEPARATOR)+1, __LINE__)
 
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif //SG_QJS_COMMONE
+#endif //_SG_QJS_COMMON_

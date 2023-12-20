@@ -593,13 +593,19 @@ static u32 lsr_translate_coords(GF_LASeRCodec *lsr, Fixed x, u32 nb_bits)
 {
 	s32 res, max;
 
+	if (!nb_bits) return 0;
+
 	res = FIX2INT( gf_divfix(x, lsr->res_factor) );
 	/*don't loose too much*/
 	if (!res && x) {
 		GF_LOG(GF_LOG_DEBUG, GF_LOG_CODING, ("[LASeR] resolution factor %g too small to allow coding of %g - adjusting to smallest integer!\n", lsr->res_factor, FIX2FLT(x) ));
 		res = (x>0) ? 1 : -1;
 	}
-	max = (1<<(nb_bits-1)) - 1;
+	if (nb_bits>=32)
+		max = 0xFFFFFFFF;
+	else
+		max = (1<<(nb_bits-1)) - 1;
+
 	if (res>=0) {
 		if (res > max) {
 			GF_LOG(GF_LOG_DEBUG, GF_LOG_CODING, ("[LASeR] nb_bits %d not large enough to encode positive number %g!\n", nb_bits, FIX2FLT(x) ));
@@ -3708,9 +3714,8 @@ static void lsr_write_update_value(GF_LASeRCodec *lsr, SVG_Element *elt, u32 fie
 		break;
 		case SMIL_KeyPoints_datatype:/*0to1*/
 		{
-			SVG_Point *pt = (SVG_Point*)gf_list_get(*(GF_List **)val, 0);
-			lsr_write_fixed_clamp(lsr, pt->x, "value_x");
-			lsr_write_fixed_clamp(lsr, pt->y, "value_y");
+			Fixed *f = (Fixed*)gf_list_get(*(GF_List **)val, 0);
+			lsr_write_fixed_clamp(lsr, *f, "value");
 		}
 		break;
 		case SMIL_KeySplines_datatype:/*float*/
@@ -4117,7 +4122,10 @@ static GF_Err lsr_write_command_list(GF_LASeRCodec *lsr, GF_List *com_list, SVG_
 			} else {
 				GF_LSR_WRITE_INT(lsr, 0, 1, "has_intvalue");
 			}
-			if (com->send_event_name<=GF_EVENT_MOUSEWHEEL) {
+			if ((com->send_event_name<=GF_EVENT_MOUSEWHEEL)
+				|| (com->send_event_name==GF_EVENT_MOUSEOUT)
+				|| (com->send_event_name==GF_EVENT_MOUSEOVER)
+			) {
 				GF_LSR_WRITE_INT(lsr, 1, 1, "has_pointvalue");
 				lsr_write_coordinate(lsr, INT2FIX(com->send_event_x), 0, "x");
 				lsr_write_coordinate(lsr, INT2FIX(com->send_event_y), 0, "y");

@@ -1,3 +1,77 @@
+gpac (2.2.1+dfsg1-3) unstable; urgency=medium
+
+  * QA upload.
+  * Backport patch for bigendian
+
+ -- Shengjing Zhu <zhsj@debian.org>  Thu, 14 Sep 2023 17:56:48 +0800
+
+gpac (2.2.1+dfsg1-2) unstable; urgency=medium
+
+  * QA upload.
+  * Set maintainer to Debian QA Group <packages@qa.debian.org> (See #1038784)
+  * Upload to unstable.
+  * Backport patch to build with ffmpeg 6.0 (Closes: #1041380)
+
+ -- Shengjing Zhu <zhsj@debian.org>  Wed, 13 Sep 2023 14:56:05 +0800
+
+gpac (2.2.1+dfsg1-1) experimental; urgency=medium
+
+  * New upstream version,
+    closes: #1033116, #1034732, #1034187, #1036701, #1034890
+  * soname bump libgpac11 -> libgpac12
+
+ -- Reinhard Tartler <siretart@tauware.de>  Mon, 19 Jun 2023 17:26:45 -0400
+
+gpac (2.0.0+dfsg1-4) unstable; urgency=medium
+
+  * make lintian overrides backwards compatible
+
+ -- Reinhard Tartler <siretart@tauware.de>  Tue, 07 Mar 2023 06:41:07 -0500
+
+gpac (2.0.0+dfsg1-3) unstable; urgency=medium
+
+  * Backport security fixes for CVE-2022-29339 CVE-2022-29340
+    CVE-2022-29537 CVE-2022-30976 CVE-2022-1035 CVE-2022-1172
+    CVE-2022-1222 CVE-2022-1441 CVE-2022-1795, Closes: 1016443
+  * Backport more security fixes CVE-2022-2453 CVE-2022-2454,
+    Closes: #1015788
+  * Backport more security fixes CVE-2022-38530 CVE-2022-36186
+    CVE-2022-36190 CVE-2022-36191, Closes: #1019595
+  * Backport more security fixes CVE-2022-2549, closes: #1016142,
+    CVE-2022-26967, Closes: #1007224
+  * fix some lintian overrides
+  * update build-depends on libfreetype-dev
+
+ -- Reinhard Tartler <siretart@tauware.de>  Mon, 06 Mar 2023 20:09:19 -0500
+
+gpac (2.0.0+dfsg1-2) unstable; urgency=medium
+
+  * Team upload
+  * Upload to unstable
+
+ -- Sebastian Ramacher <sramacher@debian.org>  Fri, 25 Feb 2022 20:59:30 +0100
+
+gpac (2.0.0+dfsg1-1) experimental; urgency=medium
+
+  * Team upload
+  * New upstream version 2.0.0+dfsg1
+    - Fix remaining security issues (Closes: #990691, #991965)
+      (CVE-2020-35980, CVE-2021-36584)
+    - Fix build with ffmpeg 5.0 (Closes: #1004623)
+  * SONAME bump: libgpac10 -> libgpac11
+  * debian/watch: Add repacksuffix
+  * debian/copyright:
+    - Merge entries with same copyright holder and same license
+    - Update copyright for 2.0.0 release
+  * debian/control:
+    - Bump ffmpeg build dependencies
+    - * Replace libsdl1.2-dev with libsdl2-dev
+  * debian/patches: Remove upstream patches
+  * debian/rules: No longer remove .desktop file
+  * debian/source/lintian-overrides: Update override to current lintian update
+
+ -- Sebastian Ramacher <sramacher@debian.org>  Fri, 25 Feb 2022 00:24:53 +0100
+
 gpac (1.0.1+dfsg1-5) unstable; urgency=medium
 
   * Team upload

@@ -40,6 +40,7 @@ typedef struct
 	GF_List *identifiers;
 	char *new_line;
 	u32 indent;
+	u32 expr_stack_size;
 } ScriptParser;
 
 
@@ -72,13 +73,13 @@ static void SFS_AddString(ScriptParser *parser, char *str)
 	char *new_str;
 	if (!str) return;
 	if (strlen(parser->string) + strlen(str) >= parser->length) {
-		parser->length += PARSER_STEP_ALLOC;
+		parser->length = (u32) ( strlen(parser->string) + strlen(str) + PARSER_STEP_ALLOC );
 		new_str = (char *)gf_malloc(sizeof(char)*parser->length);
 		strcpy(new_str, parser->string);
 		gf_free(parser->string);
 		parser->string = new_str;
 	}
-	strcat(parser->string, str);
+	strncat(parser->string, str, parser->length - strlen(parser->string) - 1);
 }
 
 static void SFS_AddInt(ScriptParser *parser, s32 val)
@@ -105,7 +106,7 @@ GF_Err ParseScriptField(ScriptParser *parser)
 
 	eventType = gf_bs_read_int(parser->bs, 2);
 	fieldType = gf_bs_read_int(parser->bs, 6);
-	gf_bifs_dec_name(parser->bs, name);
+	gf_bifs_dec_name(parser->bs, name, 1000);
 	field = gf_sg_script_field_new(parser->script, eventType, fieldType, name);
 	if (!field) return GF_NON_COMPLIANT_BITSTREAM;
 
@@ -169,6 +170,7 @@ GF_Err SFScript_Parse(GF_BifsDecoder *codec, SFScript *script_field, GF_BitStrea
 	e = GF_OK;
 	if (gf_node_get_tag(n) != TAG_MPEG4_Script) return GF_NON_COMPLIANT_BITSTREAM;
 
+	memset(&parser, 0, sizeof(ScriptParser));
 	parser.codec = codec;
 	parser.script = n;
 	parser.bs = bs;
@@ -209,6 +211,10 @@ GF_Err SFScript_Parse(GF_BifsDecoder *codec, SFScript *script_field, GF_BitStrea
 		SFS_Space(&parser);
 		SFS_StatementBlock(&parser, GF_TRUE);
 		SFS_Line(&parser);
+		if (codec->LastError) {
+			e = codec->LastError;
+			goto exit;
+		}
 	}
 
 	SFS_Line(&parser);
@@ -244,7 +250,7 @@ void SFS_Identifier(ScriptParser *parser)
 	}
 	//parse
 	else {
-		gf_bifs_dec_name(parser->bs, name);
+		gf_bifs_dec_name(parser->bs, name, 500);
 		gf_list_add(parser->identifiers, gf_strdup(name));
 		SFS_AddString(parser, name);
 	}
@@ -418,6 +424,7 @@ void SFS_CompoundExpression(ScriptParser *parser)
 	if (parser->codec->LastError) return;
 	SFS_Expression(parser);
 	if (! gf_bs_read_int(parser->bs, 1)) return;
+	if (parser->codec->LastError) return;
 	SFS_AddString(parser, ",");
 	SFS_CompoundExpression(parser);
 }
@@ -430,11 +437,19 @@ void SFS_OptionalExpression(ScriptParser *parser)
 	}
 }
 
-
+#define MAX_EXPR_STACK	500
 void SFS_Expression(ScriptParser *parser)
 {
 	u32 val = gf_bs_read_int(parser->bs, NUMBITS_EXPR_TYPE);
 	if (parser->codec->LastError) return;
+
+	//limit max expression stack size
+	parser->expr_stack_size++;
+	if (parser->expr_stack_size>MAX_EXPR_STACK) {
+		GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[BIFS] Max stack size %d reached for expressions, not supported\n", MAX_EXPR_STACK))
+		parser->codec->LastError = GF_NON_COMPLIANT_BITSTREAM;
+		return;
+	}
 
 	switch(val) {
 	case ET_CURVED_EXPR:
@@ -672,9 +687,10 @@ void SFS_Expression(ScriptParser *parser)
 		SFS_StatementBlock(parser, GF_TRUE);
 		break;
 	default:
-		assert(0);
+		parser->codec->LastError = GF_NON_COMPLIANT_BITSTREAM;
 		break;
 	}
+	parser->expr_stack_size--;
 }
 
 void SFS_NewObject(ScriptParser *parser)
@@ -691,6 +707,7 @@ void SFS_ArrayDeref(ScriptParser *parser)
 {
 	if (parser->codec->LastError) return;
 	SFS_Expression(parser);
+	if (parser->codec->LastError) return;
 	SFS_AddString(parser, "[");
 	SFS_CompoundExpression(parser);
 	SFS_AddString(parser, "]");
@@ -709,6 +726,7 @@ void SFS_ObjectMemberAccess(ScriptParser *parser)
 {
 	if (parser->codec->LastError) return;
 	SFS_Expression(parser);
+	if (parser->codec->LastError) return;
 	SFS_AddString(parser, ".");
 	SFS_Identifier(parser);
 }
@@ -718,6 +736,7 @@ void SFS_ObjectMethodCall(ScriptParser *parser)
 {
 	if (parser->codec->LastError) return;
 	SFS_Expression(parser);
+	if (parser->codec->LastError) return;
 	SFS_AddString(parser, ".");
 	SFS_Identifier(parser);
 	SFS_AddString(parser, "(");
@@ -732,6 +751,7 @@ void SFS_Params(ScriptParser *parser)
 	val = gf_bs_read_int(parser->bs, 1);
 	while (val) {
 		SFS_Expression(parser);
+		if (parser->codec->LastError) return;
 		val = gf_bs_read_int(parser->bs, 1);
 		if(val) SFS_AddString(parser, ",");
 	}
@@ -769,7 +789,7 @@ void SFS_GetString(ScriptParser *parser)
 {
 	char name[1000];
 	if (parser->codec->LastError) return;
-	gf_bifs_dec_name(parser->bs, name);
+	gf_bifs_dec_name(parser->bs, name, 1000);
 	SFS_AddString(parser, name);
 }
 
