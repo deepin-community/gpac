@@ -2,3 +2,4 @@ gcc-optflags.patch
 dont-err-build-on-uknown-system.patch
 ffmpeg-6.0.patch
 bigendian.patch
+cve_2026_4185.patch

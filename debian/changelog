@@ -1,3 +1,9 @@
+gpac (2.2.1+dfsg1-3deepin1) unstable; urgency=medium
+
+  * Fix CVE-2026-4185: stack-based buffer overflow in swf_parse.c
+
+ -- deepin-ci-robot <packages@deepin.org>  Wed, 15 Apr 2026 15:19:21 +0800
+
 gpac (2.2.1+dfsg1-3) unstable; urgency=medium
 
   * QA upload.
