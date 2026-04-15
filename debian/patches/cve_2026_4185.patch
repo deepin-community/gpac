@@ -1,0 +1,65 @@
+Description: Fix stack-based buffer overflow in swf_parse.c
+ Replace sprintf with snprintf to prevent buffer overflow vulnerabilities.
+ .
+ This fixes CVE-2026-4185: A vulnerability in GPAC affecting the function
+ swf_def_bits_jpeg of the file src/scene_manager/swf_parse.c. The manipulation
+ of the argument szName results in stack-based buffer overflow.
+Author: Aurelien David <aurelien.david@telecom-paristech.fr>
+Origin: upstream, https://github.com/gpac/gpac/commit/8961c74f87ae3fe2d3352e622f7730ca96d50cf1
+Bug: https://github.com/gpac/gpac/issues/3436
+Bug-Debian: https://security-tracker.debian.org/tracker/CVE-2026-4185
+Forwarded: not-needed
+Applied-Upstream: 8961c74f87ae3fe2d3352e622f7730ca96d50cf1
+---
+ src/scene_manager/swf_parse.c | 14 +++++++-------
+ 1 file changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/src/scene_manager/swf_parse.c b/src/scene_manager/swf_parse.c
+index c6fcd561f3..bb0cc7126b 100644
+--- a/src/scene_manager/swf_parse.c
++++ b/src/scene_manager/swf_parse.c
+@@ -1818,7 +1818,7 @@ static GF_Err swf_def_sound(SWFReader *read)
+ 		char *frame;
+ 		GF_Err e=GF_OK;
+ 
+-		sprintf(szName, "swf_sound_%d.mp3", snd->ID);
++		snprintf(szName, GF_ARRAY_LENGTH(szName), "swf_sound_%d.mp3", snd->ID);
+ 		if (read->localPath) {
+ 			snd->szFileName = (char*)gf_malloc(sizeof(char)*GF_MAX_PATH);
+ 			strcpy(snd->szFileName, read->localPath);
+@@ -1965,9 +1965,9 @@ static GF_Err swf_soundstream_hdr(SWFReader *read)
+ 	case 2:
+ 		read->sound_stream = snd;
+ 		if (read->localPath) {
+-			sprintf(szName, "%s/swf_soundstream_%d.mp3", read->localPath, read->current_sprite_id);
++			snprintf(szName, GF_ARRAY_LENGTH(szName), "%s/swf_soundstream_%d.mp3", read->localPath, read->current_sprite_id);
+ 		} else {
+-			sprintf(szName, "swf_soundstream_%d.mp3", read->current_sprite_id);
++			snprintf(szName, GF_ARRAY_LENGTH(szName), "swf_soundstream_%d.mp3", read->current_sprite_id);
+ 		}
+ 		read->sound_stream->szFileName = gf_strdup(szName);
+ 		read->setup_sound(read, read->sound_stream, 0);
+@@ -2084,9 +2084,9 @@ static GF_Err swf_def_bits_jpeg(SWFReader *read, u32 version)
+ 
+ 	/*dump file*/
+ 	if (read->localPath) {
+-		sprintf(szName, "%s/swf_jpeg_%d.jpg", read->localPath, ID);
++		snprintf(szName, GF_ARRAY_LENGTH(szName), "%s/swf_jpeg_%d.jpg", read->localPath, ID);
+ 	} else {
+-		sprintf(szName, "swf_jpeg_%d.jpg", ID);
++		snprintf(szName, GF_ARRAY_LENGTH(szName), "swf_jpeg_%d.jpg", ID);
+ 	}
+ 
+ 	if (version!=3)
+@@ -2172,9 +2172,9 @@ static GF_Err swf_def_bits_jpeg(SWFReader *read, u32 version)
+ 
+ 		/*write png*/
+ 		if (read->localPath) {
+-			sprintf(szName, "%s/swf_png_%d.png", read->localPath, ID);
++			snprintf(szName, GF_ARRAY_LENGTH(szName), "%s/swf_png_%d.png", read->localPath, ID);
+ 		} else {
+-			sprintf(szName, "swf_png_%d.png", ID);
++			snprintf(szName, GF_ARRAY_LENGTH(szName), "swf_png_%d.png", ID);
+ 		}
+ 
+ 		osize = w*h*4;
