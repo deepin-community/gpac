@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2022
+ *			Copyright (c) Telecom ParisTech 2022-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / gpac application
@@ -28,7 +28,7 @@
 
 #ifndef GPAC_CONFIG_ANDROID
 
-//gpac is loaded using sink compositor in base player mode (-mp4c)  with a custum event proc
+//gpac is loaded using sink compositor in base player mode (-mp4c)  with a custom event proc
 #define LOAD_MP4C		1
 //gpac is loaded with gui
 #define LOAD_GUI		2
@@ -51,6 +51,8 @@ void mp4c_help(u32 argmode);
 
 #endif
 
+GF_Err gf_fs_process_link_directive(char *link, GF_Filter *filter, GF_List *loaded_filters, char *ext_link);
+
 
 //if uncommented, check argument description matches our conventions - see filter.h
 #define CHECK_DOC
@@ -62,14 +64,14 @@ void mp4c_help(u32 argmode);
 #include <gpac/main.h>
 
 void gpac_filter_help(void);
-void gpac_modules_help(void);
+void gpac_modules_help(char *mod_name);
 void gpac_alias_help(GF_SysArgMode argmode);
 void gpac_credentials_help(GF_SysArgMode argmode);
 void gpac_core_help(GF_SysArgMode mode, Bool for_logs);
 void gpac_usage(GF_SysArgMode argmode);
 void gpac_config_help(void);
 void gpac_suggest_arg(char *aname);
-void gpac_suggest_filter(char *fname, Bool is_help, Bool filter_only);
+Bool gpac_suggest_filter(char *fname, Bool is_help, Bool filter_only);
 void gpac_check_session_args(void);
 int gpac_make_lang(char *filename);
 Bool gpac_expand_alias(int o_argc, char **o_argv);
@@ -80,7 +82,7 @@ void dump_all_audio_cicp(void);
 void dump_all_codecs(GF_SysArgMode argmode);
 void dump_all_formats(GF_SysArgMode argmode);
 void dump_all_proto_schemes(GF_SysArgMode argmode);
-
+void check_prop_def(char *pname);
 void write_core_options(void );
 void write_file_extensions(void );
 void write_filters_options(void);
@@ -94,3 +96,12 @@ void carbon_set_hook(void);
 #endif
 
 void gpac_open_urls(const char *urls);
+
+#if !defined(GPAC_CONFIG_ANDROID) && !defined(GPAC_CONFIG_IOD)
+//support for step-by-stpe graph construction
+#define GPAC_DEFER_MODE
+#endif
+
+#ifdef GPAC_DEFER_MODE
+void gpac_defer_help(void);
+#endif // GPAC_DEFER_MODE

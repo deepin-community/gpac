@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2018-2022
+ *			Copyright (c) Telecom ParisTech 2018-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / MPEG-4 part2 video rewrite filter
@@ -27,6 +27,8 @@
 #include <gpac/constants.h>
 #include <gpac/bitstream.h>
 #include <gpac/internal/media_dev.h>
+
+#ifndef GPAC_DISABLE_UFM4V
 
 typedef struct
 {
@@ -201,17 +203,18 @@ static const GF_FilterArgs M4VMxArgs[] =
 
 GF_FilterRegister M4VMxRegister = {
 	.name = "ufm4v",
-	GF_FS_SET_DESCRIPTION("M4V writer")
+	GF_FS_SET_DESCRIPTION("M4V rewriter")
 	GF_FS_SET_HELP("This filter converts MPEG-4 part 2 visual streams into writable format (reinsert decoder config).")
 	.private_size = sizeof(GF_M4VMxCtx),
 	.args = M4VMxArgs,
 	SETCAPS(M4VMxCaps),
 	.configure_pid = m4vmx_configure_pid,
-	.process = m4vmx_process
+	.process = m4vmx_process,
+	.hint_class_type = GF_FS_CLASS_FRAMING
 };
 
 
-const GF_FilterRegister *m4vmx_register(GF_FilterSession *session)
+const GF_FilterRegister *ufm4v_register(GF_FilterSession *session)
 {
 	return &M4VMxRegister;
 }
@@ -238,18 +241,19 @@ static GF_Err vc1mx_initialize(GF_Filter *filter)
 
 GF_FilterRegister VC1VMxRegister = {
 	.name = "ufvc1",
-	GF_FS_SET_DESCRIPTION("VC1 writer")
+	GF_FS_SET_DESCRIPTION("VC1 rewriter")
 	GF_FS_SET_HELP("This filter converts VC1 visual streams into writable format (reinsert decoder config and start codes if needed).")
 	.private_size = sizeof(GF_M4VMxCtx),
 	.args = M4VMxArgs,
 	SETCAPS(VC1MxCaps),
 	.initialize = vc1mx_initialize,
 	.configure_pid = m4vmx_configure_pid,
-	.process = m4vmx_process
+	.process = m4vmx_process,
+	.hint_class_type = GF_FS_CLASS_FRAMING
 };
 
 
-const GF_FilterRegister *vc1mx_register(GF_FilterSession *session)
+const GF_FilterRegister *ufvc1_register(GF_FilterSession *session)
 {
 #ifdef GPAC_ENABLE_COVERAGE
 	//we currently miss vc1 test sequence
@@ -258,3 +262,19 @@ const GF_FilterRegister *vc1mx_register(GF_FilterSession *session)
 #endif
 	return &VC1VMxRegister;
 }
+
+#else
+const GF_FilterRegister *ufm4v_register(GF_FilterSession *session)
+{
+	return NULL;
+}
+const GF_FilterRegister *ufvc1_register(GF_FilterSession *session)
+{
+	return NULL;
+}
+
+#endif //#ifndef GPAC_DISABLE_UFM4V
+
+
+
+

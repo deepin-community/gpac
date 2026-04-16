@@ -3,7 +3,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2020-2022
+ *			Copyright (c) Telecom ParisTech 2020-2025
  *					All rights reserved
  *
  *  This file is part of GPAC / vout default ui
@@ -71,13 +71,31 @@ let disp_size = null;
 let task_reschedule = 500;
 let rot = 0;
 let flip = 0;
+let use_libcaca=false;
 
 let do_coverage=0;
 if (sys.get_opt('temp', 'vout_cov') == 'yes') do_coverage = 1;
 
 
-if (parent_filter && parent_filter.type=='vout')
+function check_vout()
+{
+	let drv = vout.get_arg('drv');
+	if (!drv) drv = sys.get_opt('core', 'video-output');
+	if (drv == 'caca') {
+		session.set_auth_fun( null );
+		use_libcaca=true;
+	}
+
+	speed = vout.get_arg('speed');
+	drop = vout.get_arg('drop');
+	fullscreen = vout.get_arg('fullscreen');
+	win_id = vout.get_arg('wid');
+}
+
+if (parent_filter && parent_filter.type=='vout') {
 	vout = parent_filter;
+	check_vout();
+}
 
 function check_filters()
 {
@@ -86,13 +104,10 @@ function check_filters()
 	for (i=0; i< session.nb_filters; i++) {
 		let f = session.get_filter(i);
 		if (!aout && (f.type==="aout")) aout = f;
-		else if (!vout && (f.type==="vout")) vout = f;
-	}
-	if (vout) {
-		speed = vout.get_arg('speed');
-		drop = vout.get_arg('drop');
-		fullscreen = vout.get_arg('fullscreen');
-		win_id = vout.get_arg('wid');
+		else if (!vout && (f.type==="vout")) {
+			vout = f;
+			check_vout();
+		}
 	}
 }
 check_filters();
@@ -103,6 +118,7 @@ function setup_overlay()
 	let target_width=ol_width;
 	let target_height=ol_height;
 
+	if (vout.nb_ipid) audio_only=false;
 	disp_size = vout.get_arg('owsize');
 	if (disp_size==null) return false;
 	if (audio_only && !disp_size.x) {
@@ -151,7 +167,10 @@ function setup_overlay()
 		ol_width = target_width;
 		ol_height = target_height;
 	}
-	if (ol_buffer) return true;
+
+	if (use_libcaca) return true;
+
+	if (ol_buffer != null) return true;
 	ol_buffer = new ArrayBuffer(ol_width*ol_height*4);
 	ol_canvas = new evg.Canvas(ol_width, ol_height, 'rgba', ol_buffer);
 	ol_canvas.clearf(0.2, 0.2, 0.2, 0.6);
@@ -191,7 +210,6 @@ session.set_event_fun( (evt)=> {
 		codec_slow = (evt.ui_type == GF_EVENT_CODEC_SLOW) ? true : false;
 
 		if (overlay_type==OL_AUTH) return 0;
-		print('trigger overlay');
 		ol_visible = false;
 		overlay_type=OL_PLAY;
 		toggle_overlay();
@@ -207,11 +225,13 @@ session.set_event_fun( (evt)=> {
 
 	switch (evt.ui_type) {
 	case GF_EVENT_MOUSEDOWN:
+		if (use_libcaca) return GF_FALSE;
 		last_x = evt.mouse_x;
 		last_y = evt.mouse_y;
 		break;
 
 	case GF_EVENT_MOUSEUP:
+		if (use_libcaca) return GF_FALSE;
 		if ((last_x != evt.mouse_x) || (last_y != evt.mouse_y)) return 0;
 		if (overlay_type==OL_AUTH) return 0;
 
@@ -374,14 +394,25 @@ function update_help()
 {
 	let args = []; //['Shortcuts for vout', '  '];
 
-	shortcuts.forEach( (key) => {
-		args.push( '' + sys.keyname(key.code) + ': ' + key.desc);
+	shortcuts.forEach( (key, index) => {
+		if (use_libcaca && (index>10))
+			return;
+		args.push( key.code + ': ' + key.desc);
 	});
 	if (audio_only)
 		text.fontsize = 20;
 	else
 		text.fontsize = Math.floor(0.6*ol_height/args.length);
 	text.set_text(args);
+
+	if (use_libcaca) {
+		let str = '';
+		args.forEach(a => {
+			str+=''+a+'\n';
+		});
+		vout.update('oltxt', str);
+		return;
+	}
 
 	//lock vout since we will modify data of the canvas
 	vout.lock(true);
@@ -461,12 +492,28 @@ function update_play()
 		progress_bar_path=null;
 	}
 
-	ol_canvas.clearf(0.2, 0.2, 0.2, 0.6);
+	if (!use_libcaca)
+		ol_canvas.clearf(0.2, 0.2, 0.2, 0.6);
+
 	let length = ol_width - 20;
 	let last_ts_f = vout.last_ts_drop;
 	if (!last_ts_f && aout)
 		last_ts_f = aout.last_ts_drop;
+
 	if (!last_ts_f) {
+		let str = 'No input connected';
+		if (use_libcaca) {
+			vout.update('oltxt', str);
+			return;
+		}
+		text.fontsize = 20;
+		text.set_text(str);
+		let mx = new evg.Matrix2D();
+		mx.translate(- str.length * text.fontsize/3, -10);
+		ol_canvas.matrix = mx;
+		ol_canvas.path = text;
+		ol_canvas.fill(brush);
+		vout.update('oldata', ol_buffer);
 		return;
 	}
 
@@ -496,6 +543,26 @@ function update_play()
 	str+=m+':';
 	if (s<10) str+='0';
 	str+=s;
+
+	if (use_libcaca) {
+		if (duration) {
+			let progress = Math.ceil(100 * last_ts / duration);
+			let i=0;
+			str += ' ';
+			while (i*10<progress) {
+				str += '=';
+				i++;
+			}
+			while (i<10) {
+				str += '-';
+				i++;
+			}
+			str += ' ' + progress + ' %';
+		}
+		vout.update('oltxt', str);
+		return;
+	}
+
 	let fs = Math.floor(0.5*ol_height);
 	if (fs > 60) fs=60;
 	text.fontsize = fs; 
@@ -547,6 +614,23 @@ function update_play()
 		ol_canvas.fill(brush);
 		brush.set_color('white');
 	}
+
+	let src = vout ? vout.ipid_source(0) : aout.ipid_source(0);
+	let hdr = src.ipid_props(0, 'X-From-MABR');
+	if (!hdr) hdr = src.ipid_props(0, 'x-from-mabr');
+	if (hdr) {
+		text.fontsize = 16;
+		let msg = 'MABR ' + ((hdr=='yes') ? 'on' : ((hdr=='no') ? 'off' : hdr));
+		text.set_text(msg);
+		let mx = new evg.Matrix2D();
+		mx.translate(ol_width/2-10*msg.length, 5-ol_height/2);
+		ol_canvas.matrix = mx;
+		ol_canvas.path = text;
+		brush.set_color((hdr=='yes') ? 'green' : 'red');
+		ol_canvas.fill(brush);
+		brush.set_color('white');
+	}
+
 	//we could lock vout to avoid any tearing ...
 	vout.update('oldata', ol_buffer);
 }
@@ -585,8 +669,12 @@ function build_graph(f, str, str_list, fdone)
 			num_tiles++;
 			for (j=i+1; j<f.nb_opid; j++) {
 				let p = f.opid_props(j, 'CodecID');
-				if (p == 'hvt1')
-					num_tiles++;
+				if (p == 'hvt1') {
+					//check this tile pid sinks intersect the current pid sinks
+					let t_sinks = f.opid_sinks(j);
+					const found = t_sinks.some(r => sinks.includes(r))
+					if (found) num_tiles++;
+				}
 			}
 		}
 
@@ -754,6 +842,15 @@ function update_stats()
 	 stats_graph.forEach(str => { stats.push(str);});
 
 
+	if (use_libcaca) {
+		let str = '';
+		stats.forEach(a => {
+			str+=''+a+'\n';
+		});
+		vout.update('oltxt', str);
+		return;
+	}
+
 	text.fontsize = 20; 
 	text.set_text(stats);
 
@@ -886,6 +983,7 @@ function toggle_overlay()
 	if (!ol_visible) {
 		//we don't lock vout because the overlay buffer is still valid
 		vout.update('oldata', null);
+		vout.update('oltxt', '');
 		overlay_type=OL_NONE;
 		return;
 	}
@@ -924,20 +1022,20 @@ function toggle_overlay()
 }
 
 let shortcuts = [
-	{ "code": GF_KEY_B, "desc": "speeds up by 2"},
-	{ "code": GF_KEY_V, "desc": "speeds down by 2"},
-	{ "code": GF_KEY_N, "desc": "normal play speed"},
-	{ "code": GF_KEY_SPACE, "desc": "pause/resume"},
-	{ "code": GF_KEY_S, "desc": "step one frame"},
-	{ "code": GF_KEY_RIGHT, "desc": "seek forward by 1%, 10% if alt down, 30% if ctrl down"},
-	{ "code": GF_KEY_LEFT, "desc": "seek backward "},
-	{ "code": GF_KEY_UP, "desc": "seek forward by 30s, 10m if alt down, 30m if ctrl down"},
-	{ "code": GF_KEY_DOWN, "desc": "seek backward"},
-	{ "code": GF_KEY_F, "desc": "fullscreen mode"},
-	{ "code": GF_KEY_I, "desc": "show info and statistics"},
-	{ "code": GF_KEY_P, "desc": "show playback info"},
-	{ "code": GF_KEY_M, "desc": "flip video"},
-	{ "code": GF_KEY_R, "desc": "rotate video by 90 degree"},
+	{ "code": "B", "desc": "speeds up by 2"},
+	{ "code": "V", "desc": "speeds down by 2"},
+	{ "code": "N", "desc": "normal play speed"},
+	{ "code": "space", "desc": "pause/resume"},
+	{ "code": "S", "desc": "step one frame"},
+	{ "code": "Right", "desc": "seek forward by 1%, 10% if alt down, 30% if ctrl down"},
+	{ "code": "Left", "desc": "seek backward "},
+	{ "code": "Up", "desc": "seek forward by 30s, 10m if alt down, 30m if ctrl down"},
+	{ "code": "Down", "desc": "seek backward"},
+	{ "code": "I", "desc": "show info and statistics"},
+	{ "code": "P", "desc": "show playback info"},
+	{ "code": "F", "desc": "fullscreen mode"},
+	{ "code": "M", "desc": "flip video"},
+	{ "code": "R", "desc": "rotate video by 90 degree"},
 ];
 
 function set_speed(speed)
@@ -962,55 +1060,55 @@ function process_keyboard(evt)
 	}
 	if(evt.window != win_id) return true;
 
-	switch (evt.keycode) {
-	case GF_KEY_B:
+	switch (sys.keyname(evt.keycode)) {
+	case 'B':
 		if (evt.keymods & GF_KEY_MOD_SHIFT) speed *= 1.2;
 		else speed *= 2;
 		set_speed(speed);
 		return true;
-	case GF_KEY_V:
+	case 'V':
 		if (evt.keymods & GF_KEY_MOD_SHIFT) speed /= 1.2;
 		else speed /= 2;
 		set_speed(speed);
 		return true;
-	case GF_KEY_N:
+	case 'N':
 		speed = 1;
 		set_speed(speed);
 		return true;
-	case GF_KEY_SPACE:
+	case 'space':
 		paused = !paused;
 		set_speed(paused ? 0 : speed);
 		return true;
-	case GF_KEY_S:
+	case 'S':
 		paused = 2;
 		vout.update('step', '1');
 		if (aout) aout.update('speed', '0');
 		check_duration();
 		return true;
-	case GF_KEY_RIGHT:
+	case 'Right':
 		if (interactive_scene) return false;
 		do_seek(1, evt.keymods, false);
 		return true;
-	case GF_KEY_LEFT:
+	case 'Left':
 		if (interactive_scene) return false;
 		do_seek(-1, evt.keymods, false);
 		return true;
-	case GF_KEY_UP:
+	case 'Up':
 		if (interactive_scene) return false;
 		do_seek(1, evt.keymods, true);
 		return true;
-	case GF_KEY_DOWN:
+	case 'Down':
 		if (interactive_scene) return false;
 		do_seek(-1, evt.keymods, true);
 		return true;
 
-	case GF_KEY_F:
+	case 'F':
 		if (audio_only) return;
 		fullscreen = !fullscreen;
 		vout.update('fullscreen', ''+fullscreen);
 		return true;
 
-	case GF_KEY_H:
+	case 'H':
 		if (overlay_type==OL_AUTH) break;
 		//hide player
 		if (audio_only && (overlay_type==OL_PLAY)) {
@@ -1018,13 +1116,13 @@ function process_keyboard(evt)
 		}
 		overlay_type=OL_HELP;
 		toggle_overlay();
-		//show player player
+		//show player
 		if (!ol_visible && audio_only) {
 			overlay_type=OL_PLAY;
 			toggle_overlay();
 		}
 		return true;
-	case GF_KEY_I:
+	case 'I':
 		if (overlay_type==OL_AUTH) break;
 		//hide player
 		if (audio_only && (overlay_type==OL_PLAY)) {
@@ -1032,13 +1130,13 @@ function process_keyboard(evt)
 		}
 		overlay_type=OL_STATS;
 		toggle_overlay();
-		//show player player
+		//show player
 		if (!ol_visible && audio_only) {
 			overlay_type=OL_PLAY;
 			toggle_overlay();
 		}
 		return true;
-	case GF_KEY_P:
+	case 'P':
 		if (overlay_type==OL_AUTH) break;
 		//do not untoggle for audio only
 		if (audio_only) return;
@@ -1046,7 +1144,7 @@ function process_keyboard(evt)
 		if (!ol_visible) init_wnd=true;
 		toggle_overlay();
 		return true;
-	case GF_KEY_R:
+	case 'R':
 		if (audio_only) return;
 		rot = vout.get_arg('vrot');
 		rot++;
@@ -1056,7 +1154,7 @@ function process_keyboard(evt)
 		else if (rot==2) vout.update('vrot', '180');
 		else vout.update('vrot', '270');
 		return true;
-	case GF_KEY_M:
+	case 'M':
 		if (audio_only) return;
 		flip = vout.get_arg('vflip');
 		flip++;
@@ -1071,6 +1169,7 @@ function process_keyboard(evt)
 	}
 	return false;
 }
+
 
 session.set_auth_fun( (site, user, pass, secure, auth_cbk) => {
 	overlay_type_bck = overlay_type;

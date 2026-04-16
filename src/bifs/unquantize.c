@@ -60,7 +60,7 @@ void gf_bifs_dec_qp14_set_length(GF_BifsDecoder * codec, u32 NbElements)
 
 GF_Err gf_bifs_dec_qp_set(GF_BifsDecoder *codec, GF_Node *qp)
 {
-	assert(gf_node_get_tag(qp) == TAG_MPEG4_QuantizationParameter);
+	gf_assert(gf_node_get_tag(qp) == TAG_MPEG4_QuantizationParameter);
 
 	/*if we have an active QP, push it into the stack*/
 	if (codec->ActiveQP && ((GF_Node*)codec->ActiveQP != codec->scenegraph->global_qp) )
@@ -284,7 +284,7 @@ GF_Err Q_DecCoordOnUnitSphere(GF_BifsDecoder *codec, GF_BitStream *bs, u32 NbBit
 	s32 value;
 	Fixed tang[4], delta;
 	s32 dir;
-	if (NbBits>32) return GF_NON_COMPLIANT_BITSTREAM;
+	if (!NbBits || NbBits>32) return GF_NON_COMPLIANT_BITSTREAM;
 	if (NbComp != 2 && NbComp != 3) return GF_BAD_PARAM;
 
 	//only 2 or 3 comp in the quantized version

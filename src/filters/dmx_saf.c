@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2005-2022
+ *			Copyright (c) Telecom ParisTech 2005-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / SAF demuxer filter
@@ -28,6 +28,8 @@
 #include <gpac/thread.h>
 #include <gpac/list.h>
 #include <gpac/bitstream.h>
+
+#ifndef GPAC_DISABLE_SAF
 
 typedef struct
 {
@@ -111,7 +113,7 @@ static void safdmx_demux(GF_Filter *filter, GF_SAFDmxCtx *ctx, char *data, u32 d
 		avail-=8;
 
 		if (au_size > avail) break;
-		assert(au_size>=2);
+		gf_assert(au_size>=2);
 
 		type = gf_bs_read_int(bs, 4);
 		stream_id = gf_bs_read_int(bs, 12);
@@ -231,7 +233,6 @@ static void safdmx_check_dur(GF_SAFDmxCtx *ctx)
 	GF_BitStream *bs;
 	GF_Fraction64 dur;
 	const GF_PropertyValue *p;
-	StreamInfo si[1024];
 	FILE *stream;
 
 
@@ -257,6 +258,7 @@ static void safdmx_check_dur(GF_SAFDmxCtx *ctx)
 	bs = gf_bs_from_file(stream, GF_BITSTREAM_READ);
 	ctx->file_size = gf_bs_get_size(bs);
 
+	StreamInfo *si = NULL;
 	dur.num = 0;
 	dur.den = 1000;
 	nb_streams=0;
@@ -277,9 +279,12 @@ static void safdmx_check_dur(GF_SAFDmxCtx *ctx)
 				gf_bs_read_u16(bs);
 				ts_res = gf_bs_read_u24(bs);
 				au_size -= 5;
-				si[nb_streams].stream_id = stream_id;
-				si[nb_streams].ts_res = ts_res;
-				nb_streams++;
+				si = gf_realloc(si, sizeof(StreamInfo)*(nb_streams+1));
+				if (si) {
+					si[nb_streams].stream_id = stream_id;
+					si[nb_streams].ts_res = ts_res;
+					nb_streams++;
+				}
 			}
 		}
 		if (ts_res && (au_type==4)) {
@@ -289,6 +294,7 @@ static void safdmx_check_dur(GF_SAFDmxCtx *ctx)
 		}
 		gf_bs_skip_bytes(bs, au_size);
 	}
+	gf_free(si);
 	gf_bs_del(bs);
 	gf_fclose(stream);
 
@@ -454,17 +460,25 @@ GF_FilterRegister SAFDmxRegister = {
 	GF_FS_SET_DESCRIPTION("SAF demultiplexer")
 	GF_FS_SET_HELP("This filter demultiplexes SAF (MPEG-4 Simple Aggregation Format for LASeR) files/data into a set of media PIDs and frames.")
 	.private_size = sizeof(GF_SAFDmxCtx),
+	.flags = GF_FS_REG_USE_SYNC_READ,
 	.initialize = safdmx_initialize,
 	.finalize = safdmx_finalize,
 	SETCAPS(SAFDmxCaps),
 	.configure_pid = safdmx_configure_pid,
 	.process = safdmx_process,
 	.process_event = safdmx_process_event,
-	.probe_data = safdmx_probe_data
+	.probe_data = safdmx_probe_data,
+	.hint_class_type = GF_FS_CLASS_DEMULTIPLEXER
 };
 
 const GF_FilterRegister *safdmx_register(GF_FilterSession *session)
 {
 	return &SAFDmxRegister;
 }
+#else
+const GF_FilterRegister *safdmx_register(GF_FilterSession *session)
+{
+	return NULL;
+}
+#endif
 

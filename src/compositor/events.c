@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -27,6 +27,8 @@
 #include "nodes_stacks.h"
 #include "mpeg4_grouping.h"
 #include <gpac/utf.h>
+
+#ifndef GPAC_DISABLE_COMPOSITOR
 
 static GF_Node *browse_parent_for_focus(GF_Compositor *compositor, GF_Node *elt, Bool prev_focus);
 
@@ -143,8 +145,8 @@ GF_Err gf_sc_paste_text(GF_Compositor *compositor, const char *text)
 
 	gf_sc_lock(compositor, GF_TRUE);
 
-	conv_buf = (u16*)gf_malloc(sizeof(u16)*(len+1));
-	len = gf_utf8_mbstowcs(conv_buf, len, &text);
+	conv_buf = (u16*)gf_malloc(sizeof(u16)*((len/2)*2+2));
+	len = gf_utf8_mbstowcs(conv_buf, len+1, &text);
 	if (len == GF_UTF8_FAIL) return GF_IO_ERR;
 
 	compositor->sel_buffer_alloc += len;
@@ -893,7 +895,7 @@ Bool gf_sc_exec_event_vrml(GF_Compositor *compositor, GF_Event *ev)
 	}
 
 	count = gf_list_count(compositor->sensors);
-	/*if we have a hit node at the compositor level, use "touch" as default cursor - this avoid
+	/*if we have a hit node at the compositor level, use "touch" as default cursor - this avoids
 	resetting the cursor when the picked node is a DOM node in a composite texture*/
 //	stype = (compositor->hit_node!=NULL) ? GF_CURSOR_TOUCH : GF_CURSOR_NORMAL;
 	stype = GF_CURSOR_NORMAL;
@@ -1991,8 +1993,11 @@ Bool gf_sc_exec_event(GF_Compositor *compositor, GF_Event *evt)
 	Bool ret = GF_FALSE;
 	if (evt->type <= GF_EVENT_LAST_MOUSE) {
 		if (compositor->sgaze) {
-			compositor->gaze_x = evt->mouse.x;
-			compositor->gaze_y = evt->mouse.y;
+			if ((compositor->gaze_x != evt->mouse.x) || (compositor->gaze_y != evt->mouse.y)) {
+				compositor->gaze_changed = GF_TRUE;
+				compositor->gaze_x = evt->mouse.x;
+				compositor->gaze_y = evt->mouse.y;
+			}
 		}
 #ifndef GPAC_DISABLE_3D
 		else if ((compositor->visual->autostereo_type==GF_3D_STEREO_SIDE) || (compositor->visual->autostereo_type==GF_3D_STEREO_HEADSET)) {
@@ -2088,4 +2093,4 @@ void gf_sc_key_navigator_del(GF_Compositor *sr, GF_Node *n)
 }
 
 
-
+#endif //GPAC_DISABLE_COMPOSITOR

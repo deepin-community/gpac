@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2017-2022
+ *			Copyright (c) Telecom ParisTech 2017-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / compositor filter
@@ -29,7 +29,7 @@
 //to set caps in filter session, to cleanup!
 #include "../filter_core/filter_session.h"
 
-#ifndef GPAC_DISABLE_PLAYER
+#ifndef GPAC_DISABLE_COMPOSITOR
 
 GF_Err compose_bifs_dec_config_input(GF_Scene *scene, GF_FilterPid *pid, u32 oti, Bool is_remove);
 GF_Err compose_bifs_dec_process(GF_Scene *scene, GF_FilterPid *pid);
@@ -45,8 +45,10 @@ static GF_Err compose_process(GF_Filter *filter)
 	Bool ret;
 	GF_Compositor *ctx = (GF_Compositor *) gf_filter_get_udta(filter);
 	if (!ctx) return GF_BAD_PARAM;
-	if (!ctx->vout) return GF_OK;
-
+	//if acting as a source, we may not have a vout setup yet if we have not traversed the graph
+	if (!ctx->vout && !ctx->src) {
+		return GF_OK;
+	}
 	if (ctx->check_eos_state == 2)
 		return GF_EOS;
 
@@ -113,15 +115,19 @@ static GF_Err compose_process(GF_Filter *filter)
 		Bool was_over = GF_FALSE;
 		/*remember to check for eos*/
 		if (ctx->dur<0) {
-			if (ctx->frame_number >= (u32) -ctx->dur)
+			if (ctx->frame_number >= (u32) -ctx->dur) {
 				ctx->check_eos_state = 2;
+				gf_filter_abort(filter);
+			}
 		} else if (ctx->dur>0) {
 			Double n = ctx->scene_sampled_clock;
 			n /= 1000;
-			if (n>=ctx->dur)
+			if (n>=ctx->dur) {
 				ctx->check_eos_state = 2;
-			else if (!ret && ctx->vfr && !ctx->check_eos_state && !nb_sys_streams_active && ctx->scene_sampled_clock && !ctx->validator_mode) {
+				gf_filter_abort(filter);
+			} else if (!ret && ctx->vfr && !ctx->check_eos_state && !nb_sys_streams_active && ctx->scene_sampled_clock && !ctx->validator_mode) {
 				ctx->check_eos_state = 1;
+				ctx->last_check_pass = 0;
 				if (!ctx->validator_mode)
 					ctx->force_next_frame_redraw = GF_TRUE;
 			}
@@ -130,6 +136,9 @@ static GF_Err compose_process(GF_Filter *filter)
 			was_over = GF_TRUE;
 		} else if (ctx->sys_frames_pending) {
 			ctx->check_eos_state = 0;
+		} else if (gf_filter_end_of_session(filter)) {
+			ctx->check_eos_state = 2;
+			gf_filter_abort(filter);
 		}
 
 		if (ctx->timeout && (ctx->check_eos_state == 1) && !gf_filter_connections_pending(filter)) {
@@ -183,8 +192,8 @@ static GF_Err compose_process(GF_Filter *filter)
 
 	//player mode
 	
-	//quit event seen, do not flush, just abort and return last error
-	if (ctx->check_eos_state) {
+	//quit event seen or session is ending, do not flush, just abort and return last error
+	if (ctx->check_eos_state || gf_filter_end_of_session(filter)) {
 		gf_filter_abort(filter);
 		return ctx->last_error ? ctx->last_error : GF_EOS;
 	}
@@ -225,7 +234,8 @@ static void compositor_setup_vout(GF_Compositor *ctx)
 	pid = ctx->vout = gf_filter_pid_new(ctx->filter);
 	gf_filter_pid_set_name(pid, "vout");
 	//compositor initiated for RT playback, vout pid may not be connected
-	gf_filter_pid_set_loose_connect(pid);
+	if (ctx->player)
+		gf_filter_pid_set_loose_connect(pid);
 
 	gf_filter_pid_set_property(pid, GF_PROP_PID_CODECID, &PROP_UINT(GF_CODECID_RAW) );
 	gf_filter_pid_set_property(pid, GF_PROP_PID_STREAM_TYPE, &PROP_UINT(GF_STREAM_VISUAL) );
@@ -301,7 +311,7 @@ static GF_Err compose_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool i
 
 	odm = gf_filter_pid_get_udta(pid);
 
-	//in filter mode, check we can handle creating a canvas from input video format. If not, negociate a supported format
+	//in filter mode, check we can handle creating a canvas from input video format. If not, negotiate a supported format
 	if (!ctx->player) {
 		prop = gf_filter_pid_get_property(pid, GF_PROP_PID_PIXFMT);
 		if (prop && (!odm || (odm->mo && (odm->mo->pixelformat != prop->value.uint)))) {
@@ -320,7 +330,7 @@ static GF_Err compose_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool i
 				} else {
 					new_fmt = transparent ? GF_PIXEL_RGBA : GF_PIXEL_RGB;
 				}
-				gf_filter_pid_negociate_property(pid, GF_PROP_PID_PIXFMT, &PROP_UINT(new_fmt) );
+				gf_filter_pid_negotiate_property(pid, GF_PROP_PID_PIXFMT, &PROP_UINT(new_fmt) );
 				return GF_OK;
 			}
 		}
@@ -343,6 +353,9 @@ static GF_Err compose_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool i
 				return GF_NOT_SUPPORTED;
 			if (odm->mo) {
 				odm->mo->config_changed = GF_TRUE;
+				if (gf_filter_pid_get_property(pid, GF_PROP_PID_SRD_MAP))
+					odm->mo->srd_map_changed  = GF_TRUE;
+
 				gf_mo_update_caps_ex(odm->mo, GF_TRUE);
 				if (odm->mo->config_changed && (odm->type == GF_STREAM_VISUAL) && odm->parentscene && odm->parentscene->is_dynamic_scene) {
 					gf_scene_force_size_to_video(odm->parentscene, odm->mo);
@@ -422,7 +435,7 @@ static GF_Err compose_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool i
 			}
 			continue;
 		}
-		assert(sns->owner);
+		gf_fatal_assert(sns->owner);
 		if (gf_filter_pid_is_filter_in_parents(pid, sns->source_filter)) {
 			Bool scene_setup = GF_FALSE;
 			if (!sns->owner->subscene && sns->owner->parentscene && (mtype!=GF_STREAM_OD) && (mtype!=GF_STREAM_SCENE)) {
@@ -469,7 +482,7 @@ static GF_Err compose_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool i
 					return GF_OK;
 				}
 
-				assert(sns->owner->parentscene);
+				gf_fatal_assert(sns->owner->parentscene);
 				sns->owner->subscene = gf_scene_new(ctx, sns->owner->parentscene);
 				sns->owner->subscene->root_od = sns->owner;
 			}
@@ -478,7 +491,7 @@ static GF_Err compose_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool i
 		}
 	}
 	if (!scene) scene = def_scene;
-	assert(scene);
+	if (!scene) return GF_SERVICE_ERROR;
 
 	GF_LOG(GF_LOG_INFO, GF_LOG_COMPOSE, ("[Compositor] Configuring PID %s\n", gf_stream_type_name(mtype)));
 
@@ -564,6 +577,10 @@ static GF_Err compose_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool i
 		if (!sep) {
 			prop = gf_filter_pid_get_property(pid, GF_PROP_PID_PROJECTION_TYPE);
 			if (prop && (prop->value.uint==GF_PROJ360_EQR)) scene_vr_type = 1;
+		}
+		if (scene_vr_type) {
+			prop = gf_filter_pid_get_property(pid, GF_PROP_PID_SRD_MAP);
+			if (prop) scene_vr_type = 2;
 		}
 		if (scene_vr_type) {
 			if (scene->vr_type != scene_vr_type) reset = GF_TRUE;
@@ -819,6 +836,8 @@ static GF_Err compose_initialize(GF_Filter *filter)
 	} else if (ctx->noback) {
 		ctx->forced_alpha = GF_TRUE;
 	}
+	if (ctx->src)
+		ctx->vfr = GF_TRUE;
 
 	//playout buffer not greater than max buffer
 	if (ctx->buffer > ctx->mbuffer)
@@ -899,6 +918,8 @@ static GF_Err compose_initialize(GF_Filter *filter)
 	else if (ctx->src) {
 		gf_sc_connect_from_time(ctx, ctx->src, 0, 0, 0, NULL);
 	}
+
+	gf_opts_set_key("temp", "compositor", "yes");
 	return GF_OK;
 }
 
@@ -1008,8 +1029,8 @@ static GF_FilterArgs CompositorArgs[] =
 	"", GF_PROP_UINT, "none", "none|walk|fly|pan|game|slide|exam|orbit|vr", GF_FS_ARG_UPDATE|GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(linegl), "indicate that outlining shall be done through OpenGL pen width rather than vectorial outlining", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_UPDATE|GF_FS_ARG_HINT_EXPERT},
 	{ OFFS(epow2), "emulate power-of-2 textures for OpenGL (old hardware). Ignored if OpenGL rectangular texture extension is enabled\n"
-	"- yes: video texture is not resized but emulated with padding. This usually speeds up video mapping on shapes but disables texture transformations\n"
-	"- no: video is resized to a power of 2 texture when mapping to a shape", GF_PROP_BOOL, "true", NULL, GF_FS_ARG_UPDATE|GF_FS_ARG_HINT_EXPERT},
+	"- true: video texture is not resized but emulated with padding. This usually speeds up video mapping on shapes but disables texture transformations\n"
+	"- false: video is resized to a power of 2 texture when mapping to a shape", GF_PROP_BOOL, "true", NULL, GF_FS_ARG_UPDATE|GF_FS_ARG_HINT_EXPERT},
 	{ OFFS(paa), "indicate whether polygon antialiasing should be used in full antialiasing mode. If not set, only lines and points antialiasing are used", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_UPDATE|GF_FS_ARG_HINT_EXPERT},
 	{ OFFS(bcull), "indicate whether backface culling shall be disable or not\n"
 				"- on: enables backface culling\n"
@@ -1134,6 +1155,13 @@ static const GF_FilterCapability CompositorCaps[] =
 	CAP_UINT(GF_CAPS_INPUT, GF_PROP_PID_STREAM_TYPE, GF_STREAM_OD),
 	CAP_UINT(GF_CAPS_OUTPUT, GF_PROP_PID_STREAM_TYPE, GF_STREAM_VISUAL),
 	CAP_UINT(GF_CAPS_INPUT_OUTPUT, GF_PROP_PID_CODECID, GF_CODECID_RAW),
+	{0},
+	CAP_UINT(GF_CAPFLAG_RECONFIG, GF_PROP_PID_PIXFMT, 0),
+	CAP_UINT(GF_CAPFLAG_RECONFIG, GF_PROP_PID_WIDTH, 0),
+	CAP_UINT(GF_CAPFLAG_RECONFIG, GF_PROP_PID_HEIGHT, 0),
+	CAP_UINT(GF_CAPFLAG_RECONFIG, GF_PROP_PID_SAMPLE_RATE, 0),
+	CAP_UINT(GF_CAPFLAG_RECONFIG, GF_PROP_PID_NUM_CHANNELS, 0),
+	CAP_UINT(GF_CAPFLAG_RECONFIG, GF_PROP_PID_AUDIO_FORMAT, 0),
 };
 
 
@@ -1182,6 +1210,7 @@ const GF_FilterRegister CompositorFilterRegister = {
 	"- If the URL gives less views than rendered, the views will be repeated\n"
 	"- If the URL gives more views than rendered, the extra views will be ignored\n"
 	"\n"
+	"\n"
 	"The compositor can act as a source filter when the [-src]() option is explicitly set, independently from the operating mode:\n"
 	"EX gpac compositor:src=source.mp4 vout\n"
 	"\n"
@@ -1202,9 +1231,10 @@ const GF_FilterRegister CompositorFilterRegister = {
 	.reconfigure_output = compose_reconfig_output,
 	.update_arg = compose_update_arg,
 	.probe_url = compose_probe_url,
+	.hint_class_type = GF_FS_CLASS_AV
 };
 
-const GF_FilterRegister *compose_filter_register(GF_FilterSession *session)
+const GF_FilterRegister *compositor_register(GF_FilterSession *session)
 {
 	u32 i=0;
 	u32 nb_args = sizeof(CompositorArgs) / sizeof(GF_FilterArgs) - 1;
@@ -1220,9 +1250,9 @@ const GF_FilterRegister *compose_filter_register(GF_FilterSession *session)
 	return &CompositorFilterRegister;
 }
 #else
-const GF_FilterRegister *compose_filter_register(GF_FilterSession *session)
+const GF_FilterRegister *compositor_register(GF_FilterSession *session)
 {
 	return NULL;
 }
-#endif // GPAC_DISABLE_PLAYER
+#endif // GPAC_DISABLE_COMPOSITOR
 

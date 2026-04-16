@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / BIFS codec sub-project
@@ -30,8 +30,8 @@
 #ifndef GPAC_DISABLE_BIFS
 
 
-GF_Err BD_DecMFFieldList(GF_BifsDecoder * codec, GF_BitStream *bs, GF_Node *node, GF_FieldInfo *field);
-GF_Err BD_DecMFFieldVec(GF_BifsDecoder * codec, GF_BitStream *bs, GF_Node *node, GF_FieldInfo *field);
+GF_Err BD_DecMFFieldList(GF_BifsDecoder * codec, GF_BitStream *bs, GF_Node *node, GF_FieldInfo *field, Bool is_mem_com);
+GF_Err BD_DecMFFieldVec(GF_BifsDecoder * codec, GF_BitStream *bs, GF_Node *node, GF_FieldInfo *field, Bool is_mem_com);
 
 
 
@@ -860,6 +860,7 @@ static GF_Err BD_DecIndexValueReplace(GF_BifsDecoder * codec, GF_BitStream *bs)
 		pos = 0;
 		break;
 	case 3:
+		if (!field.far_ptr) return GF_NON_COMPLIANT_BITSTREAM;
 		pos = ((GenMFField *) field.far_ptr)->count - 1;
 		break;
 	default:
@@ -999,7 +1000,7 @@ void command_buffers_del(GF_List *command_buffers);
 GF_Err gf_bifs_dec_proto_list(GF_BifsDecoder * codec, GF_BitStream *bs, GF_List *proto_list)
 {
 	u8 flag, field_type, event_type, useQuant, useAnim, f;
-	u32 i, NbRoutes, ID, numProtos, numFields, count, qpsftype, QP_Type, NumBits, nb_cmd_bufs;
+	u32 i, NbRoutes, ID, /*numProtos, */ numFields, count, qpsftype, QP_Type, NumBits, nb_cmd_bufs;
 	GF_Node *node;
 	char name[1000];
 	GF_ProtoFieldInterface *proto_field;
@@ -1017,7 +1018,7 @@ GF_Err gf_bifs_dec_proto_list(GF_BifsDecoder * codec, GF_BitStream *bs, GF_List 
 	e = GF_OK;
 
 	nb_cmd_bufs = gf_list_count(codec->command_buffers);
-	numProtos = 0;
+	//numProtos = 0;
 	proto = NULL;
 	flag = gf_bs_read_int(bs, 1);
 	while (flag) {
@@ -1073,15 +1074,15 @@ GF_Err gf_bifs_dec_proto_list(GF_BifsDecoder * codec, GF_BitStream *bs, GF_List 
 					if (codec->info->config.UsePredictiveMFField) {
 						f = gf_bs_read_int(bs, 1);
 						/*predictive encoding of proto field is not possible since QP info is not present yet*/
-						assert(!f);
+						gf_assert(!f);
 					}
 					/*reserved*/
 					f = gf_bs_read_int(bs, 1);
 					if (!f) {
 						if (gf_bs_read_int(bs, 1)) {
-							e = BD_DecMFFieldList(codec, bs, NULL, &field);
+							e = BD_DecMFFieldList(codec, bs, NULL, &field, GF_FALSE);
 						} else {
-							e = BD_DecMFFieldVec(codec, bs, NULL, &field);
+							e = BD_DecMFFieldVec(codec, bs, NULL, &field, GF_FALSE);
 						}
 					}
 				}
@@ -1106,7 +1107,7 @@ GF_Err gf_bifs_dec_proto_list(GF_BifsDecoder * codec, GF_BitStream *bs, GF_List 
 
 			if (codec->info->config.UsePredictiveMFField) {
 				flag = gf_bs_read_int(bs, 1);
-				assert(!flag);
+				gf_assert(!flag);
 			}
 			/*reserved*/
 			gf_bs_read_int(bs, 1);
@@ -1114,9 +1115,9 @@ GF_Err gf_bifs_dec_proto_list(GF_BifsDecoder * codec, GF_BitStream *bs, GF_List 
 			/*list or vector*/
 			flag = gf_bs_read_int(bs, 1);
 			if (flag) {
-				e = BD_DecMFFieldList(codec, bs, NULL, &field);
+				e = BD_DecMFFieldList(codec, bs, NULL, &field, GF_FALSE);
 			} else {
-				e = BD_DecMFFieldVec(codec, bs, NULL, &field);
+				e = BD_DecMFFieldVec(codec, bs, NULL, &field, GF_FALSE);
 			}
 			if (e) goto exit;
 		}
@@ -1254,7 +1255,7 @@ GF_Err gf_bifs_dec_proto_list(GF_BifsDecoder * codec, GF_BitStream *bs, GF_List 
 			}
 		}
 
-		numProtos ++;
+		//numProtos ++;
 
 		/*4- get next proto*/
 		flag = gf_bs_read_int(bs, 1);

@@ -9,7 +9,7 @@ endif
 
 vpath %.c $(SRC_PATH)
 
-all:	version
+all: version unit_tests
 	$(MAKE) -C src all
 	$(MAKE) -C applications all
 ifneq ($(STATIC_BINARY),yes)
@@ -23,13 +23,16 @@ config.mak:
 
 
 GITREV_PATH:=$(SRC_PATH)/include/gpac/revision.h
-TAG:=$(shell git --git-dir=$(SRC_PATH)/.git describe --tags --abbrev=0 2> /dev/null)
-VERSION:=$(shell echo `git --git-dir=$(SRC_PATH)/.git describe --tags --long  || echo "UNKNOWN"` | sed "s/^$(TAG)-//")
+TAG:=$(shell git --git-dir=$(SRC_PATH)/.git describe --tags --abbrev=0 --match "v*" 2> /dev/null)
+VERSION:=$(shell echo `git --git-dir=$(SRC_PATH)/.git describe --tags --long --match "v*" || echo "UNKNOWN"` | sed "s/^$(TAG)-//")
 BRANCH:=$(shell git --git-dir=$(SRC_PATH)/.git rev-parse --abbrev-ref HEAD 2> /dev/null || echo "UNKNOWN")
+
+# strip illegal debian version string characters + illegal filename charachers
+DHBRANCH:=$(shell echo "$(BRANCH)" | sed 's/[^-+.0-9a-zA-Z~]/-/g' )
 
 version:
 	@if [ -d $(SRC_PATH)/".git" ]; then \
-		echo "#define GPAC_GIT_REVISION	\"$(VERSION)-$(BRANCH)\"" > $(GITREV_PATH).new; \
+		echo "#define GPAC_GIT_REVISION	\"$(VERSION)-$(DHBRANCH)\"" > $(GITREV_PATH).new; \
 		if ! diff -q $(GITREV_PATH) $(GITREV_PATH).new >/dev/null ; then \
 			mv $(GITREV_PATH).new  $(GITREV_PATH); \
 		fi; \
@@ -54,7 +57,7 @@ depend:
 	$(MAKE) -C applications dep
 	$(MAKE) -C modules dep
 
-clean:
+clean: unit_tests_clean
 	$(MAKE) -C src clean
 	$(MAKE) -C applications clean
 	$(MAKE) -C modules clean
@@ -72,10 +75,61 @@ distclean:
 	@rm -f bin/gcc/gf_*$(DYN_LIB_SUFFIX) 2> /dev/null
 
 doc:
-	@cd $(SRC_PATH)/share/doc && doxygen
+	@cd $(SRC_PATH)/share/doc && doxygen && cp versions.html html-libgpac/
 
 man:
 	@cd $(SRC_PATH)/share/doc/man && MP4Box -genman && gpac -genman
+
+
+UT_CFG_PATH:=unittests/build/config
+
+unit_tests:
+ifeq ($(UNIT_TESTS),yes)
+	@echo "Unit Tests:"
+	@echo "- configuring"
+	@mkdir -p unittests/build/bin/gcc
+
+	@cp config.mak unittests/build/
+	@sed 's|BUILD_PATH=$(BUILD_PATH)|BUILD_PATH=$(BUILD_PATH)/unittests/build|g' config.mak | \
+		sed 's|-I"$(BUILD_PATH)"|-I"$(BUILD_PATH)/unittests/build"|g' > $(UT_CFG_PATH).mak.new
+	@if [ -e $(UT_CFG_PATH).mak ]; then \
+		if ! diff -q $(UT_CFG_PATH).mak $(UT_CFG_PATH).mak.new >/dev/null ; then \
+			mv $(UT_CFG_PATH).mak.new $(UT_CFG_PATH).mak; \
+		fi; \
+	else \
+		mv $(UT_CFG_PATH).mak.new $(UT_CFG_PATH).mak; \
+	fi
+
+	@sed 's/GF_STATIC static/GF_STATIC GF_EXPORT/' config.h > $(UT_CFG_PATH).h.new.tmp
+	@sed 's/GF_NOT_EXPORTED/GF_NOT_EXPORTED GF_EXPORT/' $(UT_CFG_PATH).h.new.tmp > $(UT_CFG_PATH).h.new
+	@rm $(UT_CFG_PATH).h.new.tmp
+	@if [ -e $(UT_CFG_PATH).h ]; then \
+		if ! diff -q $(UT_CFG_PATH).h $(UT_CFG_PATH).h.new >/dev/null ; then \
+			mv $(UT_CFG_PATH).h.new $(UT_CFG_PATH).h; \
+		else \
+			rm $(UT_CFG_PATH).h.new; \
+		fi; \
+	else \
+		mv $(UT_CFG_PATH).h.new $(UT_CFG_PATH).h; \
+	fi
+
+	@$(SRC_PATH)/unittests/build.sh > unittests/build/bin/gcc/unittests.c
+
+	@echo "- building"
+	@cd unittests/build && $(MAKE) -C src && $(MAKE) -C src unit_tests
+
+	@echo "- executing"
+	$(SRC_PATH)/unittests/launch.sh
+
+	@echo "- done"
+endif
+
+unit_tests_clean:
+ifeq ($(UNIT_TESTS),yes)
+	@echo "Cleaning unit tests artifacts"
+	@rm -rf unittests/build/bin
+	@cd unittests/build && $(MAKE) -C src clean
+endif
 
 test_suite:
 	@cd $(SRC_PATH)/testsuite && ./make_tests.sh -precommit -p=0
@@ -87,7 +141,7 @@ lcov_only:
 	@echo "Generating lcov info in coverage.info"
 	@rm -f ./gpac-conf-* > /dev/null
 	@lcov -q -capture --directory . --output-file all.info
-	@lcov --remove all.info '*/usr/*' '*/opt/*' '*/include/*' '*/validator/*' '*/quickjs/*' '*/jsmods/WebGLRenderingContextBase*' '*/utils/Remotery*' '*/utils/gzio*'  --output coverage.info
+	@lcov --remove all.info '*/usr/*' '*/opt/*' '*/include/*' '*/validator/*' '*/quickjs/*' '*/jsmods/WebGLRenderingContextBase*' '*/utils/gzio*'  --output coverage.info
 	@rm all.info
 	@echo "Purging lcov info"
 	@cd src ; for dir in * ; do cd .. ; sed -i -- "s/$$dir\/$$dir\//$$dir\//g" coverage.info; cd src; done ; cd ..
@@ -145,7 +199,7 @@ endif
 	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/gpac/shaders"
 	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/gpac/scripts"
 	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/gpac/python"
-	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/gpac/vis"
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/gpac/rmtws"
 	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/default.cfg $(DESTDIR)$(prefix)/share/gpac/
 
 ifneq ($(CONFIG_DARWIN),yes)
@@ -161,14 +215,14 @@ endif
 	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/gui/gwlib.js "$(DESTDIR)$(prefix)/share/gpac/gui/"
 
 
-ifeq ($(CONFIG_DARWIN),yes)
+ifneq (,$(filter yes,$(CONFIG_DARWIN) $(CONFIG_FREEBSD)))
 	cp $(SRC_PATH)/share/gui/icons/* "$(DESTDIR)$(prefix)/share/gpac/gui/icons/"
 	cp -R $(SRC_PATH)/share/gui/extensions/* "$(DESTDIR)$(prefix)/share/gpac/gui/extensions/"
 	cp $(SRC_PATH)/share/shaders/* "$(DESTDIR)$(prefix)/share/gpac/shaders/"
 	cp -R $(SRC_PATH)/share/scripts/* "$(DESTDIR)$(prefix)/share/gpac/scripts/"
 	cp -R $(SRC_PATH)/share/python/* "$(DESTDIR)$(prefix)/share/gpac/python/"
 	cp $(SRC_PATH)/share/res/* "$(DESTDIR)$(prefix)/share/gpac/res/"
-	cp -R $(SRC_PATH)/share/vis/* "$(DESTDIR)$(prefix)/share/gpac/vis/"
+	cp -R $(SRC_PATH)/share/rmtws/* "$(DESTDIR)$(prefix)/share/gpac/rmtws/"
 else
 	cp --no-preserve=mode,ownership,timestamp $(SRC_PATH)/share/gui/icons/* $(DESTDIR)$(prefix)/share/gpac/gui/icons/
 	cp -R --no-preserve=mode,ownership,timestamp $(SRC_PATH)/share/gui/extensions/* $(DESTDIR)$(prefix)/share/gpac/gui/extensions/
@@ -176,7 +230,7 @@ else
 	cp -R --no-preserve=mode,ownership,timestamp $(SRC_PATH)/share/scripts/* $(DESTDIR)$(prefix)/share/gpac/scripts/
 	cp -R --no-preserve=mode,ownership,timestamp $(SRC_PATH)/share/python/* $(DESTDIR)$(prefix)/share/gpac/python/
 	cp --no-preserve=mode,ownership,timestamp $(SRC_PATH)/share/res/* $(DESTDIR)$(prefix)/share/gpac/res/
-	cp -R --no-preserve=mode,ownership,timestamp $(SRC_PATH)/share/vis/* $(DESTDIR)$(prefix)/share/gpac/vis/
+	cp -R --no-preserve=mode,ownership,timestamp $(SRC_PATH)/share/rmtws/* $(DESTDIR)$(prefix)/share/gpac/rmtws/
 endif
 
 lninstall:
@@ -225,7 +279,7 @@ uninstall:
 
 
 installdylib:
-ifneq ($(STATIC_BINARY),yes)
+ifneq ($(STATIC_BUILD),yes)
 
 	$(INSTALL) -d "$(DESTDIR)$(prefix)/$(lib_dir)"
 
@@ -299,11 +353,12 @@ dmg:
 endif
 
 ifeq ($(CONFIG_LINUX),yes)
+
 deb:
 	git checkout --	debian/changelog
 	fakeroot debian/rules clean
 	# add version to changelog for final filename
-	sed -i -r "s/^(\w+) \(([0-9\.]+)(-[A-Z]+)?\)/\1 (\2\3-rev$(VERSION)-$(BRANCH))/" debian/changelog
+	sed -i -r "s/^(\w+) \(([0-9\.]+)(-[A-Z]+)?\)/\1 (\2\3-rev$(VERSION)-$(DHBRANCH))/" debian/changelog
 	fakeroot debian/rules configure
 	fakeroot debian/rules binary
 	rm -rf debian/

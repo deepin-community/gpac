@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2025
  *					All rights reserved
  *
  *  This file is part of GPAC / common tools sub-project
@@ -25,43 +25,80 @@
 
 #include <gpac/tools.h>
 #include <gpac/thread.h>
+#include <gpac/utf.h>
 
 
 //ugly patch, we have a concurrence issue with gf_4cc_to_str, for now fixed by rolling buffers
 #define NB_4CC_BUF	10
 static char szTYPE_BUF[NB_4CC_BUF][GF_4CC_MSIZE];
-static u32 buf_4cc_idx=0;
+static u32 buf_4cc_idx = 0;
 
 GF_EXPORT
-const char *gf_4cc_to_str(u32 type)
+const char *gf_4cc_to_str_safe(u32 type, char szType[GF_4CC_MSIZE])
 {
 	u32 ch, i;
-	char *szTYPE = szTYPE_BUF[buf_4cc_idx];
-	char *name = (char *)szTYPE;
-	if (!type) return "00000000";
-	buf_4cc_idx++;
-	if (buf_4cc_idx>=NB_4CC_BUF)
-		buf_4cc_idx=0;
-
+	if (!type) {
+		strcpy(szType, "00000000");
+		return szType;
+	}
+	char *name = (char *)szType;
 	for (i = 0; i < 4; i++) {
 		ch = type >> (8 * (3-i) ) & 0xff;
 		if ( ch >= 0x20 && ch <= 0x7E ) {
 			*name = ch;
 			name++;
+		} else if (!gf_sys_is_test_mode() ) {
+			char szTmp[2];
+			szTmp[0] = 0xc2;
+			szTmp[1] = ch;
+			if (gf_utf8_is_legal(szTmp, 2)) {
+				name[0] = 0xc2;
+				name[1] = ch;
+				name+=2;
+			} else {
+				szTmp[0] = 0xc3;
+				if (gf_utf8_is_legal(szTmp, 2)) {
+					name[0] = 0xc3;
+					name[1] = ch;
+					name+=2;
+				} else {
+					sprintf(name, "%02X", ch);
+					name += 2;
+				}
+			}
 		} else {
 			sprintf(name, "%02X", ch);
 			name += 2;
 		}
 	}
 	*name = 0;
-	return (const char *) szTYPE;
+	return szType;
 }
+#include <gpac/thread.h>
+
+GF_EXPORT
+const char *gf_4cc_to_str(u32 type)
+{
+	if (!type) return "00000000";
+
+	// we get the value *before* the increment insuring that other thread get another value
+	u32 old_idx = safe_int_fetch_add(&buf_4cc_idx, 1);
+
+	// keep our specific value between 0 and NB_4CC_BUF-1
+	// we might have an issue when buf_4cc_idx > INT_MAX since our atomics cast to int
+	// when it gets > UINT_MAX it should just wrap around and be ok
+	u32 buffer_index = old_idx % NB_4CC_BUF;
+
+	return gf_4cc_to_str_safe(type, szTYPE_BUF[buffer_index]);
+}
+
+
 
 GF_EXPORT
 u32 gf_4cc_parse(const char *val)
 {
 	if (val && strlen(val)==4) return GF_4CC(val[0], val[1], val[2], val[3]);
-	GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[Core] Value is not a properly defined 4CC", val));
+	GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[Core] Value %s is not a properly defined 4CC\n", val));
 	return 0;
 }
 
@@ -109,12 +146,13 @@ static void gf_on_progress_std(const char *_title, u64 done, u64 total)
 
 	pos = MIN((u32) (20 * prog), 20);
 
-	if (pos>prev_pos) {
+	if (done != total && pos>prev_pos) {
 		prev_pos = 0;
 		prev_pc = 0;
 	}
 	pc = (u32) ( 100 * prog);
-	if ((pos!=prev_pos) || (pc!=prev_pc)) {
+
+	if ((done != total || prev_pos ) && ((pos!=prev_pos) || (pc!=prev_pc))) {
 		prev_pos = pos;
 		prev_pc = pc;
 		fprintf(stderr, "%s: |%s| (%02d/100)%c", szT, szProg[pos], pc, gf_prog_lf);
@@ -171,12 +209,14 @@ static struct log_tool_info {
 	u32 type;
 	const char *name;
 	GF_LOG_Level level;
+	Bool strict;
+	const char *alt;
 } global_log_tools [] =
 {
 	{ GF_LOG_CORE, "core", GF_LOG_WARNING },
 	{ GF_LOG_CODING, "coding", GF_LOG_WARNING },
 	{ GF_LOG_CONTAINER, "container", GF_LOG_WARNING },
-	{ GF_LOG_NETWORK, "network", GF_LOG_WARNING },
+	{ GF_LOG_NETWORK, "network", GF_LOG_WARNING, .alt = "net"  },
 	{ GF_LOG_HTTP, "http", GF_LOG_WARNING },
 	{ GF_LOG_RTP, "rtp", GF_LOG_WARNING },
 	{ GF_LOG_CODEC, "codec", GF_LOG_WARNING },
@@ -198,14 +238,31 @@ static struct log_tool_info {
 	{ GF_LOG_DASH, "dash", GF_LOG_WARNING },
 	{ GF_LOG_FILTER, "filter", GF_LOG_WARNING },
 	{ GF_LOG_SCHEDULER, "sched", GF_LOG_WARNING },
-	{ GF_LOG_ROUTE, "route", GF_LOG_WARNING },
+	{ GF_LOG_ROUTE, "route", GF_LOG_WARNING, .alt = "flute" },
 	{ GF_LOG_CONSOLE, "console", GF_LOG_INFO },
 	{ GF_LOG_APP, "app", GF_LOG_INFO },
+	{ GF_LOG_RMTWS, "rmtws", GF_LOG_WARNING },
 };
 
 #define GF_LOG_TOOL_MAX_NAME_SIZE (GF_LOG_TOOL_MAX*10)
 
 #endif
+
+u32 gf_log_parse_tool(const char *logs)
+{
+#ifndef GPAC_DISABLE_LOG
+	u32 i;
+	for (i=0; i<GF_LOG_TOOL_MAX; i++) {
+		if (!strcmp(global_log_tools[i].name, logs))
+			return global_log_tools[i].type;
+		if (global_log_tools[i].alt && !strcmp(global_log_tools[i].alt, logs))
+			return global_log_tools[i].type;
+	}
+	if (!strcmp(logs, "all"))
+		return GF_LOG_ALL;
+#endif
+	return GF_LOG_TOOL_UNDEFINED;
+}
 
 GF_EXPORT
 GF_Err gf_log_modify_tools_levels(const char *val_)
@@ -214,13 +271,14 @@ GF_Err gf_log_modify_tools_levels(const char *val_)
 	char tmp[GF_LOG_TOOL_MAX_NAME_SIZE];
 	const char *val = tmp;
 	if (!val_) val_ = "";
-	assert(strlen(val_) < GF_LOG_TOOL_MAX_NAME_SIZE);
+	if (strlen(val_) >= GF_LOG_TOOL_MAX_NAME_SIZE) return GF_BAD_PARAM;
 	strncpy(tmp, val_, GF_LOG_TOOL_MAX_NAME_SIZE - 1);
 	tmp[GF_LOG_TOOL_MAX_NAME_SIZE - 1] = 0;
 
 	while (val && strlen(val)) {
 		void default_log_callback(void *cbck, GF_LOG_Level level, GF_LOG_Tool tool, const char *fmt, va_list vlist);
 		u32 level;
+		Bool use_strict=GF_FALSE;
 		const char *next_val = NULL;
 		const char *tools = NULL;
 		/*look for log level*/
@@ -231,6 +289,12 @@ GF_Err gf_log_modify_tools_levels(const char *val_)
 				gf_log_set_callback(NULL, default_log_callback);
 				if (!val[3]) break;
 				val += 4;
+				continue;
+			} else if (!strcmp(val, "cl")) {
+				gpac_no_color_logs = GF_FALSE;
+				gf_log_set_callback(NULL, default_log_callback);
+				if (!val[2]) break;
+				val += 3;
 				continue;
 			} else if (!strcmp(val, "strict")) {
 				gf_log_set_strict_error(GF_TRUE);
@@ -250,7 +314,8 @@ GF_Err gf_log_modify_tools_levels(const char *val_)
 				return GF_BAD_PARAM;
 			}
 		}
-
+		char *strict_sep = strstr(sep_level+1, "+strict");
+		if (strict_sep) strict_sep[0] = 0;
 		if (!strnicmp(sep_level+1, "error", 5)) {
 			level = GF_LOG_ERROR;
 			next_val = sep_level+1 + 5;
@@ -271,9 +336,19 @@ GF_Err gf_log_modify_tools_levels(const char *val_)
 			level = GF_LOG_QUIET;
 			next_val = sep_level+1 + 5;
 		}
+		else if (!strnicmp(sep_level+1, "strict", 6)) {
+			level = GF_LOG_DEBUG+1;
+			next_val = sep_level+1 + 6;
+		}
 		else {
+			if (strict_sep) strict_sep[0] = '+';
 			GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("Unknown log level specified: %s\n", sep_level+1));
 			return GF_BAD_PARAM;
+		}
+		if (strict_sep) {
+			strict_sep[0] = '+';
+			use_strict = GF_TRUE;
+			next_val += 7;
 		}
 
 		sep_level[0] = 0;
@@ -292,11 +367,19 @@ GF_Err gf_log_modify_tools_levels(const char *val_)
 				gpac_no_color_logs = GF_TRUE;
 				gf_log_set_callback(NULL, default_log_callback);
 			}
+			else if (!strcmp(val, "cl")) {
+				gpac_no_color_logs = GF_FALSE;
+				gf_log_set_callback(NULL, default_log_callback);
+			}
 			else {
 				Bool found = GF_FALSE;
 				for (i=0; i<GF_LOG_TOOL_MAX; i++) {
-					if (!strcmp(global_log_tools[i].name, tools)) {
-						global_log_tools[i].level = level;
+					if (!strcmp(global_log_tools[i].name, tools)
+						|| (global_log_tools[i].alt && !strcmp(global_log_tools[i].alt, tools))
+					) {
+						if (level<=GF_LOG_DEBUG)
+							global_log_tools[i].level = level;
+						global_log_tools[i].strict = use_strict;
 						found = GF_TRUE;
 						break;
 					}
@@ -608,12 +691,78 @@ win32_ismtty:
 u32 call_lev = 0;
 u32 call_tool = 0;
 
+extern GF_Mutex *logs_mx;
+
+#include <gpac/list.h>
+GF_List *logs_extras = NULL;
+
+GF_EXPORT
+void gf_log_push_extra(const GF_LogExtra *log)
+{
+	if (!log) return;
+	gf_mx_p(logs_mx);
+	if (!logs_extras) logs_extras = gf_list_new();
+	if (gf_list_find(logs_extras, (void*)log)<0) {
+		gf_list_add(logs_extras, (void*)log);
+	}
+	gf_mx_v(logs_mx);
+}
+GF_EXPORT
+void gf_log_pop_extra(const GF_LogExtra *log)
+{
+	if (!log) return;
+	gf_mx_p(logs_mx);
+	gf_list_del_item(logs_extras, (void*)log);
+	gf_mx_v(logs_mx);
+}
+
+GF_EXPORT
+void gf_log_reset_extras()
+{
+	gf_mx_p(logs_mx);
+	gf_list_del(logs_extras);
+	logs_extras=NULL;
+	gf_mx_v(logs_mx);
+}
+
 GF_EXPORT
 Bool gf_log_tool_level_on(GF_LOG_Tool log_tool, GF_LOG_Level log_level)
 {
+	if (logs_extras) {
+		gf_mx_p(logs_mx);
+		u32 count = logs_extras ? gf_list_count(logs_extras) : 0; //avoid race condition
+		for (u32 i=0;i<count;i++) {
+			GF_LogExtra *lf = gf_list_get(logs_extras, i);
+			u32 j;
+			for (j=0; j<lf->nb_tools; j++) {
+				if (lf->tools[j]==GF_LOG_ALL) {}
+				else if (lf->tools[j]==GF_LOG_TOOL_UNDEFINED) {
+					lf->tools[j] = log_tool;
+				}
+				else if (log_tool!=lf->tools[j])
+					continue;
+
+				if (lf->levels[j] >= log_level) {
+					gf_mx_v(logs_mx);
+					if (lf->strict && (log_level==GF_LOG_ERROR) && (log_tool != GF_LOG_MEMORY))
+						gf_log_set_strict_error(GF_TRUE);
+					return GF_TRUE;
+				}
+				if (lf->levels[j] == GF_LOG_QUIET) {
+					gf_mx_v(logs_mx);
+					return GF_FALSE;
+				}
+			}
+		}
+		gf_mx_v(logs_mx);
+	}
 	if (log_tool==GF_LOG_TOOL_MAX) return GF_TRUE;
 	if (log_tool>GF_LOG_TOOL_MAX) return GF_FALSE;
-	if (global_log_tools[log_tool].level >= log_level) return GF_TRUE;
+	if (global_log_tools[log_tool].level >= log_level) {
+		if (global_log_tools[log_tool].strict && (log_level==GF_LOG_ERROR) && (log_tool != GF_LOG_MEMORY))
+			gf_log_set_strict_error(GF_TRUE);
+		return GF_TRUE;
+	}
 	return GF_FALSE;
 }
 
@@ -644,8 +793,10 @@ u32 gf_log_get_tool_level(GF_LOG_Tool log_tool)
 FILE *gpac_log_file = NULL;
 Bool gpac_log_time_start = GF_FALSE;
 Bool gpac_log_utc_time = GF_FALSE;
+Bool gpac_log_dual = GF_FALSE;
 Bool last_log_is_lf = GF_TRUE;
 static u64 gpac_last_log_time=0;
+Bool gpac_use_logx = GF_FALSE;
 
 static void do_log_time(FILE *logs, const char *fmt)
 {
@@ -681,6 +832,12 @@ void default_log_callback(void *cbck, GF_LOG_Level level, GF_LOG_Tool tool, cons
 	if (gf_fileio_check(logs)) {
 		gf_fileio_printf((GF_FileIO *)logs, fmt, vlist);
 	} else {
+		if (gpac_log_dual && gpac_no_color_logs) {
+			va_list vlist_c;
+			va_copy(vlist_c, vlist);
+			vfprintf(stderr, fmt, vlist_c);
+			va_end(vlist_c);
+		}
 		vfprintf(logs, fmt, vlist);
 	}
 	gf_fflush(logs);
@@ -689,8 +846,14 @@ void default_log_callback(void *cbck, GF_LOG_Level level, GF_LOG_Tool tool, cons
 void default_log_callback_color(void *cbck, GF_LOG_Level level, GF_LOG_Tool tool, const char *fmt, va_list vlist)
 {
 	if (gpac_log_file) {
-		default_log_callback(cbck, level, tool, fmt, vlist);
-		return;
+		if (!gpac_log_dual) {
+			default_log_callback(cbck, level, tool, fmt, vlist);
+			return;
+		}
+		va_list vlist_c;
+		va_copy(vlist_c, vlist);
+		default_log_callback(cbck, level, tool, fmt, vlist_c);
+		va_end(vlist_c);
 	}
 	switch(level) {
 	case GF_LOG_ERROR:
@@ -719,10 +882,111 @@ void default_log_callback_color(void *cbck, GF_LOG_Level level, GF_LOG_Tool tool
 
 
 
-static void *user_log_cbk = NULL;
+void *user_log_cbk = NULL;
 gf_log_cbk log_cbk = default_log_callback_color;
 static Bool log_exit_on_error = GF_FALSE;
-extern GF_Mutex *logs_mx;
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+Bool gpac_log_console = GF_FALSE;
+#endif
+static GF_List *logs_thread_tags = NULL;
+
+typedef struct
+{
+	u32 th_id;
+	Bool tagged;
+	u32 type;
+	void *udta;
+} GF_LogThreadTag;
+
+void gf_logs_init()
+{
+	logs_thread_tags = gf_list_new();
+}
+
+void gf_logs_close()
+{
+	if (gpac_log_file) {
+		gf_fclose(gpac_log_file);
+		gpac_log_file = NULL;
+	}
+	while (gf_list_count(logs_thread_tags)) {
+		GF_LogThreadTag *tag = gf_list_pop_back(logs_thread_tags);
+		gf_free(tag);
+	}
+	gf_list_del(logs_thread_tags);
+}
+
+static void gf_logs_set_thread_tag_internal(void *tag_val, u32 tag_type, Bool is_tag, Bool is_rem)
+{
+	if (!is_rem && !gpac_use_logx && (tag_type>1))
+		return;
+
+	if (!logs_thread_tags)
+		return;
+
+	gf_mx_p(logs_mx);
+	u32 i, count = gf_list_count(logs_thread_tags);
+	GF_LogThreadTag *tag = NULL;
+	for (i=0;i<count;i++) {
+		tag = gf_list_get(logs_thread_tags, i);
+		if (tag->udta == tag_val) {
+			if (is_rem) {
+				gf_list_rem(logs_thread_tags, i);
+				gf_free(tag);
+				gf_mx_v(logs_mx);
+				return;
+			}
+			break;
+		}
+		tag = NULL;
+	}
+	if (is_rem) return;
+
+	if (!tag) {
+		GF_SAFEALLOC(tag, GF_LogThreadTag)
+		tag->udta = tag_val;
+		gf_list_add(logs_thread_tags, tag);
+	}
+	gf_mx_v(logs_mx);
+	tag->tagged = is_tag;
+	tag->type = tag_type;
+	tag->th_id = gf_th_id();
+}
+
+void gf_logs_thread_tag(void *tag_val, u32 tag_type)
+{
+	gf_logs_set_thread_tag_internal(tag_val, tag_type, GF_TRUE, GF_FALSE);
+}
+void gf_logs_thread_untag(void *tag_val)
+{
+	gf_logs_set_thread_tag_internal(tag_val, 0, GF_FALSE, GF_FALSE);
+}
+void gf_logs_thread_tag_del(void *tag_val)
+{
+	gf_logs_set_thread_tag_internal(tag_val, 0, GF_FALSE, GF_TRUE);
+}
+
+
+void *gf_logs_get_thread_tag(u32 *tag_type, u32 *o_th_id)
+{
+	u32 th_id = gf_th_id();
+	u32 i, count = gf_list_count(logs_thread_tags);
+	GF_LogThreadTag *highest_tag = NULL;
+	for (i=0; i<count; i++) {
+		GF_LogThreadTag *tag = gf_list_get(logs_thread_tags, i);
+		if (tag->tagged && (tag->th_id == th_id)) {
+			if (!highest_tag || (highest_tag->type < tag->type))
+				highest_tag = tag;
+		}
+	}
+	*o_th_id = th_id;
+	if (highest_tag) {
+		*tag_type = highest_tag->type;
+		return highest_tag->udta;
+	}
+	*tag_type = 0;
+	return NULL;
+}
 
 GF_EXPORT
 Bool gf_log_use_color()
@@ -730,15 +994,37 @@ Bool gf_log_use_color()
 	return (log_cbk == default_log_callback_color) ? GF_TRUE : GF_FALSE;
 }
 
+static Bool in_log_callback = GF_FALSE;
+
+
 GF_EXPORT
 void gf_log(const char *fmt, ...)
 {
-	va_list vl;
-	va_start(vl, fmt);
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+	if (gpac_log_console && (call_tool!=GF_LOG_APP)) {
+		EM_ASM({
+			libgpac.in_logs = true;
+		});
+	}
+#endif
 	gf_mx_p(logs_mx);
-	log_cbk(user_log_cbk, call_lev, call_tool, fmt, vl);
+	//don't allow GF_LOG to be called from GF_LOG this will likely throw infinite recursion
+	if (!in_log_callback) {
+		va_list vl;
+		va_start(vl, fmt);
+		in_log_callback = GF_TRUE;
+		log_cbk(user_log_cbk, call_lev, call_tool, fmt, vl);
+		in_log_callback = GF_FALSE;
+		va_end(vl);
+	}
 	gf_mx_v(logs_mx);
-	va_end(vl);
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+	if (gpac_log_console && (call_tool!=GF_LOG_APP)) {
+		EM_ASM({
+			libgpac.in_logs = false;
+		});
+	}
+#endif
 	if (log_exit_on_error && (call_lev==GF_LOG_ERROR) && (call_tool != GF_LOG_MEMORY)) {
 		exit(1);
 	}
@@ -747,7 +1033,15 @@ void gf_log(const char *fmt, ...)
 GF_EXPORT
 void gf_log_va_list(GF_LOG_Level level, GF_LOG_Tool tool, const char *fmt, va_list vl)
 {
-	log_cbk(user_log_cbk, call_lev, call_tool, fmt, vl);
+	gf_mx_p(logs_mx);
+	//don't allow GF_LOG to be called from GF_LOG this will likely throw infinite recursion
+	if (!in_log_callback) {
+		in_log_callback = GF_TRUE;
+		log_cbk(user_log_cbk, call_lev, call_tool, fmt, vl);
+		in_log_callback = GF_FALSE;
+	}
+	gf_mx_v(logs_mx);
+
 	if (log_exit_on_error && (call_lev==GF_LOG_ERROR) && (call_tool != GF_LOG_MEMORY)) {
 		exit(1);
 	}
@@ -764,7 +1058,7 @@ Bool gf_log_set_strict_error(Bool strict)
 GF_EXPORT
 void gf_log_set_tool_level(GF_LOG_Tool tool, GF_LOG_Level level)
 {
-	assert(tool<=GF_LOG_TOOL_MAX);
+	if (tool>GF_LOG_TOOL_MAX) return;
 	if (tool==GF_LOG_ALL) {
 		u32 i;
 		for (i=0; i<GF_LOG_TOOL_MAX; i++) {
@@ -793,6 +1087,11 @@ gf_log_cbk gf_log_set_callback(void *usr_cbk, gf_log_cbk cbk)
 }
 
 #else
+
+void gf_logs_thread_tag(void *tag_val, u32 tag_type){}
+void gf_logs_thread_untag(void *tag_val){}
+void gf_logs_thread_tag_del(void *tag_val){}
+
 GF_EXPORT
 void gf_log(const char *fmt, ...)
 {
@@ -841,6 +1140,15 @@ Bool gf_log_tool_level_on(GF_LOG_Tool log_tool, GF_LOG_Level log_level)
 {
 	return GF_FALSE;
 }
+
+GF_EXPORT
+void gf_log_push_extra(const GF_LogExtra *log){}
+
+GF_EXPORT
+void gf_log_pop_extra(const GF_LogExtra *log){}
+
+GF_EXPORT
+void gf_log_reset_extras(){}
 
 #endif
 
@@ -932,8 +1240,8 @@ const char *gf_error_to_string(GF_Err e)
 		return "UDP traffic timeout";
 	case GF_AUTHENTICATION_FAILURE:
 		return "Authentication failure";
-	case GF_SCRIPT_NOT_READY:
-		return "Script not ready for playback";
+	case GF_NOT_READY:
+		return "Not ready, retry later";
 	case GF_INVALID_CONFIGURATION:
 		return "Bad configuration for the current context";
 	case GF_NOT_FOUND:
@@ -944,6 +1252,8 @@ const char *gf_error_to_string(GF_Err e)
 		return "Requires a new instance of the filter to be supported";
 	case GF_FILTER_NOT_SUPPORTED:
 		return "Not supported by any filter chain";
+	case GF_IO_BYTE_RANGE_NOT_SUPPORTED:
+		return "Byte Range request not supported by server";
 	default:
 		sprintf(szErrMsg, "Unknown Error (%d)", e);
 		return szErrMsg;
@@ -1029,6 +1339,15 @@ static const char *gf_enabled_features()
 #ifdef GPAC_CONFIG_IOS
 	                       "GPAC_CONFIG_IOS "
 #endif
+#ifdef GPAC_ENABLE_DEBUG
+	                       "GPAC_ENABLE_DEBUG "
+#endif
+#ifdef GPAC_ASSERT_FATAL
+	                       "GPAC_ASSERT_FATAL "
+#endif
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+	                       "GPAC_CONFIG_EMSCRIPTEN "
+#endif
 #ifdef GPAC_64_BITS
 	                       "GPAC_64_BITS "
 #endif
@@ -1104,6 +1423,21 @@ static const char *gf_enabled_features()
 #ifdef GPAC_HAS_GLU
 	                       "GPAC_HAS_GLU "
 #endif
+#ifdef GPAC_USE_TINYGL
+	                       "GPAC_USE_TINYGL "
+#endif
+#ifdef GPAC_USE_GLES1X
+	                       "GPAC_USE_GLES1X "
+#endif
+#ifdef GPAC_USE_GLES2
+	                       "GPAC_USE_GLES2 "
+#endif
+#ifdef GPAC_HAS_HTTP2
+	                       "GPAC_HAS_HTTP2 "
+#endif
+#ifdef GPAC_HAS_NGTCP2
+	                       "GPAC_HAS_NGTCP2 "
+#endif
 
 #if defined(_WIN32_WCE)
 #ifdef GPAC_USE_IGPP
@@ -1123,29 +1457,26 @@ static const char *gf_disabled_features()
 #ifdef GPAC_DISABLE_3D
 	                       "GPAC_DISABLE_3D "
 #endif
-#ifdef GPAC_USE_TINYGL
-	                       "GPAC_USE_TINYGL "
-#endif
-#ifdef GPAC_USE_GLES1X
-	                       "GPAC_USE_GLES1X "
-#endif
-#ifdef GPAC_USE_GLES2
-	                       "GPAC_USE_GLES2 "
+#ifdef GPAC_DISABLE_DOC
+	                       "GPAC_DISABLE_DOC "
 #endif
 #ifdef GPAC_DISABLE_ZLIB
 	                       "GPAC_DISABLE_ZLIB "
 #endif
-#ifdef GPAC_DISABLE_SVG
-	                       "GPAC_DISABLE_SVG "
+#ifdef GPAC_DISABLE_THREADS
+	                       "GPAC_DISABLE_THREADS "
 #endif
-#ifdef GPAC_DISABLE_VRML
-	                       "GPAC_DISABLE_VRML "
+#ifdef GPAC_DISABLE_NETWORK
+	                       "GPAC_DISABLE_NETWORK "
 #endif
-#ifdef GPAC_DISABLE_BIFS
-	                       "GPAC_DISABLE_BIFS "
+#ifdef GPAC_DISABLE_STREAMING
+	                       "GPAC_DISABLE_STREAMING "
 #endif
-#ifdef GPAC_DISABLE_QTVR
-	                       "GPAC_DISABLE_QTVR "
+#ifdef GPAC_DISABLE_ROUTE
+	                       "GPAC_DISABLE_ROUTE "
+#endif
+#ifdef GPAC_DISABLE_EVG
+	                       "GPAC_DISABLE_EVG "
 #endif
 #ifdef GPAC_DISABLE_AVILIB
 	                       "GPAC_DISABLE_AVILIB "
@@ -1153,23 +1484,29 @@ static const char *gf_disabled_features()
 #ifdef GPAC_DISABLE_OGG
 	                       "GPAC_DISABLE_OGG "
 #endif
+#ifdef GPAC_DISABLE_AV_PARSERS
+	                       "GPAC_DISABLE_AV_PARSERS "
+#endif
 #ifdef GPAC_DISABLE_MPEG2PS
 	                       "GPAC_DISABLE_MPEG2PS "
 #endif
 #ifdef GPAC_DISABLE_MPEG2PS
 	                       "GPAC_DISABLE_MPEG2TS "
 #endif
-#ifdef GPAC_DISABLE_SENG
-	                       "GPAC_DISABLE_SENG "
-#endif
 #ifdef GPAC_DISABLE_MEDIA_IMPORT
 	                       "GPAC_DISABLE_MEDIA_IMPORT "
 #endif
-#ifdef GPAC_DISABLE_AV_PARSERS
-	                       "GPAC_DISABLE_AV_PARSERS "
-#endif
 #ifdef GPAC_DISABLE_MEDIA_EXPORT
 	                       "GPAC_DISABLE_MEDIA_EXPORT "
+#endif
+#ifdef GPAC_DISABLE_VRML
+	                       "GPAC_DISABLE_VRML "
+#endif
+#ifdef GPAC_DISABLE_SVG
+	                       "GPAC_DISABLE_SVG "
+#endif
+#ifdef GPAC_DISABLE_QTVR
+	                       "GPAC_DISABLE_QTVR "
 #endif
 #ifdef GPAC_DISABLE_SWF_IMPORT
 	                       "GPAC_DISABLE_SWF_IMPORT "
@@ -1179,6 +1516,15 @@ static const char *gf_disabled_features()
 #endif
 #ifdef GPAC_DISABLE_SCENE_DUMP
 	                       "GPAC_DISABLE_SCENE_DUMP "
+#endif
+#ifdef GPAC_DISABLE_BIFS
+	                       "GPAC_DISABLE_BIFS "
+#endif
+#ifdef GPAC_DISABLE_LASER
+	                       "GPAC_DISABLE_LASER "
+#endif
+#ifdef GPAC_DISABLE_SENG
+	                       "GPAC_DISABLE_SENG "
 #endif
 #ifdef GPAC_DISABLE_SCENE_ENCODER
 	                       "GPAC_DISABLE_SCENE_ENCODER "
@@ -1204,16 +1550,226 @@ static const char *gf_disabled_features()
 #ifdef GPAC_DISABLE_ISOM_FRAGMENTS
 	                       "GPAC_DISABLE_ISOM_FRAGMENTS "
 #endif
-#ifdef GPAC_DISABLE_LASER
-	                       "GPAC_DISABLE_LASER "
+#ifdef GPAC_DISABLE_ISOM_DUMP
+	                       "GPAC_DISABLE_ISOM_DUMP "
 #endif
-#ifdef GPAC_DISABLE_STREAMING
-	                       "GPAC_DISABLE_STREAMING "
-#endif
-#ifdef GPAC_DISABLE_ROUTE
-	                       "GPAC_DISABLE_ROUTE "
+#ifdef GPAC_DISABLE_NETCAP
+	                       "GPAC_DISABLE_NETCAP "
 #endif
 
+#ifdef GPAC_DISABLE_COMPOSITOR
+	                       "GPAC_DISABLE_COMPOSITOR "
+#endif
+#ifdef GPAC_DISABLE_FONTS
+	                       "GPAC_DISABLE_FONTS "
+#endif
+#ifdef GPAC_DISABLE_VOUT
+	                       "GPAC_DISABLE_VOUT "
+#endif
+#ifdef GPAC_DISABLE_AOUT
+	                       "GPAC_DISABLE_AOUT "
+#endif
+#ifdef GPAC_DISABLE_BSAGG
+	                       "GPAC_DISABLE_BSAGG "
+#endif
+#ifdef GPAC_DISABLE_BSSPLIT
+	                       "GPAC_DISABLE_BSSPLIT "
+#endif
+#ifdef GPAC_DISABLE_BSRW
+	                       "GPAC_DISABLE_BSRW "
+#endif
+#ifdef GPAC_DISABLE_DASHER
+	                       "GPAC_DISABLE_DASHER "
+#endif
+#ifdef GPAC_DISABLE_DASHIN
+	                       "GPAC_DISABLE_DASHIN "
+#endif
+#ifdef GPAC_DISABLE_IMGDEC
+	                       "GPAC_DISABLE_IMGDEC "
+#endif
+#ifdef GPAC_DISABLE_UNCVDEC
+	                       "GPAC_DISABLE_UNCVDEC "
+#endif
+#ifdef GPAC_DISABLE_CDCRYPT
+	                       "GPAC_DISABLE_CDCRYPT "
+#endif
+#ifdef GPAC_DISABLE_GHIDMX
+	                       "GPAC_DISABLE_GHIDMX "
+#endif
+#ifdef GPAC_DISABLE_GSFDMX
+	                       "GPAC_DISABLE_GSFDMX "
+#endif
+#ifdef GPAC_DISABLE_NHMLR
+	                       "GPAC_DISABLE_NHMLR "
+#endif
+#ifdef GPAC_DISABLE_NHNTR
+	                       "GPAC_DISABLE_NHNTR "
+#endif
+#ifdef GPAC_DISABLE_CECRYPT
+	                       "GPAC_DISABLE_CECRYPT "
+#endif
+#ifdef GPAC_DISABLE_FLIST
+	                       "GPAC_DISABLE_FLIST "
+#endif
+#ifdef GPAC_DISABLE_HEVCMERGE
+	                       "GPAC_DISABLE_HEVCMERGE "
+#endif
+#ifdef GPAC_DISABLE_HEVCSPLIT
+	                       "GPAC_DISABLE_HEVCSPLIT "
+#endif
+#ifdef GPAC_DISABLE_FIN
+	                       "GPAC_DISABLE_FIN "
+#endif
+#ifdef GPAC_DISABLE_PIN
+	                       "GPAC_DISABLE_PIN "
+#endif
+#ifdef GPAC_DISABLE_INSPECT
+	                       "GPAC_DISABLE_INSPECT "
+#endif
+#ifdef GPAC_DISABLE_CRYPTFILE
+	                       "GPAC_DISABLE_CRYPTFILE "
+#endif
+#ifdef GPAC_DISABLE_MP4DMX
+	                       "GPAC_DISABLE_MP4DMX "
+#endif
+#ifdef GPAC_DISABLE_TXTIN
+	                       "GPAC_DISABLE_TXTIN "
+#endif
+#ifdef GPAC_DISABLE_GSFMX
+	                       "GPAC_DISABLE_GSFMX "
+#endif
+#ifdef GPAC_DISABLE_MP4MX
+	                       "GPAC_DISABLE_MP4MX "
+#endif
+#ifdef GPAC_DISABLE_FOUT
+	                       "GPAC_DISABLE_FOUT "
+#endif
+#ifdef GPAC_DISABLE_POUT
+	                       "GPAC_DISABLE_POUT "
+#endif
+#ifdef GPAC_DISABLE_RFAC3
+	                       "GPAC_DISABLE_RFAC3 "
+#endif
+#ifdef GPAC_DISABLE_RFAC4
+	                       "GPAC_DISABLE_RFAC4 "
+#endif
+#ifdef GPAC_DISABLE_RFADTS
+	                       "GPAC_DISABLE_RFADTS "
+#endif
+#ifdef GPAC_DISABLE_RFAMR
+	                       "GPAC_DISABLE_RFAMR "
+#endif
+#ifdef GPAC_DISABLE_RFAV1
+	                       "GPAC_DISABLE_RFAV1 "
+#endif
+#ifdef GPAC_DISABLE_RFFLAC
+	                       "GPAC_DISABLE_RFFLAC "
+#endif
+#ifdef GPAC_DISABLE_RFH263
+	                       "GPAC_DISABLE_RFH263 "
+#endif
+#ifdef GPAC_DISABLE_RFIMG
+	                       "GPAC_DISABLE_RFIMG "
+#endif
+#ifdef GPAC_DISABLE_RFLATM
+	                       "GPAC_DISABLE_RFLATM "
+#endif
+#ifdef GPAC_DISABLE_RFMHAS
+	                       "GPAC_DISABLE_RFMHAS "
+#endif
+#ifdef GPAC_DISABLE_RFMP3
+	                       "GPAC_DISABLE_RFMP3 "
+#endif
+#ifdef GPAC_DISABLE_RFMPGVID
+	                       "GPAC_DISABLE_RFMPGVID "
+#endif
+#ifdef GPAC_DISABLE_RFNALU
+	                       "GPAC_DISABLE_RFNALU "
+#endif
+#ifdef GPAC_DISABLE_RFPRORES
+	                       "GPAC_DISABLE_RFPRORES "
+#endif
+#ifdef GPAC_DISABLE_RFQCP
+	                       "GPAC_DISABLE_RFQCP "
+#endif
+#ifdef GPAC_DISABLE_RFPCM
+	                       "GPAC_DISABLE_RFPCM "
+#endif
+#ifdef GPAC_DISABLE_RFRAWVID
+	                       "GPAC_DISABLE_RFRAWVID "
+#endif
+#ifdef GPAC_DISABLE_RFTRUEHD
+	                       "GPAC_DISABLE_RFTRUEHD "
+#endif
+#ifdef GPAC_DISABLE_REFRAMER
+	                       "GPAC_DISABLE_REFRAMER "
+#endif
+#ifdef GPAC_DISABLE_RESAMPLE
+	                       "GPAC_DISABLE_RESAMPLE "
+#endif
+#ifdef GPAC_DISABLE_RESTAMP
+	                       "GPAC_DISABLE_RESTAMP "
+#endif
+#ifdef GPAC_DISABLE_REWIND
+	                       "GPAC_DISABLE_REWIND "
+#endif
+#ifdef GPAC_DISABLE_UFAAC
+	                       "GPAC_DISABLE_UFAAC "
+#endif
+#ifdef GPAC_DISABLE_UFMHAS
+	                       "GPAC_DISABLE_UFMHAS "
+#endif
+#ifdef GPAC_DISABLE_UFAC4
+	                       "GPAC_DISABLE_UFAC4 "
+#endif
+#ifdef GPAC_DISABLE_UFM4V
+	                       "GPAC_DISABLE_UFM4V "
+#endif
+#ifdef GPAC_DISABLE_UFNALU
+	                       "GPAC_DISABLE_UFNALU "
+#endif
+#ifdef GPAC_DISABLE_UFOBU
+	                       "GPAC_DISABLE_UFOBU "
+#endif
+#ifdef GPAC_DISABLE_TILEAGG
+	                       "GPAC_DISABLE_TILEAGG "
+#endif
+#ifdef GPAC_DISABLE_TILESPLIT
+	                       "GPAC_DISABLE_TILESPLIT "
+#endif
+#ifdef GPAC_DISABLE_TTMLCONV
+	                       "GPAC_DISABLE_TTMLCONV "
+#endif
+#ifdef GPAC_DISABLE_UNFRAMER
+	                       "GPAC_DISABLE_UNFRAMER "
+#endif
+#ifdef GPAC_DISABLE_VCROP
+	                       "GPAC_DISABLE_VCROP "
+#endif
+#ifdef GPAC_DISABLE_VFLIP
+	                       "GPAC_DISABLE_VFLIP "
+#endif
+#ifdef GPAC_DISABLE_WRITEGEN
+	                       "GPAC_DISABLE_WRITEGEN "
+#endif
+#ifdef GPAC_DISABLE_NHMLW
+	                       "GPAC_DISABLE_NHMLW "
+#endif
+#ifdef GPAC_DISABLE_NHNTW
+	                       "GPAC_DISABLE_NHNTW "
+#endif
+#ifdef GPAC_DISABLE_WRITEQCP
+	                       "GPAC_DISABLE_WRITEQCP "
+#endif
+#ifdef GPAC_DISABLE_UNITS
+	                       "GPAC_DISABLE_UNITS "
+#endif
+#ifdef GPAC_DISABLE_NVDEC
+	                       "GPAC_DISABLE_NVDEC "
+#endif
+#ifdef GPAC_DISABLE_VTBDEC
+	                       "GPAC_DISABLE_VTBDEC "
+#endif
 	                       ;
 	return features;
 }
@@ -1829,6 +2385,11 @@ Bool gf_parse_lfrac(const char *value, GF_Fraction64 *frac)
 	sep = strchr(value, '.');
 	if (!sep) sep = strchr(value, ',');
 	if (!sep) {
+		len = (u32) strlen(value);
+		for (i=0; i<len; i++) {
+			if (((value[i]<'0') || (value[i]>'9')) && (value[i]!='-') && (value[i]!='+'))
+				return GF_FALSE;
+		}
 		frac->num = atol(value);
 		frac->den = 1;
 		return GF_TRUE;
@@ -1844,11 +2405,12 @@ Bool gf_parse_lfrac(const char *value, GF_Fraction64 *frac)
 	if (all_num) {
 		u32 div_trail_zero = 1;
 		sscanf(value, LLD"."LLU, &frac->num, &frac->den);
-
 		i=0;
 		frac->den = 1;
 		while (i<len) {
 			i++;
+			if (frac->den > GF_UINT64_MAX / 10)
+				return GF_FALSE;
 			frac->den *= 10;
 		}
 		//trash trailing zero
@@ -1857,13 +2419,14 @@ Bool gf_parse_lfrac(const char *value, GF_Fraction64 *frac)
 			if (sep[i] != '0') {
 				break;
 			}
+			if (div_trail_zero > GF_UINT_MAX / 10)
+				return GF_FALSE;
 			div_trail_zero *= 10;
 			i--;
 		}
 
-
 		frac->num *= frac->den / div_trail_zero;
-		frac->num += atoi(sep+1) / div_trail_zero;
+		frac->num += atoll(sep+1) / div_trail_zero;
 		frac->den /= div_trail_zero;
 
 		return GF_TRUE;
@@ -1884,11 +2447,83 @@ Bool gf_parse_frac(const char *value, GF_Fraction *frac)
 	Bool res;
 	if (!frac) return GF_FALSE;
 	res = gf_parse_lfrac(value, &r);
-	while ((r.num >= 0x80000000) && (r.den > 1000)) {
+	while ((r.num >= 0x80000000) && (r.den >= 1000)) {
 		r.num /= 1000;
 		r.den /= 1000;
 	}
 	frac->num = (s32) r.num;
 	frac->den = (u32) r.den;
 	return res;
+}
+
+Bool gf_strict_atoi(const char* str, s32* ans) {
+    char* end_ptr = NULL;
+    *ans = strtol(str, &end_ptr, 10);
+    return !isspace(*str) && end_ptr != str && *end_ptr == '\0';
+}
+
+Bool gf_strict_atoui(const char* str, u32* ans) {
+	char* end_ptr = NULL;
+	*ans = strtoul(str, &end_ptr, 10);
+	return !isspace(*str) && end_ptr != str && *end_ptr == '\0';
+}
+
+const char* gf_strmemstr(const char *data, u32 data_size, const char *pat)
+{
+       if (!pat || !data) return NULL;
+
+       u32 len_pat = (u32) strlen(pat);
+       if (len_pat==0) return data;
+       if (len_pat>data_size) return NULL;
+
+       //basically a memmem clone (we don't use for portability reasons)
+       while (1) {
+               char *next = memchr(data, pat[0], data_size);
+               if (!next) return NULL;
+               u32 left = data_size - (u32) (next-data);
+               if (left<len_pat) return NULL;
+               if (!memcmp(next, pat, len_pat)) return next;
+               //left is always at least 1
+               data_size = left-1;
+               data = next+1;
+       }
+       return NULL;
+}
+
+GF_EXPORT
+Bool gf_sys_solve_path(const char *url, char szPath[GF_MAX_PATH])
+{
+	char *path;
+	u32 radlen=6;
+	Bool rem_name=GF_FALSE;
+	if (!strncmp(url, "$GCFG", 5)) {
+		path = (char *)gf_opts_get_filename();
+		rem_name = GF_TRUE;
+		radlen=5;
+	} else {
+#ifdef WIN32
+		path = getenv("HOMEPATH");
+#elif defined(GPAC_CONFIG_ANDROID) || defined(GPAC_CONFIG_IOS)
+		path = (char *) gf_opts_get_key("core", "docs-dir");
+#else
+		path = getenv("HOME");
+#endif
+	}
+
+	if (path && path[0]) {
+		strncpy(szPath, path, GF_MAX_PATH-1);
+		szPath[GF_MAX_PATH-1] = 0;
+		if (rem_name) {
+			char *sep = strrchr(szPath, '/');
+			if (!sep) sep = strrchr(szPath, '\\');
+			if (sep) sep[0] = 0;
+		}
+		u32 len = (u32) strlen(szPath);
+		if ((szPath[len-1]=='/') || (szPath[len-1]=='\\'))
+			szPath[len-1]=0;
+
+		strncat(szPath, url+radlen, GF_MAX_PATH-strlen(szPath)-1);
+		return GF_TRUE;
+	}
+	return GF_FALSE;
 }

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2018
+ *			Copyright (c) Telecom ParisTech 2018-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / media rewinder filter
@@ -27,6 +27,8 @@
 #include <gpac/constants.h>
 #include <gpac/filters.h>
 #include <gpac/internal/compositor_dev.h>
+
+#ifndef GPAC_DISABLE_REWIND
 
 typedef struct
 {
@@ -252,7 +254,8 @@ GF_FilterRegister RewinderRegister = {
 	SETCAPS(RewinderCaps),
 	.configure_pid = rewind_configure_pid,
 	.process = rewind_process,
-	.process_event = rewind_process_event
+	.process_event = rewind_process_event,
+	.hint_class_type = GF_FS_CLASS_STREAM
 };
 
 
@@ -260,3 +263,10 @@ const GF_FilterRegister *rewind_register(GF_FilterSession *session)
 {
 	return &RewinderRegister;
 }
+#else
+const GF_FilterRegister *rewind_register(GF_FilterSession *session)
+{
+	return NULL;
+}
+#endif //#ifndef GPAC_DISABLE_REWIND
+

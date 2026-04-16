@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2025
  *					All rights reserved
  *
  *  This file is part of GPAC / ISO Media File Format sub-project
@@ -35,8 +35,6 @@ gf_realloc low, which greatly impacts performances for large files*/
 		a = new_a;\
 	}
 
-#ifndef GPAC_DISABLE_ISOM_WRITE
-
 
 #define CHECK_PACK(_e) \
 	if (!nb_pack) nb_pack = 1; \
@@ -44,6 +42,8 @@ gf_realloc low, which greatly impacts performances for large files*/
 		GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[iso file] Too many samples %u in packed sample\n", nb_pack)); \
 		return _e; \
 	}
+
+#ifndef GPAC_DISABLE_ISOM_WRITE
 
 
 //adds a DTS in the table and get the sample number of this new sample
@@ -246,7 +246,11 @@ GF_Err AddCompositionOffset(GF_CompositionOffsetBox *ctts, s32 offset)
 		ctts->entries[ctts->nb_entries].sampleCount = 1;
 		ctts->nb_entries++;
 	}
-	if (offset<0) ctts->version=1;
+	if (offset<0) {
+		ctts->version=1;
+		if (offset<ctts->min_neg_cts_offset)
+			ctts->min_neg_cts_offset = offset;
+	}
 	ctts->w_LastSampleNumber++;
 	return GF_OK;
 }
@@ -295,7 +299,7 @@ GF_Err stbl_AddCTS(GF_SampleTableBox *stbl, u32 sampleNumber, s32 offset)
 	}
 
 	//NOPE we are inserting a sample...
-	CTSs = (u32*)gf_malloc(sizeof(u32) * (stbl->SampleSize->sampleCount+1) );
+	GF_SAFE_ALLOC_N(CTSs, (stbl->SampleSize->sampleCount+1), u32);
 	if (!CTSs) return GF_OUT_OF_MEM;
 	sampNum = 0;
 	for (i=0; i<ctts->nb_entries; i++) {
@@ -372,6 +376,7 @@ GF_Err stbl_repackCTS(GF_CompositionOffsetBox *ctts)
 	/*note we don't realloc*/
 	return GF_OK;
 }
+#endif // GPAC_DISABLE_ISOM_WRITE
 
 GF_Err stbl_unpackCTS(GF_SampleTableBox *stbl)
 {
@@ -416,6 +421,9 @@ GF_Err stbl_unpackCTS(GF_SampleTableBox *stbl)
 	}
 	return GF_OK;
 }
+
+
+#ifndef GPAC_DISABLE_ISOM_WRITE
 
 //add size
 GF_Err stbl_AddSize(GF_SampleSizeBox *stsz, u32 sampleNumber, u32 size, u32 nb_pack)
@@ -673,6 +681,8 @@ GF_Err stbl_AddDependencyType(GF_SampleTableBox *stbl, u32 sampleNumber, u32 isL
 }
 #endif
 
+#endif //GPAC_DISABLE_ISOM_WRITE
+
 GF_Err stbl_AppendDependencyType(GF_SampleTableBox *stbl, u32 isLeading, u32 dependsOn, u32 dependedOn, u32 redundant)
 {
 	GF_SampleDependencyTypeBox *sdtp;
@@ -699,6 +709,8 @@ GF_Err stbl_AppendDependencyType(GF_SampleTableBox *stbl, u32 isLeading, u32 dep
 	sdtp->sampleCount ++;
 	return GF_OK;
 }
+
+#ifndef GPAC_DISABLE_ISOM_WRITE
 
 //this function is always called in INCREASING order of shadow sample numbers
 GF_Err stbl_AddShadow(GF_ShadowSyncBox *stsh, u32 sampleNumber, u32 shadowNumber)
@@ -969,10 +981,10 @@ GF_Err stbl_SetSampleCTS(GF_SampleTableBox *stbl, u32 sampleNumber, s32 offset)
 {
 	GF_CompositionOffsetBox *ctts = stbl->CompositionOffset;
 
-	assert(ctts->unpack_mode);
+	gf_assert(ctts->unpack_mode);
 
 	//if we're setting the CTS of a sample we've skipped...
-	if (ctts->w_LastSampleNumber < sampleNumber) {
+	if ((sampleNumber > ctts->nb_entries) && (ctts->w_LastSampleNumber < sampleNumber)) {
 		//add some 0 till we get to the sample
 		while (ctts->w_LastSampleNumber + 1 != sampleNumber) {
 			GF_Err e = AddCompositionOffset(ctts, 0);
@@ -1081,7 +1093,9 @@ GF_Err stbl_SetSyncShadow(GF_ShadowSyncBox *stsh, u32 sampleNumber, u32 syncSamp
 		return gf_list_insert(stsh->entries, ent, i);
 	}
 }
+#endif
 
+#if !defined(GPAC_DISABLE_ISOM_WRITE) || !defined(GPAC_DISABLE_ISOM_FRAGMENTS)
 
 //always called before removing the sample from SampleSize
 GF_Err stbl_RemoveDTS(GF_SampleTableBox *stbl, u32 sampleNumber, u32 nb_samples, u32 LastAUDefDuration)
@@ -1098,6 +1112,8 @@ GF_Err stbl_RemoveDTS(GF_SampleTableBox *stbl, u32 sampleNumber, u32 nb_samples,
 		stts->nb_entries = 0;
 		stts->r_FirstSampleInEntry = stts->r_currentEntryIndex = 0;
 		stts->r_CurrentDTS = 0;
+		if (nb_samples>1)
+			stts->cumulated_start_dts += stts->entries[0].sampleDelta;
 		return GF_OK;
 	}
 	//we're removing the last sample
@@ -1105,10 +1121,12 @@ GF_Err stbl_RemoveDTS(GF_SampleTableBox *stbl, u32 sampleNumber, u32 nb_samples,
 		ent = &stts->entries[stts->nb_entries-1];
 		ent->sampleCount--;
 		if (!ent->sampleCount) stts->nb_entries--;
+		if (nb_samples>1)
+			stts->cumulated_start_dts += ent->sampleDelta;
 	} else {
 		u64 *DTSs, curDTS;
 		u32 i, j, k, sampNum;
-		u32 tot_samples, nb_written=0;
+		u32 tot_samples;
 		//unpack the DTSs...
 		DTSs = (u64*)gf_malloc(sizeof(u64) * (stbl->SampleSize->sampleCount - 1));
 		if (!DTSs) return GF_OUT_OF_MEM;
@@ -1128,9 +1146,12 @@ GF_Err stbl_RemoveDTS(GF_SampleTableBox *stbl, u32 sampleNumber, u32 nb_samples,
 					} else {
 						DTSs[sampNum-k] = curDTS;
 					}
-				} else if (sampNum >= nb_samples) {
-					DTSs[sampNum - nb_samples] = curDTS;
-					nb_written++;
+				} else {
+					if (sampNum >= nb_samples) {
+						DTSs[sampNum - nb_samples] = curDTS;
+					} else if (sampNum + 1 == nb_samples) {
+						stts->cumulated_start_dts += curDTS+ent->sampleDelta;
+					}
 				}
 				curDTS += ent->sampleDelta;
 				sampNum ++;
@@ -1138,15 +1159,16 @@ GF_Err stbl_RemoveDTS(GF_SampleTableBox *stbl, u32 sampleNumber, u32 nb_samples,
 		}
 
 		if (nb_samples>1) {
-			assert(sampNum == stbl->SampleSize->sampleCount);
-			assert(nb_written + nb_samples == stbl->SampleSize->sampleCount);
+			gf_assert(sampNum == stbl->SampleSize->sampleCount);
 		}
 		j=0;
 
 		if (nb_samples==1) {
 			tot_samples = stbl->SampleSize->sampleCount - 1;
-		} else {
+		} else if (stbl->SampleSize->sampleCount >= nb_samples) {
 			tot_samples = stbl->SampleSize->sampleCount - nb_samples;
+		} else {
+			tot_samples = 0;
 		}
 		if (tot_samples) {
 			sampNum = 1;
@@ -1155,7 +1177,12 @@ GF_Err stbl_RemoveDTS(GF_SampleTableBox *stbl, u32 sampleNumber, u32 nb_samples,
 			if (stbl->SampleSize->sampleCount == 2) {
 				stts->entries[0].sampleDelta = LastAUDefDuration;
 			} else {
-				stts->entries[0].sampleDelta = (u32) DTSs[1] /*- DTSs[0]*/;
+				if (tot_samples>1) {
+					stts->entries[0].sampleDelta = (u32) (DTSs[1] - DTSs[0]);
+				} else {
+					//special case if we remove all but one sample, compute delta based on last DTS
+					stts->entries[0].sampleDelta = (u32) (curDTS - DTSs[0]);
+				}
 			}
 		} else {
 			sampNum = 0;
@@ -1180,14 +1207,15 @@ GF_Err stbl_RemoveDTS(GF_SampleTableBox *stbl, u32 sampleNumber, u32 nb_samples,
 				j++;
 				stts->entries[j].sampleCount = 1;
 				stts->entries[j].sampleDelta = (u32) (DTSs[i+1] - DTSs[i]);
-				assert(stts->entries[j].sampleDelta);
+				gf_assert(stts->entries[j].sampleDelta || !DTSs[i+1]);
 				sampNum ++;
 			}
 		}
 		stts->w_LastDTS = tot_samples ? DTSs[tot_samples - 1] : 0;
 		gf_free(DTSs);
-		assert(sampNum == tot_samples);
-		assert(sampNum + nb_samples == stbl->SampleSize->sampleCount);
+		gf_assert(sampNum == tot_samples);
+
+		gf_assert(!tot_samples || (sampNum + nb_samples == stbl->SampleSize->sampleCount));
 	}
 
 	//reset write the cache to the end
@@ -1205,7 +1233,7 @@ GF_Err stbl_RemoveCTS(GF_SampleTableBox *stbl, u32 sampleNumber, u32 nb_samples)
 	GF_CompositionOffsetBox *ctts = stbl->CompositionOffset;
 	if (!ctts) return GF_OK;
 
-	assert(ctts->unpack_mode);
+	gf_assert(ctts->unpack_mode);
 	if ((nb_samples>1) && (sampleNumber>1)) return GF_BAD_PARAM;
 	ctts->max_cts_delta = 0;
 
@@ -1222,7 +1250,7 @@ GF_Err stbl_RemoveCTS(GF_SampleTableBox *stbl, u32 sampleNumber, u32 nb_samples)
 	if (sampleNumber > ctts->w_LastSampleNumber) return GF_OK;
 
 	if (nb_samples==1) {
-		assert(ctts->nb_entries);
+		gf_assert(ctts->nb_entries);
 		memmove(&ctts->entries[sampleNumber-1], &ctts->entries[sampleNumber], sizeof(GF_DttsEntry)* (ctts->nb_entries-sampleNumber) );
 		ctts->nb_entries--;
 	} else {
@@ -1230,7 +1258,7 @@ GF_Err stbl_RemoveCTS(GF_SampleTableBox *stbl, u32 sampleNumber, u32 nb_samples)
 		ctts->nb_entries -= nb_samples;
 	}
 	ctts->w_LastSampleNumber -= nb_samples;
-	assert(ctts->w_LastSampleNumber >= ctts->nb_entries);
+	gf_assert(ctts->w_LastSampleNumber >= ctts->nb_entries);
 
 	return GF_OK;
 }
@@ -1271,7 +1299,7 @@ GF_Err stbl_RemoveChunk(GF_SampleTableBox *stbl, u32 sampleNumber, u32 nb_sample
 
 	if ((nb_samples>1) && (sampleNumber>1))
 		return GF_BAD_PARAM;
-	
+
 	//raw audio or constant sample size and dur
 	if (stsc->nb_entries < stbl->SampleSize->sampleCount) {
 		if (sampleNumber==stbl->SampleSize->sampleCount+1) {
@@ -1304,10 +1332,10 @@ GF_Err stbl_RemoveChunk(GF_SampleTableBox *stbl, u32 sampleNumber, u32 nb_sample
 
 		//update the firstchunk info
 		for (i=sampleNumber-1; i < stsc->nb_entries; i++) {
-			assert(stsc->entries[i].firstChunk >= 1);
+			gf_assert(stsc->entries[i].firstChunk >= 1);
 			stsc->entries[i].firstChunk -= 1;
 			if (stsc->entries[i].nextChunk) {
-				assert(stsc->entries[i].nextChunk >= 1);
+				gf_assert(stsc->entries[i].nextChunk >= 1);
 				stsc->entries[i].nextChunk -= 1;
 			}
 		}
@@ -1339,7 +1367,8 @@ GF_Err stbl_RemoveChunk(GF_SampleTableBox *stbl, u32 sampleNumber, u32 nb_sample
 			stco->alloc_size = 0;
 			return GF_OK;
 		}
-		assert(stco->nb_entries - nb_samples == stbl->SampleSize->sampleCount);
+		if (stco->nb_entries - nb_samples != stbl->SampleSize->sampleCount)
+			return GF_ISOM_INVALID_FILE;
 		if (nb_samples==1) {
 			memmove(&stco->offsets[sampleNumber-1], &stco->offsets[sampleNumber], sizeof(u32) * (stco->nb_entries - sampleNumber) );
 		} else {
@@ -1356,7 +1385,8 @@ GF_Err stbl_RemoveChunk(GF_SampleTableBox *stbl, u32 sampleNumber, u32 nb_sample
 			return GF_OK;
 		}
 
-		assert(co64->nb_entries - nb_samples == stbl->SampleSize->sampleCount);
+		if (co64->nb_entries - nb_samples != stbl->SampleSize->sampleCount)
+			return GF_ISOM_INVALID_FILE;
 		if (nb_samples==1) {
 			memmove(&co64->offsets[sampleNumber-1], &co64->offsets[sampleNumber], sizeof(u64) * (co64->nb_entries - sampleNumber) );
 		} else {
@@ -1379,7 +1409,7 @@ GF_Err stbl_RemoveRAP(GF_SampleTableBox *stbl, u32 sampleNumber)
 	if (stss->nb_entries == 1) {
 		if (stss->sampleNumbers[0] != sampleNumber) {
 			if (sampleNumber < stss->sampleNumbers[0]) {
-				assert(stss->sampleNumbers[0]);
+				if (!stss->sampleNumbers[0]) return GF_ISOM_INVALID_FILE;
 				stss->sampleNumbers[0]--;
 			}
 			return GF_OK;
@@ -1401,7 +1431,7 @@ GF_Err stbl_RemoveRAP(GF_SampleTableBox *stbl, u32 sampleNumber)
 		}
 
 		else if (sampleNumber < stss->sampleNumbers[i]) {
-			assert(stss->sampleNumbers[i]);
+			if (!stss->sampleNumbers[i]) return GF_ISOM_INVALID_FILE;
 			stss->sampleNumbers[i]--;
 		}
 	}
@@ -1483,7 +1513,9 @@ GF_Err stbl_RemoveShadow(GF_SampleTableBox *stbl, u32 sampleNumber)
 	stsh->r_LastFoundSample = 0;
 	return GF_OK;
 }
+#endif
 
+#ifndef GPAC_DISABLE_ISOM_WRITE
 
 GF_Err stbl_SetPaddingBits(GF_SampleTableBox *stbl, u32 SampleNumber, u8 bits)
 {
@@ -1519,6 +1551,8 @@ GF_Err stbl_SetPaddingBits(GF_SampleTableBox *stbl, u32 SampleNumber, u8 bits)
 	stbl->PaddingBits->padbits[SampleNumber-1] = bits;
 	return GF_OK;
 }
+
+#endif // GPAC_DISABLE_ISOM_WRITE
 
 GF_Err stbl_RemovePaddingBits(GF_SampleTableBox *stbl, u32 SampleNumber)
 {
@@ -1635,6 +1669,8 @@ GF_Err stbl_RemoveSampleGroup(GF_SampleTableBox *stbl, u32 SampleNumber)
 	return GF_OK;
 }
 
+#ifndef GPAC_DISABLE_ISOM_WRITE
+
 GF_Err stbl_SampleSizeAppend(GF_SampleSizeBox *stsz, u32 data_size)
 {
 	u32 i;
@@ -1651,19 +1687,21 @@ GF_Err stbl_SampleSizeAppend(GF_SampleSizeBox *stsz, u32 data_size)
 		stsz->sampleSize = data_size;
 	} else {
 		u32 single_size;
+		Bool use_same_size=GF_TRUE;
 		stsz->sizes[stsz->sampleCount-1] += data_size;
 
 		single_size = stsz->sizes[0];
 		for (i=1; i<stsz->sampleCount; i++) {
 			if (stsz->sizes[i] != single_size) {
-				single_size = 0;
+				use_same_size = GF_FALSE;
 				break;
 			}
 		}
-		if (single_size) {
+		if (use_same_size) {
 			stsz->sampleSize = single_size;
 			gf_free(stsz->sizes);
 			stsz->sizes = NULL;
+			stsz->alloc_size = 0;
 		}
 	}
 	return GF_OK;
@@ -1747,7 +1785,7 @@ GF_Err stbl_AppendChunk(GF_SampleTableBox *stbl, u64 offset)
 	GF_ChunkOffsetBox *stco;
 	GF_ChunkLargeOffsetBox *co64;
 	u32 i;
-	
+
 	//we may have to convert the table...
 	if (stbl->ChunkOffset->type==GF_ISOM_BOX_TYPE_STCO) {
 		stco = (GF_ChunkOffsetBox *)stbl->ChunkOffset;
@@ -1860,7 +1898,7 @@ GF_Err stbl_AppendRAP(GF_SampleTableBox *stbl, u8 isRap)
 	return GF_OK;
 }
 
-GF_Err stbl_AppendTrafMap(GF_ISOFile *mov, GF_SampleTableBox *stbl, Bool is_seg_start, u64 seg_start_offset, u64 frag_start_offset, u8 *moof_template, u32 moof_template_size, u64 sidx_start, u64 sidx_end, u32 nb_pack_samples)
+GF_Err stbl_AppendTrafMap(GF_ISOFile *mov, GF_SampleTableBox *stbl, Bool is_seg_start, u64 seg_start_offset, u64 frag_start_offset, u64 tfdt, u8 *moof_template, u32 moof_template_size, u64 sidx_start, u64 sidx_end, u32 nb_pack_samples)
 {
 	GF_TrafToSampleMap *tmap;
 	GF_TrafMapEntry *tmap_ent;
@@ -1891,13 +1929,14 @@ GF_Err stbl_AppendTrafMap(GF_ISOFile *mov, GF_SampleTableBox *stbl, Bool is_seg_
 	memset(tmap_ent, 0, sizeof(GF_TrafMapEntry));
 	tmap_ent->sample_num = stbl->SampleSize->sampleCount;
 	if (nb_pack_samples)
-		tmap_ent->sample_num -= tmap_ent->sample_num-1;
+		tmap_ent->sample_num -= nb_pack_samples-1;
 
 	tmap_ent->moof_template = moof_template;
 	tmap_ent->moof_template_size = moof_template_size;
 	tmap_ent->moof_start = frag_start_offset;
 	tmap_ent->sidx_start = sidx_start;
 	tmap_ent->sidx_end = sidx_end;
+	tmap_ent->first_dts = tfdt;
 	if (is_seg_start)
 		tmap_ent->seg_start_plus_one = 1 + seg_start_offset;
 
@@ -1926,9 +1965,16 @@ GF_Err stbl_AppendCTSOffset(GF_SampleTableBox *stbl, s32 offset)
 		if (!stbl->CompositionOffset) return GF_OUT_OF_MEM;
 	}
 	ctts = stbl->CompositionOffset;
+#ifndef GPAC_DISABLE_ISOM_WRITE
 	ctts->w_LastSampleNumber ++;
+#endif
 
-	if (!ctts->unpack_mode && ctts->nb_entries && (ctts->entries[ctts->nb_entries-1].decodingOffset == offset) ) {
+	if (
+#ifndef GPAC_DISABLE_ISOM_WRITE
+		!ctts->unpack_mode &&
+#endif
+		ctts->nb_entries && (ctts->entries[ctts->nb_entries-1].decodingOffset == offset)
+	) {
 		ctts->entries[ctts->nb_entries-1].sampleCount++;
 		return GF_OK;
 	}
@@ -1943,9 +1989,14 @@ GF_Err stbl_AppendCTSOffset(GF_SampleTableBox *stbl, s32 offset)
 	ctts->nb_entries++;
 	if (offset<0) ctts->version=1;
 
-	if (ABS(offset) >= ctts->max_cts_delta) {
+	if(offset == GF_INT_MIN) {
+		ctts->max_cts_delta = GF_INT_MAX;
+	} else if (ABS(offset) > ctts->max_cts_delta) {
 		ctts->max_cts_delta = ABS(offset);
 		//ctts->sample_num_max_cts_delta = ctts->w_LastSampleNumber;
+	}
+	if (offset<ctts->min_neg_cts_offset) {
+		ctts->min_neg_cts_offset = offset;
 	}
 
 	return GF_OK;
@@ -2250,7 +2301,7 @@ GF_Err gf_isom_refresh_size_info(GF_ISOFile *file, u32 trackNumber)
 	u32 i, size;
 	GF_TrackBox *trak;
 	GF_SampleSizeBox *stsz;
-	trak = gf_isom_get_track_from_file(file, trackNumber);
+	trak = gf_isom_get_track_box(file, trackNumber);
 	if (!trak) return GF_BAD_PARAM;
 
 	stsz = trak->Media->information->sampleTable->SampleSize;

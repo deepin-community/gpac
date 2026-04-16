@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2019
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / ISO Media File Format sub-project
@@ -221,13 +221,15 @@ GF_Err stbl_GetSampleDTS_and_Duration(GF_TimeToSampleBox *stts, u32 SampleNumber
 
 	//no ent, this is really weird. Let's assume the DTS is then what is written in the table
 	if (!ent || (i == count)) {
+		if (SampleNumber>stts->r_FirstSampleInEntry)
+			return GF_ISOM_INVALID_FILE;
 		(*DTS) = stts->r_CurrentDTS;
 		if (duration) *duration = ent ? ent->sampleDelta : 0;
 	}
 	return GF_OK;
 
 found:
-	(*DTS) = stts->r_CurrentDTS + j * (u64) ent->sampleDelta;
+	(*DTS) = stts->r_CurrentDTS + j * (u64) ent->sampleDelta + stts->cumulated_start_dts;
 	if (duration) *duration = ent->sampleDelta;
 	return GF_OK;
 }
@@ -258,6 +260,7 @@ GF_Err stbl_GetSampleRAP(GF_SyncSampleBox *stss, u32 SampleNumber, GF_ISOSAPType
 			stss->r_LastSyncSample = SampleNumber;
 			stss->r_LastSampleIndex = i;
 			(*IsRAP) = RAP;
+			if (!nextRAP) return GF_OK;
 		}
 		else if (stss->sampleNumbers[i] > SampleNumber) {
 			if (nextRAP) *nextRAP = stss->sampleNumbers[i];
@@ -271,8 +274,8 @@ GF_Err stbl_GetSampleRAP(GF_SyncSampleBox *stss, u32 SampleNumber, GF_ISOSAPType
 GF_Err stbl_SearchSAPs(GF_SampleTableBox *stbl, u32 SampleNumber, GF_ISOSAPType *IsRAP, u32 *prevRAP, u32 *nextRAP)
 {
 	u32 i, j, count, count2;
-	assert(prevRAP);
-	assert(nextRAP);
+	gf_assert(prevRAP);
+	gf_assert(nextRAP);
 	(*prevRAP) = 0;
 	(*nextRAP) = 0;
 	(*IsRAP) = RAP_NO;
@@ -338,7 +341,7 @@ GF_Err stbl_SearchSAPs(GF_SampleTableBox *stbl, u32 SampleNumber, GF_ISOSAPType 
 				*prevRAP = first_rap_in_entry;
 			}
 			*nextRAP = last_rap_in_entry;
-			
+
 			/*sample lies in this (rap) group, it is rap*/
 			if (is_rap_group) {
 				if ((first_rap_in_entry <= SampleNumber) && (SampleNumber <= last_rap_in_entry)) {
@@ -408,7 +411,7 @@ GF_Err stbl_GetSampleInfos(GF_SampleTableBox *stbl, u32 sampleNumber, u64 *offse
 	(*chunkNumber) = (*descIndex) = 0;
 	if (out_ent) (*out_ent) = NULL;
 	if (!stbl || !sampleNumber) return GF_BAD_PARAM;
-	if (!stbl->ChunkOffset || !stbl->SampleToChunk || !stbl->SampleSize) return GF_ISOM_INVALID_FILE;
+	if (!stbl->ChunkOffset || !stbl->SampleToChunk || !stbl->SampleSize || !stbl->SampleToChunk->entries) return GF_ISOM_INVALID_FILE;
 
 	if (stbl->SampleSize && stbl->SampleToChunk->nb_entries == stbl->SampleSize->sampleCount) {
 		ent = &stbl->SampleToChunk->entries[sampleNumber-1];
@@ -455,7 +458,7 @@ GF_Err stbl_GetSampleInfos(GF_SampleTableBox *stbl, u32 sampleNumber, u64 *offse
 
 	//first get the chunk
 	for (; i < stbl->SampleToChunk->nb_entries; i++) {
-		assert(stbl->SampleToChunk->firstSampleInCurrentChunk <= sampleNumber);
+		gf_assert(stbl->SampleToChunk->firstSampleInCurrentChunk <= sampleNumber);
 		//corrupted file (less sample2chunk info than sample count
 		if (k > stbl->SampleToChunk->ghostNumber) {
 			return GF_ISOM_INVALID_FILE;
@@ -465,7 +468,7 @@ GF_Err stbl_GetSampleInfos(GF_SampleTableBox *stbl, u32 sampleNumber, u64 *offse
 		//check if sample is in current chunk
 		u32 max_chunks_in_entry = stbl->SampleToChunk->ghostNumber - k;
 		u32 nb_chunks_for_sample = sampleNumber - stbl->SampleToChunk->firstSampleInCurrentChunk;
-		if (ent->samplesPerChunk) 
+		if (ent->samplesPerChunk)
 			nb_chunks_for_sample /= ent->samplesPerChunk;
 
 		if (
@@ -502,7 +505,7 @@ sample_found:
 	if (out_ent) *out_ent = ent;
 	if (! *chunkNumber)
 		return GF_ISOM_INVALID_FILE;
-	
+
 	//ok, get the size of all the previous samples in the chunk
 	offsetInChunk = 0;
 	//constant size
@@ -604,7 +607,7 @@ GF_Err stbl_GetSampleDepType(GF_SampleDependencyTypeBox *sdep, u32 SampleNumber,
 {
 	u8 flag;
 
-	assert(dependsOn && dependedOn && redundant);
+	gf_assert(dependsOn && dependedOn && redundant);
 	*dependsOn = *dependedOn = *redundant = 0;
 
 	if (SampleNumber > sdep->sampleCount) {

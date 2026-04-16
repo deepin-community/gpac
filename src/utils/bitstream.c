@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / common tools sub-project
@@ -78,8 +78,15 @@ struct __tag_bitstream
 
 	u32 total_bits_read;
 	u32 overflow_state;
+
+	u64 o_size;
+
+#ifdef GPAC_HAS_FD
+	int fd;
+#endif
 };
 
+GF_EXPORT
 GF_Err gf_bs_reassign_buffer(GF_BitStream *bs, const u8 *buffer, u64 BufferSize)
 {
 	if (!bs) return GF_BAD_PARAM;
@@ -129,6 +136,9 @@ GF_BitStream *gf_bs_new(const u8 *buffer, u64 BufferSize, u32 mode)
 	GF_BitStream *tmp = (GF_BitStream *)gf_malloc(sizeof(GF_BitStream));
 	if (!tmp) return NULL;
 	memset(tmp, 0, sizeof(GF_BitStream));
+#ifdef GPAC_HAS_FD
+	tmp->fd = -1;
+#endif
 
 	tmp->original = (char*)buffer;
 	tmp->size = BufferSize;
@@ -187,6 +197,9 @@ GF_BitStream *gf_bs_from_file(FILE *f, u32 mode)
 	tmp->original = NULL;
 	tmp->position = 0;
 	tmp->stream = f;
+#ifdef GPAC_HAS_FD
+	tmp->fd = -1;
+#endif
 
 	/*get the size of this file (for read streams)*/
 	tmp->position = gf_ftell(f);
@@ -220,6 +233,55 @@ GF_BitStream *gf_bs_from_file(FILE *f, u32 mode)
 	return tmp;
 }
 
+#ifdef GPAC_HAS_FD
+
+GF_EXPORT
+GF_BitStream *gf_bs_from_fd(int fd, u32 mode)
+{
+	GF_BitStream *tmp;
+	if (fd<0) return NULL;
+
+	tmp = (GF_BitStream *)gf_malloc(sizeof(GF_BitStream));
+	if (!tmp) return NULL;
+	memset(tmp, 0, sizeof(GF_BitStream));
+	/*switch to internal mode*/
+	mode = (mode==GF_BITSTREAM_READ) ? GF_BITSTREAM_FILE_READ : GF_BITSTREAM_FILE_WRITE;
+	tmp->bsmode = mode;
+	tmp->current = 0;
+	tmp->nbBits = (mode == GF_BITSTREAM_FILE_READ) ? 8 : 0;
+	tmp->original = NULL;
+	tmp->position = 0;
+	tmp->fd = fd;
+
+	/*get the size of this file (for read streams)*/
+	tmp->position = lseek_64(fd, 0, SEEK_CUR);
+	tmp->size = gf_fd_fsize(fd);
+
+	if (mode == GF_BITSTREAM_FILE_READ) {
+		tmp->cache_read_alloc = gf_opts_get_int("core", "bs-cache-size");
+		if (tmp->cache_read_alloc) {
+			tmp->cache_read_pos = tmp->cache_read_size = tmp->cache_read_alloc;
+			tmp->cache_read = gf_malloc(tmp->cache_read_alloc);
+			if (!tmp->cache_read) {
+				gf_free(tmp);
+				return NULL;
+			}
+		}
+	}
+	if (mode == GF_BITSTREAM_FILE_WRITE) {
+		tmp->cache_write_size = gf_opts_get_int("core", "bs-cache-size");
+		if (tmp->cache_write_size) {
+			tmp->cache_write = (char*)gf_malloc(tmp->cache_write_size);
+			if (!tmp->cache_write) {
+				gf_free(tmp);
+				return NULL;
+			}
+			tmp->buffer_written = 0;
+		}
+	}
+	return tmp;
+}
+#endif
 
 GF_BitStream *gf_bs_new_cbk_buffer(GF_Err (*on_block_out)(void *cbk, u8 *data, u32 block_size), void *usr_data, u8 *buffer, u32 buffer_size)
 {
@@ -265,7 +327,7 @@ void gf_bs_prevent_dispatch(GF_BitStream *bs, Bool prevent_dispatch)
 	bs->prevent_dispatch --;
 
 	if (bs->on_block_out && !bs->prevent_dispatch) {
-		assert(bs->position >= bs->bytes_out);
+		gf_assert(bs->position >= bs->bytes_out);
 		if (bs->position > bs->bytes_out) {
 			bs->on_block_out(bs->usr_data, bs->original, (u32) (bs->position - bs->bytes_out));
 			bs->bytes_out = bs->position;
@@ -278,7 +340,14 @@ static Bool bs_flush_write_cache(GF_BitStream *bs)
 	Bool res = GF_TRUE;
 	if (bs->buffer_written) {
 		u32 nb_write;
-		nb_write = (u32) gf_fwrite(bs->cache_write, bs->buffer_written, bs->stream);
+#ifdef GPAC_HAS_FD
+		if (bs->fd>=0) {
+			nb_write = (u32) write(bs->fd, bs->cache_write, bs->buffer_written);
+		} else
+#endif
+		{
+			nb_write = (u32) gf_fwrite(bs->cache_write, bs->buffer_written, bs->stream);
+		}
 		if (nb_write != bs->buffer_written)
 			res = GF_FALSE;
 		//check we didn't rewind the bitstream
@@ -344,7 +413,14 @@ static GFINLINE u8 gf_bs_load_byte(GF_BitStream *bs, Bool *is_eos)
 	u8 res;
 	if (bs->cache_read) {
 		if (bs->cache_read_pos == bs->cache_read_size) {
-			bs->cache_read_size = (u32) gf_fread(bs->cache_read, bs->cache_read_alloc, bs->stream);
+#ifdef GPAC_HAS_FD
+			if (bs->fd>=0) {
+				bs->cache_read_size = (u32) read(bs->fd, bs->cache_read, bs->cache_read_alloc);
+			} else
+#endif
+			{
+				bs->cache_read_size = (u32) gf_fread(bs->cache_read, bs->cache_read_alloc, bs->stream);
+			}
 			bs->cache_read_pos = 0;
 			if (!bs->cache_read_size) {
 				*is_eos = GF_TRUE;
@@ -354,7 +430,14 @@ static GFINLINE u8 gf_bs_load_byte(GF_BitStream *bs, Bool *is_eos)
 		res = bs->cache_read[bs->cache_read_pos];
 		bs->cache_read_pos++;
 	} else {
-		res = gf_fgetc(bs->stream);
+#ifdef GPAC_HAS_FD
+		if (bs->fd>=0) {
+			if (read(bs->fd, &res, 1)<=0) {
+				GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[BS] Failed to read byte from file\n"));
+			}
+		} else
+#endif
+			res = gf_fgetc(bs->stream);
 	}
 	return res;
 }
@@ -386,7 +469,13 @@ static u8 BS_ReadByte(GF_BitStream *bs)
 	if (bs->cache_write)
 		bs_flush_write_cache(bs);
 
-	is_eos = bs->stream ? gf_feof(bs->stream) : GF_TRUE;
+#ifdef GPAC_HAS_FD
+	if (bs->fd>=0)
+		is_eos = (bs->position<bs->size) ? GF_FALSE : GF_TRUE;
+	else
+#endif
+		is_eos = bs->stream ? gf_feof(bs->stream) : GF_TRUE;
+
 	//cache not fully read, reset EOS
 	if (bs->cache_read && (bs->cache_read_pos<bs->cache_read_size))
 		is_eos = GF_FALSE;
@@ -395,7 +484,7 @@ static u8 BS_ReadByte(GF_BitStream *bs)
 	if (!is_eos) {
 		u8 res;
 		Bool loc_eos=GF_FALSE;
-		assert(bs->position<=bs->size);
+		gf_assert(bs->position<=bs->size);
 		bs->position++;
 
 		res = gf_bs_load_byte(bs, &loc_eos);
@@ -429,7 +518,7 @@ bs_eof:
 			GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[BS] Attempt to overread bitstream\n"));
 		}
 	}
-	assert(bs->position <= 1+bs->size);
+	gf_assert(bs->position <= 1+bs->size);
 	return 0;
 }
 
@@ -458,7 +547,6 @@ u8 gf_bs_read_bit(GF_BitStream *bs)
 #else
 	return (u8) (bs->current & bit_mask[bs->nbBits++]) ? 1 : 0;
 #endif
-
 }
 
 GF_EXPORT
@@ -485,7 +573,7 @@ u32 gf_bs_read_int(GF_BitStream *bs, u32 nBits)
 GF_EXPORT
 u32 gf_bs_read_u8(GF_BitStream *bs)
 {
-	assert(bs->nbBits==8);
+	gf_fatal_assert(bs->nbBits==8);
 	if (bs->cache_read && (bs->cache_read_pos+1<bs->cache_read_size) ) {
 		u32 ret = bs->cache_read[bs->cache_read_pos];
 		bs->cache_read_pos+=1;
@@ -525,7 +613,7 @@ GF_EXPORT
 u32 gf_bs_read_u16(GF_BitStream *bs)
 {
 	u32 ret;
-	assert(bs->nbBits==8);
+	gf_fatal_assert(bs->nbBits==8);
 	if (bs->cache_read && (bs->cache_read_pos+2<bs->cache_read_size) ) {
 		ret = bs->cache_read[bs->cache_read_pos];
 		ret<<=8;
@@ -546,7 +634,7 @@ GF_EXPORT
 u32 gf_bs_read_u24(GF_BitStream *bs)
 {
 	u32 ret;
-	assert(bs->nbBits==8);
+	gf_fatal_assert(bs->nbBits==8);
 
 	if (bs->cache_read && (bs->cache_read_pos+3<bs->cache_read_size) ) {
 		ret = bs->cache_read[bs->cache_read_pos];
@@ -571,7 +659,7 @@ GF_EXPORT
 u32 gf_bs_read_u32(GF_BitStream *bs)
 {
 	u32 ret;
-	assert(bs->nbBits==8);
+	gf_fatal_assert(bs->nbBits==8);
 
 	if (bs->cache_read && (bs->cache_read_pos+4<bs->cache_read_size) ) {
 		ret = bs->cache_read[bs->cache_read_pos];
@@ -692,7 +780,13 @@ u32 gf_bs_read_data(GF_BitStream *bs, u8 *data, u32 nbBytes)
 {
 	u64 orig = bs->position;
 
-	if (bs->position+nbBytes > bs->size) return 0;
+	if (bs->position+nbBytes > bs->size) {
+		if (!bs->overflow_state) {
+			bs->overflow_state = 1;
+			GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[BS] Attempt to overread bitstream\n"));
+		}
+		return 0;
+	}
 
 	if (gf_bs_is_align(bs) ) {
 		s32 bytes_read, bytes_read_cache;
@@ -718,7 +812,14 @@ u32 gf_bs_read_data(GF_BitStream *bs, u8 *data, u32 nbBytes)
 				bytes_read_cache = csize;
 			}
 			if (nbBytes) {
-				bytes_read = (s32) gf_fread(data + bytes_read_cache, nbBytes, bs->stream);
+#ifdef GPAC_HAS_FD
+				if (bs->fd>=0) {
+					bytes_read = (s32) read(bs->fd, data + bytes_read_cache, nbBytes);
+				} else
+#endif
+				{
+					bytes_read = (s32) gf_fread(data + bytes_read_cache, nbBytes, bs->stream);
+				}
 				if (bytes_read<0) return bytes_read_cache;
 			}
 			bs->position += bytes_read + bytes_read_cache;
@@ -744,7 +845,11 @@ static void BS_WriteByte(GF_BitStream *bs, u8 val)
 		GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[BS] Attempt to write on read bitstream\n"));
 		return;
 	}
-	if (!bs->original && !bs->stream) {
+	if (!bs->original && !bs->stream
+#ifdef GPAC_HAS_FD
+		&& (bs->fd==-1)
+#endif
+	) {
 		GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[BS] Attempt to write on unassigned bitstream\n"));
 		return;
 	}
@@ -752,7 +857,7 @@ static void BS_WriteByte(GF_BitStream *bs, u8 val)
 	if ( (bs->bsmode == GF_BITSTREAM_WRITE) || (bs->bsmode == GF_BITSTREAM_WRITE_DYN) ) {
 		//if callback mode and dispatch is not blocked, dispatch
 		if (bs->on_block_out && !bs->prevent_dispatch) {
-			assert(bs->position >= bs->bytes_out);
+			gf_assert(bs->position >= bs->bytes_out);
 			if (bs->position - bs->bytes_out == bs->size) {
 				bs->on_block_out(bs->usr_data, bs->original, (u32) (bs->position - bs->bytes_out));
 				bs->bytes_out = bs->position;
@@ -760,7 +865,7 @@ static void BS_WriteByte(GF_BitStream *bs, u8 val)
 			if (bs->original)
 				bs->original[bs->position - bs->bytes_out] = val;
 			bs->position++;
-			assert(bs->position >= bs->bytes_out);
+			gf_assert(bs->position >= bs->bytes_out);
 			return;
 		}
 		//otherwise store
@@ -790,7 +895,14 @@ static void BS_WriteByte(GF_BitStream *bs, u8 val)
 		return;
 	}
 	/*we are in FILE mode, no pb for any gf_realloc...*/
-	gf_fputc(val, bs->stream);
+#ifdef GPAC_HAS_FD
+	if (bs->fd>=0) {
+		if (write(bs->fd, &val, 1)<=0) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[BS] Failed to write byte to file\n"));
+		}
+	} else
+#endif
+		gf_fputc(val, bs->stream);
 
 	/*check we didn't rewind the stream*/
 	if (bs->size == bs->position) bs->size++;
@@ -861,7 +973,7 @@ void gf_bs_write_long_int(GF_BitStream *bs, s64 _value, s32 nBits)
 GF_EXPORT
 void gf_bs_write_u8(GF_BitStream *bs, u32 value)
 {
-	assert(!bs->nbBits);
+	gf_fatal_assert(!bs->nbBits);
 
 	if (bs->cache_write && (bs->buffer_written+1 < bs->cache_write_size) ) {
 		bs->cache_write[bs->buffer_written] = (u8) value;
@@ -874,7 +986,7 @@ void gf_bs_write_u8(GF_BitStream *bs, u32 value)
 GF_EXPORT
 void gf_bs_write_u16(GF_BitStream *bs, u32 value)
 {
-	assert(!bs->nbBits);
+	gf_fatal_assert(!bs->nbBits);
 	if (bs->cache_write && (bs->buffer_written+2 < bs->cache_write_size) ) {
 		bs->cache_write[bs->buffer_written] = (u8) ((value>>8)&0xff);
 		bs->cache_write[bs->buffer_written+1] = (u8) ((value)&0xff);
@@ -888,7 +1000,7 @@ void gf_bs_write_u16(GF_BitStream *bs, u32 value)
 GF_EXPORT
 void gf_bs_write_u24(GF_BitStream *bs, u32 value)
 {
-	assert(!bs->nbBits);
+	gf_fatal_assert(!bs->nbBits);
 	if (bs->cache_write && (bs->buffer_written+3 < bs->cache_write_size) ) {
 		bs->cache_write[bs->buffer_written] = (u8) ((value>>16)&0xff);
 		bs->cache_write[bs->buffer_written+1] = (u8) ((value>>8)&0xff);
@@ -904,7 +1016,7 @@ void gf_bs_write_u24(GF_BitStream *bs, u32 value)
 GF_EXPORT
 void gf_bs_write_u32(GF_BitStream *bs, u32 value)
 {
-	assert(!bs->nbBits);
+	gf_fatal_assert(!bs->nbBits);
 	if (bs->cache_write && (bs->buffer_written+4 < bs->cache_write_size) ) {
 		bs->cache_write[bs->buffer_written] = (u8) ((value>>24)&0xff);
 		bs->cache_write[bs->buffer_written+1] = (u8) ((value>>16)&0xff);
@@ -922,7 +1034,7 @@ void gf_bs_write_u32(GF_BitStream *bs, u32 value)
 GF_EXPORT
 void gf_bs_write_u64(GF_BitStream *bs, u64 value)
 {
-	assert(!bs->nbBits);
+	gf_fatal_assert(!bs->nbBits);
 	gf_bs_write_u32(bs, (u32) ((value>>32)&0xffffffff));
 	gf_bs_write_u32(bs, (u32) (value&0xffffffff));
 }
@@ -966,8 +1078,16 @@ u32 gf_bs_write_byte(GF_BitStream *bs, u8 byte, u32 repeat_count)
 		return repeat_count;
 	case GF_BITSTREAM_FILE_READ:
 	case GF_BITSTREAM_FILE_WRITE:
-		if (gf_fwrite(&byte, repeat_count, bs->stream) != repeat_count)
-			return 0;
+#ifdef GPAC_HAS_FD
+		if (bs->fd>=0) {
+			if (write(bs->fd, &byte, repeat_count) != repeat_count)
+				return 0;
+		} else
+#endif
+		{
+			if (gf_fwrite(&byte, repeat_count, bs->stream) != repeat_count)
+				return 0;
+		}
 		if (bs->size == bs->position) bs->size += repeat_count;
 		bs->position += repeat_count;
 		return repeat_count;
@@ -1028,7 +1148,7 @@ u32 gf_bs_write_data(GF_BitStream *bs, const u8 *data, u32 nbBytes)
 		case GF_BITSTREAM_WRITE_DYN:
 			//if callback mode and dispatch not disabled, dispatch bytes
 			if (bs->on_block_out && !bs->prevent_dispatch) {
-				assert(bs->position >= bs->bytes_out);
+				gf_assert(bs->position >= bs->bytes_out);
 
 				if (bs->position - bs->bytes_out + nbBytes <= bs->size) {
 					memcpy(bs->original + bs->position - bs->bytes_out, data, nbBytes);
@@ -1042,7 +1162,7 @@ u32 gf_bs_write_data(GF_BitStream *bs, const u8 *data, u32 nbBytes)
 					bs->position += nbBytes;
 					bs->bytes_out = bs->position;
 				}
-				assert(bs->position >= bs->bytes_out);
+				gf_assert(bs->position >= bs->bytes_out);
 				return nbBytes;
 			}
 			//otherwise store
@@ -1077,9 +1197,14 @@ u32 gf_bs_write_data(GF_BitStream *bs, const u8 *data, u32 nbBytes)
 				if (!bs_flush_write_cache(bs))
 					return 0;
 			}
-
-			if (gf_fwrite(data, nbBytes, bs->stream) != nbBytes) return 0;
-
+#ifdef GPAC_HAS_FD
+			if (bs->fd>=0) {
+				if (write(bs->fd, data, nbBytes) != nbBytes) return 0;
+			} else
+#endif
+			{
+				if (gf_fwrite(data, nbBytes, bs->stream) != nbBytes) return 0;
+			}
 			if (bs->size == bs->position) bs->size += nbBytes;
 			bs->position += nbBytes;
 			return nbBytes;
@@ -1142,10 +1267,17 @@ u64 gf_bs_available(GF_BitStream *bs)
 	if (bs->cache_write)
 		bs_flush_write_cache(bs);
 
-	cur = gf_ftell(bs->stream);
-	end = gf_fsize(bs->stream);
-	gf_fseek(bs->stream, cur, SEEK_SET);
-
+#ifdef GPAC_HAS_FD
+	if (bs->fd>=0) {
+		cur = lseek_64(bs->fd, 0, SEEK_CUR);
+		end = bs->position;
+	} else
+#endif
+	{
+		cur = gf_ftell(bs->stream);
+		end = gf_fsize(bs->stream);
+		gf_fseek(bs->stream, cur, SEEK_SET);
+	}
 	return (u64) (end - cur);
 }
 
@@ -1219,6 +1351,16 @@ void gf_bs_get_content(GF_BitStream *bs, u8 **output, u32 *outSize)
 	gf_bs_get_content_no_truncate(bs, output, outSize, NULL);
 }
 
+GF_Err gf_bs_grow(GF_BitStream *bs, u32 addSize)
+{
+	if (!bs || (bs->bsmode != GF_BITSTREAM_WRITE_DYN) || bs->cache_write) return GF_OK;
+	if (bs->position + addSize <= bs->size) return GF_OK;
+	bs->size += addSize;
+	bs->original = gf_realloc(bs->original, (u32) bs->size);
+	if (!bs->original) return GF_OUT_OF_MEM;
+	return GF_OK;
+}
+
 /*	Skip nbytes.
 	Align
 	If READ (MEM or FILE) mode, just read n times 8 bit
@@ -1253,7 +1395,14 @@ void gf_bs_skip_bytes(GF_BitStream *bs, u64 nbBytes)
 		if (bs->bsmode == GF_BITSTREAM_FILE_READ) {
 			if (bs->position > bs->size) bs->position = bs->size;
 		}
-		gf_fseek(bs->stream, bs->position, SEEK_SET);
+#ifdef GPAC_HAS_FD
+		if (bs->fd>=0) {
+			lseek_64(bs->fd, bs->position, SEEK_SET);
+		} else
+#endif
+		{
+			gf_fseek(bs->stream, bs->position, SEEK_SET);
+		}
 		return;
 	}
 
@@ -1291,7 +1440,7 @@ void gf_bs_rewind_bits(GF_BitStream *bs, u64 nbBits)
 	nbBytes = (nbBits+8)>>3;
 	nbBits = nbBytes*8 - nbBits;
 	gf_bs_align(bs);
-	assert(bs->position >= nbBytes);
+	gf_assert(bs->position >= nbBytes);
 	bs->position -= nbBytes + 1;
 	gf_bs_read_int(bs, (u32)nbBits);
 	return;
@@ -1339,13 +1488,21 @@ static GF_Err BS_SeekIntern(GF_BitStream *bs, u64 offset)
 		bs->cache_read_pos = bs->cache_read_size;
 	}
 
-	gf_fseek(bs->stream, offset, SEEK_SET);
-
+	s64 res;
+#ifdef GPAC_HAS_FD
+	if (bs->fd>=0) {
+		res = lseek_64(bs->fd, offset, SEEK_SET);
+		if (res>=0) res = 0;
+	} else
+#endif
+	{
+		res = gf_fseek(bs->stream, offset, SEEK_SET);
+	}
 	bs->position = offset;
 	bs->current = 0;
 	/*setup NbBits so that next acccess to the buffer will trigger read/write*/
 	bs->nbBits = (bs->bsmode == GF_BITSTREAM_FILE_READ) ? 8 : 0;
-	return GF_OK;
+	return res ? GF_IO_ERR : GF_OK;
 }
 
 /*seek from beginning of stream: align before anything else*/
@@ -1387,6 +1544,36 @@ u32 gf_bs_peek_bits(GF_BitStream *bs, u32 numBits, u64 byte_offset)
 	if ( (bs->bsmode != GF_BITSTREAM_READ) && (bs->bsmode != GF_BITSTREAM_FILE_READ)) return 0;
 	if (!numBits || (bs->size < bs->position + byte_offset)) return 0;
 
+	if (bs->cache_read) {
+		if ((numBits==32) && (bs->cache_read_pos+byte_offset+4<bs->cache_read_size) ) {
+			ret = bs->cache_read[bs->cache_read_pos+byte_offset];
+			ret<<=8;
+			ret |= bs->cache_read[bs->cache_read_pos+byte_offset+1];
+			ret<<=8;
+			ret |= bs->cache_read[bs->cache_read_pos+byte_offset+2];
+			ret<<=8;
+			ret |= bs->cache_read[bs->cache_read_pos+byte_offset+3];
+			return ret;
+		}
+		if ((numBits==24) && (bs->cache_read_pos+byte_offset+3<bs->cache_read_size) ) {
+			ret = bs->cache_read[bs->cache_read_pos+byte_offset];
+			ret<<=8;
+			ret |= bs->cache_read[bs->cache_read_pos+byte_offset+1];
+			ret<<=8;
+			ret |= bs->cache_read[bs->cache_read_pos+byte_offset+2];
+			return ret;
+		}
+		if ((numBits==16) && (bs->cache_read_pos+byte_offset+2<bs->cache_read_size) ) {
+			ret = bs->cache_read[bs->cache_read_pos+byte_offset];
+			ret<<=8;
+			ret |= bs->cache_read[bs->cache_read_pos+byte_offset+1];
+			return ret;
+		}
+		if ((numBits==8) && (bs->cache_read_pos+byte_offset+1<bs->cache_read_size) ) {
+			return bs->cache_read[bs->cache_read_pos+byte_offset];
+		}
+	}
+
 	/*store our state*/
 	curPos = bs->position;
 	curBits = bs->nbBits;
@@ -1420,7 +1607,6 @@ GF_EXPORT
 u64 gf_bs_get_refreshed_size(GF_BitStream *bs)
 {
 	s64 offset;
-
 	switch (bs->bsmode) {
 	case GF_BITSTREAM_READ:
 	case GF_BITSTREAM_WRITE:
@@ -1429,6 +1615,13 @@ u64 gf_bs_get_refreshed_size(GF_BitStream *bs)
 	default:
 		if (bs->cache_write)
 			bs_flush_write_cache(bs);
+
+#ifdef GPAC_HAS_FD
+		if (bs->fd>=0) {
+			bs->size = gf_fd_fsize(bs->fd);
+			return bs->size;
+		}
+#endif
 
 		if (bs->stream) {
 			offset = gf_ftell(bs->stream);
@@ -1588,7 +1781,13 @@ u32 gf_bs_read_vluimsbf5(GF_BitStream *bs)
 GF_EXPORT
 void gf_bs_truncate(GF_BitStream *bs)
 {
+	bs->o_size = bs->size;
 	bs->size = bs->position;
+}
+
+void gf_bs_untruncate(GF_BitStream *bs)
+{
+	bs->size = bs->o_size;
 }
 
 
@@ -1680,8 +1879,14 @@ GF_Err gf_bs_insert_data(GF_BitStream *bs, u8 *data, u32 size, u64 offset)
 {
 	u64 cur_r, cur_w, pos;
 	u32 nb_io;
-
+	u8 *block=NULL;
+	u32 bk_size = 8196;
 	if (bs->on_block_out) return GF_BAD_PARAM;
+#ifdef GPAC_HAS_FD
+	if (bs->fd) bk_size = 100000;
+#endif
+	block = gf_malloc(sizeof(u8)*bk_size);
+	if (!block) return GF_OUT_OF_MEM;
 
 	pos = bs->position;
 	nb_io = gf_bs_write_data(bs, data, size);
@@ -1692,8 +1897,7 @@ GF_Err gf_bs_insert_data(GF_BitStream *bs, u8 *data, u32 size, u64 offset)
 	cur_r = pos;
 	pos = cur_w;
 	while (cur_r > offset) {
-		u8 block[8196];
-		u32 move_bytes = 8196;
+		u32 move_bytes = bk_size;
 		if (cur_r - offset < move_bytes)
 			move_bytes = (u32) (cur_r - offset);
 
@@ -1712,9 +1916,11 @@ GF_Err gf_bs_insert_data(GF_BitStream *bs, u8 *data, u32 size, u64 offset)
 	if (nb_io != size) goto exit;
 
 	gf_bs_seek(bs, pos);
+	if (block) gf_free(block);
 	return GF_OK;
 
 exit:
+	if (block) gf_free(block);
 	gf_bs_seek(bs, pos);
 	return GF_IO_ERR;
 }
@@ -1731,7 +1937,7 @@ GF_Err gf_bs_set_logger(GF_BitStream *bs, void (*on_bs_log)(void *udta, const ch
 #ifndef GPAC_DISABLE_AVPARSE_LOGS
 void gf_bs_log_idx(GF_BitStream *bs, u32 nBits, const char *fname, s64 val, s32 idx1, s32 idx2, s32 idx3)
 {
-	assert(bs);
+	gf_assert(bs);
 	if (bs->on_log) bs->on_log(bs->log_udta, fname, nBits, val, idx1, idx2, idx3);
 }
 #endif
@@ -1741,6 +1947,8 @@ void gf_bs_mark_overflow(GF_BitStream *bs, Bool reset)
 {
 	bs->overflow_state = reset ? 0 : 2;
 }
+
+GF_EXPORT
 u32 gf_bs_is_overflow(GF_BitStream *bs)
 {
 	return bs->overflow_state;

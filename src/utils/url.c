@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2025
  *					All rights reserved
  *
  *  This file is part of GPAC / common tools sub-project
@@ -157,19 +157,23 @@ char *gf_url_get_absolute_path(const char *pathName, const char *parentPath)
 
 }
 
-
+//set to 0 to disable max URL len - we don't use MAX_PATH as it can be small on some systems
+#define MAX_URL_LEN		4096
 static char *gf_url_concatenate_ex(const char *parentName, const char *pathName, Bool relative_to_parent)
 {
 	u32 pathSepCount, i, prot_type;
 	Bool had_sep_count = GF_FALSE;
 	char *outPath, *name, *rad, *tmp2;
-	char tmp[GF_MAX_PATH];
+	char *tmp = NULL;
 
 	if (!pathName && !parentName) return NULL;
 	if (!pathName) return gf_strdup(parentName);
 	if (!parentName || !strlen(parentName)) return gf_strdup(pathName);
 
 	if (!strncmp(pathName, "data:", 5)) return gf_strdup(pathName);
+	if (!strcmp(pathName, "stderr")) return gf_strdup(pathName);
+	if (!strcmp(pathName, "stdin")) return gf_strdup(pathName);
+	if (!strcmp(pathName, "stdout")) return gf_strdup(pathName);
 	if (!strncmp(parentName, "gmem://", 7)) return NULL;
 	if (!strncmp(parentName, "gfio://", 7)) {
 		GF_Err e;
@@ -179,16 +183,25 @@ static char *gf_url_concatenate_ex(const char *parentName, const char *pathName,
 			return NULL;
 		return gf_strdup( gf_fileio_url(gfio_new) );
 	}
-	if ((strlen(parentName) > GF_MAX_PATH) || (strlen(pathName) > GF_MAX_PATH)) {
+
+#if MAX_URL_LEN
+	if ((strlen(parentName) > MAX_URL_LEN) || (strlen(pathName) > MAX_URL_LEN)) {
 		GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("URL too long for concatenation: \n%s\n", pathName));
 		return NULL;
 	}
+#endif
 
 	while (!strncmp(parentName, "./.", 3) || !strncmp(parentName, ".\\.", 3)) {
 		parentName += 2;
 	}
 	while (!strncmp(pathName, "./.", 3) || !strncmp(pathName, ".\\.", 3)) {
 		pathName += 2;
+	}
+	//empty path
+	if (pathName[0]=='#') {
+		outPath = gf_strdup(parentName);
+		gf_dynstrcat(&outPath, pathName, NULL);
+		goto check_spaces;
 	}
 
 	prot_type = URL_GetProtocolType(pathName);
@@ -297,7 +310,9 @@ static char *gf_url_concatenate_ex(const char *parentName, const char *pathName,
 	}
 	if (!name) name = (char *) pathName;
 
-	strcpy(tmp, parentName);
+	gf_dynstrcat(&tmp, parentName, NULL);
+	if (!tmp) return NULL;
+
 	while (strchr(" \r\n\t", tmp[strlen(tmp)-1])) {
 		tmp[strlen(tmp)-1] = 0;
 	}
@@ -310,28 +325,47 @@ static char *gf_url_concatenate_ex(const char *parentName, const char *pathName,
 	rad = strchr(tmp2, '#');
 	if (rad) rad[0] = 0;
 
+	//rule out case where we have the same path
+	if (relative_to_parent) {
+		u32 l1=0, l2=0;
+		rad = strrchr(tmp, '/');
+		if (rad) l1 = (u32) (rad - tmp);
+		rad = strrchr(pathName, '/');
+		if (rad) l2 = (u32) (rad - pathName);
+		if (l1 && l2 && (l1==l2) && !strncmp(pathName, parentName, l1)) {
+			outPath = gf_strdup(pathName + l1 + 1);
+			goto check_spaces;
+		}
+		if (!l1 && !l2) {
+			outPath = gf_strdup(pathName);
+			goto check_spaces;
+		}
+	}
+
 	if (pathSepCount)
 		had_sep_count = GF_TRUE;
-	/*remove the last /*/
+	/*remove the last */
 	for (i = (u32) strlen(tmp); i > 0; i--) {
 		//break our path at each separator
 		if ((tmp[i-1] == GF_PATH_SEPARATOR) || (tmp[i-1] == '/'))  {
 			tmp[i-1] = 0;
-			if (!pathSepCount) break;
-			pathSepCount--;
+			if (strcmp(tmp, ".")) {
+				if (!pathSepCount) break;
+				pathSepCount--;
+			}
 		}
 	}
 	//if i==0, the parent path was relative, just return the pathName
 	if (!i) {
 		tmp[i] = 0;
 		while (pathSepCount) {
-			strcat(tmp, "../");
+			gf_dynstrcat(&tmp, "../", NULL);
 			pathSepCount--;
 		}
 	}
 	//path is relative to current dir
 	else if (!relative_to_parent && (pathName[0]=='.') && ((pathName[1]=='/') || (pathName[1]=='\\') ) ) {
-		strcat(tmp, "/");
+		gf_dynstrcat(&tmp, "/", NULL);
 	}
 	//parent is relative to current dir
 	else if (!had_sep_count && (pathName[0]=='.') && (tmp[0]=='.') && ((tmp[1]=='/') || (tmp[1]=='\\') ) ) {
@@ -361,11 +395,13 @@ static char *gf_url_concatenate_ex(const char *parentName, const char *pathName,
 			len -= sep_len;
 			nb_path_sep--;
 		}
-		strcpy(tmp, "");
+		if (tmp) gf_free(tmp);
+		tmp=NULL;
+		gf_dynstrcat(&tmp, "", NULL);
 		while (nb_path_sep--)
-			strcat(tmp, "../");
+			gf_dynstrcat(&tmp, "../", NULL);
 	} else {
-		strcat(tmp, "/");
+		gf_dynstrcat(&tmp, "/", NULL);
 	}
 
 	i = (u32) strlen(tmp);
@@ -392,6 +428,7 @@ check_spaces:
 		}
 		i++;
 	}
+	if (tmp) gf_free(tmp);
 	return outPath;
 }
 GF_EXPORT
@@ -410,7 +447,7 @@ void gf_url_to_fs_path(char *sURL)
 {
 	if (!strnicmp(sURL, "file://", 7)) {
 		/*file:///C:\ scheme*/
-		if ((sURL[7]=='/') && (sURL[9]==':')) {
+		if ((strlen(sURL)>=10) && (sURL[7]=='/') && (sURL[9]==':')) {
 			memmove(sURL, sURL+8, strlen(sURL)-7);
 		} else {
 			memmove(sURL, sURL+7, strlen(sURL)-6);
@@ -440,7 +477,8 @@ char *gf_url_percent_encode(const char *path)
 	for (i=0; i<len; i++) {
 		u8 c = path[i];
 		if (strchr(pce_special, c) != NULL) {
-			if ((i+2<len) && ((strchr(pce_encoded, path[i+1]) == NULL) || (strchr(pce_encoded, path[i+2]) == NULL))) {
+			if (c==' ') count+=2;
+			else if ((i+2<len) && ((strchr(pce_encoded, path[i+1]) == NULL) || (strchr(pce_encoded, path[i+2]) == NULL))) {
 				count+=2;
 			}
 		} else if (c>>7) {
@@ -457,7 +495,9 @@ char *gf_url_percent_encode(const char *path)
 		u8 c = path[i];
 
 		if (strchr(pce_special, c) != NULL) {
-			if ((i+2<len) && ((strchr(pce_encoded, path[i+1]) == NULL) || (strchr(pce_encoded, path[i+2]) == NULL))) {
+			if (c==' ')
+				do_enc = GF_TRUE;
+			else if ((i+2<len) && ((strchr(pce_encoded, path[i+1]) == NULL) || (strchr(pce_encoded, path[i+2]) == NULL))) {
 				do_enc = GF_TRUE;
 			}
 		} else if (c>>7) {
@@ -494,25 +534,27 @@ char *gf_url_percent_decode(const char *path)
 		}
 		count++;
 	}
-	if (!count) return gf_strdup(path);
+	if (count==len) return gf_strdup(path);
 	outpath = (char*)gf_malloc(sizeof(char) * (count + 1));
 
+	u32 d_idx=0;
 	for (i=0; i<len; i++) {
 		u8 c = path[i];
 		if (c=='%') {
 			u32 res;
 			char szChar[3];
 			szChar[0] = path[i+1];
-			szChar[1] = path[i+1];
+			szChar[1] = path[i+2];
 			szChar[2] = 0;
 			sscanf(szChar, "%02X", &res);
 			i += 2;
-			outpath[i] = (char) res;
+			outpath[d_idx] = (char) res;
 		} else {
-			outpath[i] = c;
+			outpath[d_idx] = c;
 		}
+		d_idx++;
 	}
-	outpath[count] = 0;
+	outpath[d_idx] = 0;
 	return outpath;
 }
 

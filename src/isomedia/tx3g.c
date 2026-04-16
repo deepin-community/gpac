@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2019
+ *			Copyright (c) Telecom ParisTech 2000-2025
  *					All rights reserved
  *
  *  This file is part of GPAC / ISO Media File Format sub-project
@@ -45,6 +45,7 @@ static u32 rgb_48_to_32(char *val)
 	return res;
 }
 
+GF_EXPORT
 GF_Err gf_isom_get_text_description(GF_ISOFile *movie, u32 trackNumber, u32 descriptionIndex, GF_TextSampleDescriptor **out_desc)
 {
 	GF_TrackBox *trak;
@@ -53,12 +54,13 @@ GF_Err gf_isom_get_text_description(GF_ISOFile *movie, u32 trackNumber, u32 desc
 	GF_TextSampleEntryBox *qt_txt = NULL;
 	if (!descriptionIndex || !out_desc) return GF_BAD_PARAM;
 
-	trak = gf_isom_get_track_from_file(movie, trackNumber);
+	trak = gf_isom_get_track_box(movie, trackNumber);
 	if (!trak || !trak->Media) return GF_BAD_PARAM;
 
 	switch (trak->Media->handler->handlerType) {
 	case GF_ISOM_MEDIA_TEXT:
 	case GF_ISOM_MEDIA_SUBT:
+	case GF_ISOM_MEDIA_MPEG_SUBT:
 		break;
 	default:
 		return GF_BAD_PARAM;
@@ -100,12 +102,15 @@ GF_Err gf_isom_get_text_description(GF_ISOFile *movie, u32 trackNumber, u32 desc
 		(*out_desc)->displayFlags = txt->displayFlags;
 		(*out_desc)->vert_justif = txt->vertical_justification;
 		(*out_desc)->horiz_justif = txt->horizontal_justification;
-		(*out_desc)->font_count = txt->font_table->entry_count;
-		(*out_desc)->fonts = (GF_FontRecord *) gf_malloc(sizeof(GF_FontRecord) * txt->font_table->entry_count);
-		for (i=0; i<txt->font_table->entry_count; i++) {
-			(*out_desc)->fonts[i].fontID = txt->font_table->fonts[i].fontID;
-			if (txt->font_table->fonts[i].fontName)
-				(*out_desc)->fonts[i].fontName = gf_strdup(txt->font_table->fonts[i].fontName);
+		if (txt->font_table && txt->font_table->entry_count) {
+			(*out_desc)->font_count = txt->font_table->entry_count;
+			(*out_desc)->fonts = (GF_FontRecord *) gf_malloc(sizeof(GF_FontRecord) * txt->font_table->entry_count);
+			for (i=0; i<txt->font_table->entry_count; i++) {
+				(*out_desc)->fonts[i].fontID = txt->font_table->fonts[i].fontID;
+				(*out_desc)->fonts[i].fontName = NULL;
+				if (txt->font_table->fonts[i].fontName)
+					(*out_desc)->fonts[i].fontName = gf_strdup(txt->font_table->fonts[i].fontName);
+			}
 		}
 	}
 	return GF_OK;
@@ -130,15 +135,16 @@ GF_Err gf_isom_update_text_description(GF_ISOFile *movie, u32 trackNumber, u32 d
 	GF_Tx3gSampleEntryBox *txt;
 
 	if (!descriptionIndex || !desc) return GF_BAD_PARAM;
-	e = CanAccessMovie(movie, GF_ISOM_OPEN_WRITE);
+	e = gf_isom_can_access_movie(movie, GF_ISOM_OPEN_WRITE);
 	if (e) return e;
 
-	trak = gf_isom_get_track_from_file(movie, trackNumber);
+	trak = gf_isom_get_track_box(movie, trackNumber);
 	if (!trak || !trak->Media || !desc->font_count) return GF_BAD_PARAM;
 
 	switch (trak->Media->handler->handlerType) {
 	case GF_ISOM_MEDIA_TEXT:
 	case GF_ISOM_MEDIA_SUBT:
+	case GF_ISOM_MEDIA_MPEG_SUBT:
 		break;
 	default:
 		return GF_BAD_PARAM;
@@ -195,15 +201,16 @@ GF_Err gf_isom_new_text_description(GF_ISOFile *movie, u32 trackNumber, GF_TextS
 	u32 dataRefIndex, i;
 	GF_Tx3gSampleEntryBox *txt;
 
-	e = CanAccessMovie(movie, GF_ISOM_OPEN_WRITE);
+	e = gf_isom_can_access_movie(movie, GF_ISOM_OPEN_WRITE);
 	if (e) return e;
 
-	trak = gf_isom_get_track_from_file(movie, trackNumber);
-	if (!trak || !trak->Media || !desc || !desc->font_count) return GF_BAD_PARAM;
+	trak = gf_isom_get_track_box(movie, trackNumber);
+	if (!trak || !trak->Media || !desc) return GF_BAD_PARAM;
 
 	switch (trak->Media->handler->handlerType) {
 	case GF_ISOM_MEDIA_TEXT:
 	case GF_ISOM_MEDIA_SUBT:
+	case GF_ISOM_MEDIA_MPEG_SUBT:
 		break;
 	default:
 		return GF_BAD_PARAM;
@@ -234,6 +241,7 @@ GF_Err gf_isom_new_text_description(GF_ISOFile *movie, u32 trackNumber, GF_TextS
 	txt->font_table = (GF_FontTableBox *)gf_isom_box_new_parent(&txt->child_boxes, GF_ISOM_BOX_TYPE_FTAB);
 	if (!txt->font_table) return GF_OUT_OF_MEM;
 	txt->font_table->entry_count = desc->font_count;
+	if (!desc->font_count) return GF_OK;
 
 	txt->font_table->fonts = (GF_FontRecord *) gf_malloc(sizeof(GF_FontRecord) * desc->font_count);
 	if (!txt->font_table->fonts) return GF_OUT_OF_MEM;
@@ -246,7 +254,7 @@ GF_Err gf_isom_new_text_description(GF_ISOFile *movie, u32 trackNumber, GF_TextS
 
 
 /*blindly adds text - note we don't rely on terminaison characters to handle utf8 and utf16 data
-in the same way. It is the user responsability to signal UTF16*/
+in the same way. It is the user responsibility to signal UTF16*/
 GF_EXPORT
 GF_Err gf_isom_text_add_text(GF_TextSample *samp, char *text_data, u32 text_len)
 {
@@ -411,6 +419,14 @@ GF_Err gf_isom_text_set_wrap(GF_TextSample *samp, u8 wrap_flags)
 	return GF_OK;
 }
 
+GF_EXPORT
+GF_Err gf_isom_text_set_forced(GF_TextSample *samp, Bool is_forced)
+{
+	if (!samp) return GF_BAD_PARAM;
+	samp->is_forced = is_forced;
+	return GF_OK;
+}
+
 static GFINLINE GF_Err gpp_write_modifier(GF_BitStream *bs, GF_Box *a)
 {
 	GF_Err e;
@@ -435,6 +451,11 @@ GF_Err gf_isom_text_sample_write_bs(const GF_TextSample *samp, GF_BitStream *bs)
 	if (!e) e = gpp_write_modifier(bs, (GF_Box *)samp->scroll_delay);
 	if (!e) e = gpp_write_modifier(bs, (GF_Box *)samp->box);
 	if (!e) e = gpp_write_modifier(bs, (GF_Box *)samp->wrap);
+
+	if (!e && samp->is_forced) {
+		gf_bs_write_u32(bs, 8);
+		gf_bs_write_u32(bs, GF_QT_BOX_TYPE_FRCD);
+	}
 
 	if (!e) {
 		GF_Box *a;
@@ -501,6 +522,9 @@ u32 gf_isom_text_sample_size(GF_TextSample *samp)
 		gf_isom_box_size((GF_Box *)samp->wrap);
 		size += (u32) samp->wrap->size;
 	}
+	if (samp->is_forced) {
+		size += 8;
+	}
 	i=0;
 	while ((a = (GF_Box*)gf_list_enum(samp->others, &i))) {
 		gf_isom_box_size((GF_Box *)a);
@@ -529,15 +553,16 @@ GF_Err gf_isom_text_has_similar_description(GF_ISOFile *movie, u32 trackNumber, 
 	*outDescIdx = 0;
 
 	if (!desc) return GF_BAD_PARAM;
-	e = CanAccessMovie(movie, GF_ISOM_OPEN_WRITE);
+	e = gf_isom_can_access_movie(movie, GF_ISOM_OPEN_WRITE);
 	if (e) return GF_BAD_PARAM;
 
-	trak = gf_isom_get_track_from_file(movie, trackNumber);
+	trak = gf_isom_get_track_box(movie, trackNumber);
 	if (!trak || !trak->Media || !desc->font_count) return GF_BAD_PARAM;
 
 	switch (trak->Media->handler->handlerType) {
 	case GF_ISOM_MEDIA_TEXT:
 	case GF_ISOM_MEDIA_SUBT:
+	case GF_ISOM_MEDIA_MPEG_SUBT:
 		break;
 	default:
 		return GF_BAD_PARAM;
@@ -603,6 +628,7 @@ GF_Err gf_isom_text_reset_styles(GF_TextSample *samp)
 		gf_list_rem(samp->others, 0);
 		gf_isom_box_del(a);
 	}
+	samp->is_forced = GF_FALSE;
 	return GF_OK;
 }
 
@@ -644,9 +670,12 @@ GF_TextSample *gf_isom_parse_text_sample(GF_BitStream *bs)
 	}
 
 	while (gf_bs_available(bs)) {
-		GF_Box *a;
+		GF_Box *a = NULL;
 		GF_Err e = gf_isom_box_parse(&a, bs);
-		if (e) break;
+		if (e) {
+			if (a) gf_isom_box_del(a);
+			break;
+		}
 
 		switch (a->type) {
 		case GF_ISOM_BOX_TYPE_STYL:
@@ -687,6 +716,10 @@ GF_TextSample *gf_isom_parse_text_sample(GF_BitStream *bs)
 		case GF_ISOM_BOX_TYPE_TWRP:
 			if (s->wrap) gf_isom_box_del(a);
 			else s->wrap= (GF_TextWrapBox*) a;
+			break;
+		case GF_QT_BOX_TYPE_FRCD:
+			s->is_forced = GF_TRUE;
+			gf_isom_box_del(a);
 			break;
 		default:
 			gf_isom_box_del(a);
@@ -922,7 +955,7 @@ GF_Err gf_isom_text_get_encoded_tx3g(GF_ISOFile *file, u32 track, u32 sidx, u32 
 
 	*tx3g = NULL;
 	*tx3g_size = 0;
-	trak = gf_isom_get_track_from_file(file, track);
+	trak = gf_isom_get_track_box(file, track);
 	if (!trak) return GF_BAD_PARAM;
 
 	a = (GF_Tx3gSampleEntryBox *) gf_list_get(trak->Media->information->sampleTable->SampleDescription->child_boxes, sidx-1);
@@ -933,6 +966,35 @@ GF_Err gf_isom_text_get_encoded_tx3g(GF_ISOFile *file, u32 track, u32 sidx, u32 
 	gf_isom_write_tx3g(a, bs, sidx, sidx_offset);
 	gf_bs_get_content(bs, tx3g, tx3g_size);
 	gf_bs_del(bs);
+	return GF_OK;
+}
+
+GF_EXPORT
+GF_Err gf_isom_set_forced_text(GF_ISOFile *file, u32 track, u32 stsd_idx, u32 flags)
+{
+	GF_TrackBox *trak;
+	GF_Tx3gSampleEntryBox *a;
+
+	trak = gf_isom_get_track_box(file, track);
+	if (!trak) return GF_BAD_PARAM;
+
+	a = (GF_Tx3gSampleEntryBox *) gf_list_get(trak->Media->information->sampleTable->SampleDescription->child_boxes, stsd_idx-1);
+	if (!a) return GF_BAD_PARAM;
+	if ((a->type != GF_ISOM_BOX_TYPE_TX3G) && (a->type != GF_ISOM_BOX_TYPE_TEXT)) return GF_BAD_PARAM;
+
+	switch (flags) {
+	case 2:
+		a->displayFlags |= GF_TXT_SOME_SAMPLES_FORCED | GF_TXT_ALL_SAMPLES_FORCED;
+		break;
+	case 1:
+		a->displayFlags |= GF_TXT_SOME_SAMPLES_FORCED;
+		a->displayFlags &= ~GF_TXT_ALL_SAMPLES_FORCED;
+		break;
+	default:
+		a->displayFlags &= ~GF_TXT_SOME_SAMPLES_FORCED;
+		a->displayFlags &= ~GF_TXT_ALL_SAMPLES_FORCED;
+		break;
+	}
 	return GF_OK;
 }
 

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2019-2022
+ *			Copyright (c) Telecom ParisTech 2019-2023
  *			All rights reserved
  *
  *  This file is part of GPAC / JavaScript vector graphics bindings
@@ -32,7 +32,8 @@
 
 #include <gpac/setup.h>
 
-#if defined(GPAC_HAS_QJS)
+#if defined(GPAC_HAS_QJS) && !defined(GPAC_DISABLE_EVG)
+
 
 /*base SVG type*/
 #include <gpac/nodes_svg.h>
@@ -180,15 +181,15 @@ typedef struct
 
 	//we separate VAI/MX from base value in order to be able to assign a VAI value
 	union {
-        struct {
+		struct {
 			EVG_VAI *vai;
 			JSValue ref;
 		} vai;
-        struct {
+		struct {
 			EVG_VA *va;
 			JSValue ref;
 		} va;
-        struct {
+		struct {
 			GF_Matrix *mx;
 			JSValue ref;
 		} mx;
@@ -310,7 +311,9 @@ JSClassID vai_class_id;
 JSClassID va_class_id;
 JSClassID shader_class_id;
 
+#ifndef GPAC_DISABLE_FONTS
 static void text_set_path(GF_JSCanvas *canvas, GF_JSText *text);
+#endif
 
 Bool get_color_from_args(JSContext *c, int argc, JSValueConst *argv, u32 idx, Double *a, Double *r, Double *g, Double *b);
 static Bool get_color(JSContext *c, JSValueConst obj, Double *a, Double *r, Double *g, Double *b);
@@ -610,7 +613,11 @@ static JSValue canvas_setProperty(JSContext *ctx, JSValueConst obj, JSValueConst
 			else {
 				GF_JSText *text = JS_GetOpaque(value, text_class_id);
 				if (text) {
+#ifndef GPAC_DISABLE_FONTS
 					text_set_path(canvas, text);
+#else
+					return GF_JS_EXCEPTION(ctx);
+#endif
 				}
 			}
 		}
@@ -1373,7 +1380,9 @@ static JSValue canvas_draw_array(JSContext *c, JSValueConst obj, int argc, JSVal
 	return JS_UNDEFINED;
 }
 
+#ifndef GPAC_DISABLE_FONTS
 static void text_update_path(GF_JSText *txt, Bool for_centered);
+#endif
 
 static JSValue canvas_draw_path(JSContext *ctx, JSValueConst obj, int argc, JSValueConst *argv)
 {
@@ -1391,8 +1400,12 @@ static JSValue canvas_draw_path(JSContext *ctx, JSValueConst obj, int argc, JSVa
 	} else {
 		GF_JSText *text = JS_GetOpaque(argv[0], text_class_id);
 		if (text) {
+#ifndef GPAC_DISABLE_FONTS
 			text_update_path(text, GF_TRUE);
 			e = gf_evg_surface_draw_path(canvas->surface, text->path, z);
+#else
+			e = GF_NOT_SUPPORTED;
+#endif
 		}
 	}
 	if (e) return js_throw_err(ctx, e);
@@ -1419,10 +1432,10 @@ static JSValue canvas_viewport(JSContext *ctx, JSValueConst obj, int argc, JSVal
 	if (!canvas) return GF_JS_EXCEPTION(ctx);
 	if (argc) {
 		if (argc<4) return js_throw_err(ctx, GF_BAD_PARAM);
-		if (JS_ToInt32(ctx, &x, argv[0])) return js_throw_err(ctx, GF_BAD_PARAM);;
-		if (JS_ToInt32(ctx, &y, argv[1])) return js_throw_err(ctx, GF_BAD_PARAM);;
-		if (JS_ToInt32(ctx, &w, argv[2])) return js_throw_err(ctx, GF_BAD_PARAM);;
-		if (JS_ToInt32(ctx, &h, argv[3])) return js_throw_err(ctx, GF_BAD_PARAM);;
+		if (JS_ToInt32(ctx, &x, argv[0])) return js_throw_err(ctx, GF_BAD_PARAM);
+		if (JS_ToInt32(ctx, &y, argv[1])) return js_throw_err(ctx, GF_BAD_PARAM);
+		if (JS_ToInt32(ctx, &w, argv[2])) return js_throw_err(ctx, GF_BAD_PARAM);
+		if (JS_ToInt32(ctx, &h, argv[3])) return js_throw_err(ctx, GF_BAD_PARAM);
 	} else {
 		x = y = 0;
 		w = canvas->width;
@@ -1553,8 +1566,8 @@ static GFINLINE Float _modf(Float x, Float y)
 
 static Float evg_float_clamp(Float val, Float minval, Float maxval)
 {
-    _mm_store_ss( &val, _mm_min_ss( _mm_max_ss(_mm_set_ss(val),_mm_set_ss(minval)), _mm_set_ss(maxval) ) );
-    return val;
+	_mm_store_ss( &val, _mm_min_ss( _mm_max_ss(_mm_set_ss(val),_mm_set_ss(minval)), _mm_set_ss(maxval) ) );
+	return val;
 }
 #else
 
@@ -1620,7 +1633,7 @@ static Bool evg_shader_ops(GF_JSCanvas *canvas, EVGShader *shader, GF_EVGFragmen
 				}
 				continue;
 			} else if (op->op_type == EVG_OP_END) {
-				assert(nif_level || if_level);
+				gf_assert(nif_level || if_level);
 				if (nif_level) nif_level--;
 				else if (if_level) if_level--;
 				continue;
@@ -1738,7 +1751,7 @@ static Bool evg_shader_ops(GF_JSCanvas *canvas, EVGShader *shader, GF_EVGFragmen
 
 					right_val = &tmpr;
 					right_val->x = right_val->y = right_val->z = right_val->q = 0;
-					assert(va->nb_comp<=4);
+					gf_assert(va->nb_comp<=4);
 					for (j=0; j<va->nb_comp; j++) {
 						((Float *)right_val)[j] = va->values[va_idx+j];
 					}
@@ -5574,37 +5587,37 @@ static JSValue texture_setProperty(JSContext *c, JSValueConst obj, JSValueConst 
 
 void rgb2hsv(const u8 src_r, const u8 src_g, const u8 src_b, u8 *dst_h, u8 *dst_s, u8 *dst_v)
 {
-    float h, s, v; // h:0-360.0, s:0.0-1.0, v:0.0-1.0
-    float r = src_r / 255.0f;
-    float g = src_g / 255.0f;
-    float b = src_b / 255.0f;
+	float h, s, v; // h:0-360.0, s:0.0-1.0, v:0.0-1.0
+	float r = src_r / 255.0f;
+	float g = src_g / 255.0f;
+	float b = src_b / 255.0f;
 
-    float max = max_f(r, g, b);
-    float min = min_f(r, g, b);
+	float max = max_f(r, g, b);
+	float min = min_f(r, g, b);
 
-    v = max;
-    if (max == 0.0f) {
-        s = 0;
-        h = 0;
-    } else if (max - min == 0.0f) {
-        s = 0;
-        h = 0;
-    } else {
-        s = (max - min) / max;
+	v = max;
+	if (max == 0.0f) {
+		s = 0;
+		h = 0;
+	} else if (max - min == 0.0f) {
+		s = 0;
+		h = 0;
+	} else {
+		s = (max - min) / max;
 
-        if (max == r) {
-            h = 60 * ((g - b) / (max - min)) + 0;
-        } else if (max == g) {
-            h = 60 * ((b - r) / (max - min)) + 120;
-        } else {
-            h = 60 * ((r - g) / (max - min)) + 240;
-        }
-    }
-    if (h < 0) h += 360.0f;
+		if (max == r) {
+			h = 60 * ((g - b) / (max - min)) + 0;
+		} else if (max == g) {
+			h = 60 * ((b - r) / (max - min)) + 120;
+		} else {
+			h = 60 * ((r - g) / (max - min)) + 240;
+		}
+	}
+	if (h < 0) h += 360.0f;
 
-    *dst_h = (u8)(h / 2);   // dst_h : 0-180
-    *dst_s = (u8)(s * 255); // dst_s : 0-255
-    *dst_v = (u8)(v * 255); // dst_v : 0-255
+	*dst_h = (u8)(h / 2);   // dst_h : 0-180
+	*dst_s = (u8)(s * 255); // dst_s : 0-255
+	*dst_v = (u8)(v * 255); // dst_v : 0-255
 }
 
 void hsv2rgb(u8 src_h, u8 src_s, u8 src_v, u8 *dst_r, u8 *dst_g, u8 *dst_b)
@@ -6024,7 +6037,7 @@ static JSValue texture_update(JSContext *c, JSValueConst obj, int argc, JSValueC
 		e = gf_evg_stencil_set_texture_planes(tx->stencil, tx->width, tx->height, tx->pf, data, tx->stride, p_u, p_v, tx->stride_uv, p_a, tx->stride);
 		 if (e) return js_throw_err(c, e);
 	} else {
-		assert(data);
+		gf_assert(data);
 		e = gf_evg_stencil_set_texture(tx->stencil, tx->data, tx->width, tx->height, tx->stride, tx->pf);
 		if (e) return js_throw_err(c, e);
 	}
@@ -6089,6 +6102,7 @@ static JSValue texture_get_pixelf(JSContext *c, JSValueConst obj, int argc, JSVa
 
 static GF_Err texture_load_data(JSContext *c, GF_JSTexture *tx, u8 *data, u32 size)
 {
+#ifndef GPAC_DISABLE_AV_PARSERS
 	GF_Err e;
 	GF_BitStream *bs;
 	u8 *dsi=NULL;
@@ -6139,6 +6153,9 @@ static GF_Err texture_load_data(JSContext *c, GF_JSTexture *tx, u8 *data, u32 si
 		return e;
 	}
 	return GF_OK;
+#else
+	return GF_NOT_SUPPORTED;
+#endif
 }
 static GF_Err texture_load_file(JSContext *c, GF_JSTexture *tx, const char *fileName, Bool rel_to_script)
 {
@@ -6703,7 +6720,7 @@ void js_evg_set_named_texture_gl(JSContext *ctx, JSValue this_obj, void *gl_name
 }
 #endif
 
-
+#ifndef GPAC_DISABLE_FONTS
 static void text_reset(GF_JSText *txt)
 {
 	if (txt->path) gf_path_del(txt->path);
@@ -6803,6 +6820,7 @@ static JSValue text_getProperty(JSContext *c, JSValueConst obj, int magic)
 	return JS_UNDEFINED;
 }
 
+#ifndef GPAC_DISABLE_FONTS
 static void text_update_path(GF_JSText *txt, Bool for_centered)
 {
 	Fixed cy, off_x, ascent, descent, scale_x, ls;
@@ -6898,12 +6916,14 @@ static void text_update_path(GF_JSText *txt, Bool for_centered)
 		}
 	}
 }
+
 static void text_set_path(GF_JSCanvas *canvas, GF_JSText *txt)
 {
 	text_update_path(txt, canvas->center_coords);
 	gf_evg_surface_set_path(canvas->surface, txt->path);
 	gf_evg_surface_force_aa(canvas->surface);
 }
+#endif
 
 static void text_set_text_from_value(GF_JSText *txt, GF_Font *font, JSContext *c, JSValueConst value)
 {
@@ -7176,6 +7196,7 @@ static JSValue text_constructor(JSContext *c, JSValueConst new_target, int argc,
 	return obj;
 }
 
+#endif // GPAC_DISABLE_FONTS
 
 
 enum
@@ -7780,8 +7801,10 @@ static int js_evg_load_module(JSContext *c, JSModuleDef *m)
 		JS_NewClassID(&texture_class_id);
 		JS_NewClass(rt, texture_class_id, &texture_class);
 
+#ifndef GPAC_DISABLE_FONTS
 		JS_NewClassID(&text_class_id);
 		JS_NewClass(rt, text_class_id, &text_class);
+#endif
 
 		JS_NewClassID(&matrix_class_id);
 		JS_NewClass(rt, matrix_class_id, &matrix_class);
@@ -7818,45 +7841,48 @@ static int js_evg_load_module(JSContext *c, JSModuleDef *m)
 
 	}
 	proto = JS_NewObject(c);
-    JS_SetPropertyFunctionList(c, proto, canvas_funcs, countof(canvas_funcs));
-    JS_SetClassProto(c, canvas_class_id, proto);
+	JS_SetPropertyFunctionList(c, proto, canvas_funcs, countof(canvas_funcs));
+	JS_SetClassProto(c, canvas_class_id, proto);
 
 	proto = JS_NewObject(c);
-    JS_SetPropertyFunctionList(c, proto, path_funcs, countof(path_funcs));
-    JS_SetClassProto(c, path_class_id, proto);
+	JS_SetPropertyFunctionList(c, proto, path_funcs, countof(path_funcs));
+	JS_SetClassProto(c, path_class_id, proto);
 
 	proto = JS_NewObject(c);
-    JS_SetPropertyFunctionList(c, proto, mx2d_funcs, countof(mx2d_funcs));
-    JS_SetClassProto(c, mx2d_class_id, proto);
+	JS_SetPropertyFunctionList(c, proto, mx2d_funcs, countof(mx2d_funcs));
+	JS_SetClassProto(c, mx2d_class_id, proto);
 
 	proto = JS_NewObject(c);
-    JS_SetPropertyFunctionList(c, proto, colmx_funcs, countof(colmx_funcs));
-    JS_SetClassProto(c, colmx_class_id, proto);
+	JS_SetPropertyFunctionList(c, proto, colmx_funcs, countof(colmx_funcs));
+	JS_SetClassProto(c, colmx_class_id, proto);
 
 	proto = JS_NewObject(c);
-    JS_SetPropertyFunctionList(c, proto, stencil_funcs, countof(stencil_funcs));
-    JS_SetClassProto(c, stencil_class_id, proto);
+	JS_SetPropertyFunctionList(c, proto, stencil_funcs, countof(stencil_funcs));
+	JS_SetClassProto(c, stencil_class_id, proto);
 
 	proto = JS_NewObject(c);
-    JS_SetPropertyFunctionList(c, proto, texture_funcs, countof(texture_funcs));
-    JS_SetClassProto(c, texture_class_id, proto);
+	JS_SetPropertyFunctionList(c, proto, texture_funcs, countof(texture_funcs));
+	JS_SetClassProto(c, texture_class_id, proto);
+
+#ifndef GPAC_DISABLE_FONTS
+	proto = JS_NewObject(c);
+	JS_SetPropertyFunctionList(c, proto, text_funcs, countof(text_funcs));
+	JS_SetClassProto(c, text_class_id, proto);
+#endif
+
 
 	proto = JS_NewObject(c);
-    JS_SetPropertyFunctionList(c, proto, text_funcs, countof(text_funcs));
-    JS_SetClassProto(c, text_class_id, proto);
-
-	proto = JS_NewObject(c);
-    JS_SetPropertyFunctionList(c, proto, mx_funcs, countof(mx_funcs));
-    JS_SetClassProto(c, matrix_class_id, proto);
+	JS_SetPropertyFunctionList(c, proto, mx_funcs, countof(mx_funcs));
+	JS_SetClassProto(c, matrix_class_id, proto);
 
 #ifdef EVG_USE_JS_SHADER
 	proto = JS_NewObject(c);
-    JS_SetPropertyFunctionList(c, proto, fragment_funcs, countof(fragment_funcs));
-    JS_SetClassProto(c, fragment_class_id, proto);
+	JS_SetPropertyFunctionList(c, proto, fragment_funcs, countof(fragment_funcs));
+	JS_SetClassProto(c, fragment_class_id, proto);
 
 	proto = JS_NewObject(c);
-    JS_SetPropertyFunctionList(c, proto, vertex_funcs, countof(vertex_funcs));
-    JS_SetClassProto(c, vertex_class_id, proto);
+	JS_SetPropertyFunctionList(c, proto, vertex_funcs, countof(vertex_funcs));
+	JS_SetClassProto(c, vertex_class_id, proto);
 
 	proto = JS_NewObject(c);
 	JS_SetPropertyFunctionList(c, proto, vaires_funcs, countof(vaires_funcs));
@@ -7864,21 +7890,21 @@ static int js_evg_load_module(JSContext *c, JSModuleDef *m)
 #endif
 
 	proto = JS_NewObject(c);
-    JS_SetPropertyFunctionList(c, proto, shader_funcs, countof(shader_funcs));
-    JS_SetClassProto(c, shader_class_id, proto);
+	JS_SetPropertyFunctionList(c, proto, shader_funcs, countof(shader_funcs));
+	JS_SetClassProto(c, shader_class_id, proto);
 
 	proto = JS_NewObject(c);
-    JS_SetPropertyFunctionList(c, proto, vai_funcs, countof(vai_funcs));
-    JS_SetClassProto(c, vai_class_id, proto);
+	JS_SetPropertyFunctionList(c, proto, vai_funcs, countof(vai_funcs));
+	JS_SetClassProto(c, vai_class_id, proto);
 
 	proto = JS_NewObject(c);
-    JS_SetPropertyFunctionList(c, proto, va_funcs, countof(va_funcs));
-    JS_SetClassProto(c, va_class_id, proto);
+	JS_SetPropertyFunctionList(c, proto, va_funcs, countof(va_funcs));
+	JS_SetClassProto(c, va_class_id, proto);
 
 #ifndef GPAC_DISABLE_3D
 	proto = JS_NewObject(c);
-    JS_SetPropertyFunctionList(c, proto, mesh_funcs, countof(mesh_funcs));
-    JS_SetClassProto(c, mesh_class_id, proto);
+	JS_SetPropertyFunctionList(c, proto, mesh_funcs, countof(mesh_funcs));
+	JS_SetClassProto(c, mesh_class_id, proto);
 #endif
 
 	global = JS_GetGlobalObject(c);
@@ -7913,6 +7939,7 @@ static int js_evg_load_module(JSContext *c, JSModuleDef *m)
 	JS_SetPropertyStr(c, global, "GF_DASH_STYLE_DASH_DOT_DOT", JS_NewInt32(c, GF_DASH_STYLE_DASH_DOT_DOT));
 	JS_SetPropertyStr(c, global, "GF_DASH_STYLE_SVG", JS_NewInt32(c, GF_DASH_STYLE_SVG));
 
+#ifndef GPAC_DISABLE_FONTS
 	JS_SetPropertyStr(c, global, "GF_TEXT_BASELINE_TOP", JS_NewInt32(c, TXT_BL_TOP));
 	JS_SetPropertyStr(c, global, "GF_TEXT_BASELINE_HANGING", JS_NewInt32(c, TXT_BL_HANGING));
 	JS_SetPropertyStr(c, global, "GF_TEXT_BASELINE_MIDDLE", JS_NewInt32(c, TXT_BL_MIDDLE));
@@ -7925,6 +7952,7 @@ static int js_evg_load_module(JSContext *c, JSModuleDef *m)
 	JS_SetPropertyStr(c, global, "GF_TEXT_ALIGN_LEFT", JS_NewInt32(c, TXT_AL_LEFT));
 	JS_SetPropertyStr(c, global, "GF_TEXT_ALIGN_RIGHT", JS_NewInt32(c, TXT_AL_RIGHT));
 	JS_SetPropertyStr(c, global, "GF_TEXT_ALIGN_CENTER", JS_NewInt32(c, TXT_AL_CENTER));
+#endif
 
 	JS_SetPropertyStr(c, global, "GF_EVG_SRC_ATOP", JS_NewInt32(c, GF_EVG_SRC_ATOP));
 	JS_SetPropertyStr(c, global, "GF_EVG_SRC_IN", JS_NewInt32(c, GF_EVG_SRC_IN));
@@ -7999,42 +8027,44 @@ static int js_evg_load_module(JSContext *c, JSModuleDef *m)
 
 	/*export constructors*/
 	ctor = JS_NewCFunction2(c, canvas_constructor, "Canvas", 1, JS_CFUNC_constructor, 0);
-    JS_SetModuleExport(c, m, "Canvas", ctor);
+	JS_SetModuleExport(c, m, "Canvas", ctor);
 	ctor = JS_NewCFunction2(c, path_constructor, "Path", 1, JS_CFUNC_constructor, 0);
-    JS_SetModuleExport(c, m, "Path", ctor);
+	JS_SetModuleExport(c, m, "Path", ctor);
 	ctor = JS_NewCFunction2(c, mx2d_constructor, "Matrix2D", 1, JS_CFUNC_constructor, 0);
-    JS_SetModuleExport(c, m, "Matrix2D", ctor);
+	JS_SetModuleExport(c, m, "Matrix2D", ctor);
 	ctor = JS_NewCFunction2(c, colmx_constructor, "ColorMatrix", 1, JS_CFUNC_constructor, 0);
-    JS_SetModuleExport(c, m, "ColorMatrix", ctor);
+	JS_SetModuleExport(c, m, "ColorMatrix", ctor);
 	ctor = JS_NewCFunction2(c, solid_brush_constructor, "SolidBrush", 1, JS_CFUNC_constructor, 0);
-    JS_SetModuleExport(c, m, "SolidBrush", ctor);
+	JS_SetModuleExport(c, m, "SolidBrush", ctor);
 	ctor = JS_NewCFunction2(c, linear_gradient_constructor, "LinearGradient", 1, JS_CFUNC_constructor, 0);
-    JS_SetModuleExport(c, m, "LinearGradient", ctor);
+	JS_SetModuleExport(c, m, "LinearGradient", ctor);
 	ctor = JS_NewCFunction2(c, radial_gradient_constructor, "RadialGradient", 1, JS_CFUNC_constructor, 0);
-    JS_SetModuleExport(c, m, "RadialGradient", ctor);
+	JS_SetModuleExport(c, m, "RadialGradient", ctor);
 	ctor = JS_NewCFunction2(c, texture_constructor, "Texture", 1, JS_CFUNC_constructor, 0);
-    JS_SetModuleExport(c, m, "Texture", ctor);
+	JS_SetModuleExport(c, m, "Texture", ctor);
+#ifndef GPAC_DISABLE_FONTS
 	ctor = JS_NewCFunction2(c, text_constructor, "Text", 1, JS_CFUNC_constructor, 0);
-    JS_SetModuleExport(c, m, "Text", ctor);
+	JS_SetModuleExport(c, m, "Text", ctor);
+#endif
 	ctor = JS_NewCFunction2(c, mx_constructor, "Matrix", 1, JS_CFUNC_constructor, 0);
-    JS_SetModuleExport(c, m, "Matrix", ctor);
+	JS_SetModuleExport(c, m, "Matrix", ctor);
 	ctor = JS_NewCFunction2(c, vai_constructor, "VertexAttribInterpolator", 1, JS_CFUNC_constructor, 0);
-    JS_SetModuleExport(c, m, "VertexAttribInterpolator", ctor);
+	JS_SetModuleExport(c, m, "VertexAttribInterpolator", ctor);
 	ctor = JS_NewCFunction2(c, va_constructor, "VertexAttrib", 1, JS_CFUNC_constructor, 0);
-    JS_SetModuleExport(c, m, "VertexAttrib", ctor);
+	JS_SetModuleExport(c, m, "VertexAttrib", ctor);
 
 #ifndef GPAC_DISABLE_3D
 	ctor = JS_NewCFunction2(c, mesh_constructor, "Mesh", 1, JS_CFUNC_constructor, 0);
-    JS_SetModuleExport(c, m, "Mesh", ctor);
+	JS_SetModuleExport(c, m, "Mesh", ctor);
 #endif
 
 	ctor = JS_NewCFunction2(c, evg_pixel_size, "PixelSize", 1, JS_CFUNC_generic, 0);
-    JS_SetModuleExport(c, m, "PixelSize", ctor);
+	JS_SetModuleExport(c, m, "PixelSize", ctor);
 
 #ifdef GPAC_HAS_FFMPEG
-    JS_SetModuleExport(c, m, "BlitEnabled", JS_TRUE);
+	JS_SetModuleExport(c, m, "BlitEnabled", JS_TRUE);
 #else
-    JS_SetModuleExport(c, m, "BlitEnabled", JS_FALSE);
+	JS_SetModuleExport(c, m, "BlitEnabled", JS_FALSE);
 #endif
 	return 0;
 }
@@ -8056,14 +8086,14 @@ void qjs_module_init_evg(JSContext *ctx)
 	JS_AddModuleExport(ctx, m, "Text");
 	JS_AddModuleExport(ctx, m, "Matrix");
 	JS_AddModuleExport(ctx, m, "Mesh");
-    JS_AddModuleExport(ctx, m, "VertexAttribInterpolator");
-    JS_AddModuleExport(ctx, m, "VertexAttrib");
-    JS_AddModuleExport(ctx, m, "PixelSize");
-    JS_AddModuleExport(ctx, m, "BlitEnabled");
-    return;
+	JS_AddModuleExport(ctx, m, "VertexAttribInterpolator");
+	JS_AddModuleExport(ctx, m, "VertexAttrib");
+	JS_AddModuleExport(ctx, m, "PixelSize");
+	JS_AddModuleExport(ctx, m, "BlitEnabled");
+	return;
 }
 
-#else
+#else // defined(GPAC_HAS_QJS) && !defined(GPAC_DISABLE_EVG)
 void qjs_module_init_evg(void *ctx)
 {
 

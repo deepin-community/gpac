@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -26,6 +26,8 @@
 
 #include <gpac/constants.h>
 #include <gpac/internal/compositor_dev.h>
+
+#if !defined(GPAC_DISABLE_COMPOSITOR)
 
 
 void mediacontrol_restart(GF_ObjectManager *odm)
@@ -146,8 +148,8 @@ void mediacontrol_resume(GF_ObjectManager *odm, Bool resume_to_live)
 
 	in_scene = odm->parentscene;
 	if (odm->subscene) {
-		assert(odm->subscene->root_od==odm);
-		assert(odm->subscene->is_dynamic_scene || gf_odm_shares_clock(odm, ck) );
+		gf_assert(odm->subscene->root_od==odm);
+		gf_assert(odm->subscene->is_dynamic_scene || gf_odm_shares_clock(odm, ck) );
 		/*resume root*/
 		gf_odm_resume(odm);
 		in_scene = odm->subscene;
@@ -194,8 +196,8 @@ void mediacontrol_pause(GF_ObjectManager *odm)
 
 	in_scene = odm->parentscene;
 	if (odm->subscene) {
-		assert(odm->subscene->root_od==odm);
-		assert(odm->subscene->is_dynamic_scene || gf_odm_shares_clock(odm, ck) );
+		gf_assert(odm->subscene->root_od==odm);
+		gf_assert(odm->subscene->is_dynamic_scene || gf_odm_shares_clock(odm, ck) );
 		/*pause root*/
 		gf_odm_pause(odm);
 		in_scene = odm->subscene;
@@ -238,7 +240,7 @@ void mediacontrol_set_speed(GF_ObjectManager *odm, Fixed speed)
 
 	in_scene = odm->parentscene;
 	if (odm->subscene) {
-		assert(odm->subscene->root_od==odm);
+		gf_assert(odm->subscene->root_od==odm);
 		in_scene = odm->subscene;
 
 		//dynamic scene with speed direction, we need to re-start everything to issue new PLAY requests
@@ -712,3 +714,5 @@ Bool gf_odm_check_segment_switch(GF_ObjectManager *odm)
 
 
 #endif /*GPAC_DISABLE_VRML*/
+
+#endif //!defined(GPAC_DISABLE_COMPOSITOR)

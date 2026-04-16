@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2018-2021
+ *			Copyright (c) Telecom ParisTech 2018-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / libpng encoder filter
@@ -121,7 +121,7 @@ static GF_Err pngenc_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is
 		ctx->png_type = PNG_COLOR_TYPE_RGB_ALPHA;
 		break;
 	default:
-		gf_filter_pid_negociate_property(pid, GF_PROP_PID_PIXFMT, &PROP_UINT(GF_PIXEL_RGB));
+		gf_filter_pid_negotiate_property(pid, GF_PROP_PID_PIXFMT, &PROP_UINT(GF_PIXEL_RGB));
 		break;
 	}
 	if (ctx->height > ctx->nb_alloc_rows) {
@@ -188,7 +188,7 @@ static void pngenc_warn(png_structp cbk, png_const_charp msg)
 
 static GF_Err pngenc_process(GF_Filter *filter)
 {
-	GF_FilterPacket *pck;
+	GF_FilterPacket *pck=NULL;
 	GF_PNGEncCtx *ctx = (GF_PNGEncCtx *) gf_filter_get_udta(filter);
 	png_color_8 sig_bit;
 	u32 k;
@@ -198,7 +198,11 @@ static GF_Err pngenc_process(GF_Filter *filter)
 	char *in_data;
 	u32 size, stride;
 
-	pck = gf_filter_pid_get_packet(ctx->ipid);
+	if (ctx->ipid)
+		pck = gf_filter_pid_get_packet(ctx->ipid);
+	if (!ctx->ipid)
+		return GF_EOS;
+
 	if (!pck) {
 		if (gf_filter_pid_is_eos(ctx->ipid)) {
 			gf_filter_pid_set_eos(ctx->opid);
@@ -381,6 +385,7 @@ GF_FilterRegister PNGEncRegister = {
 	SETCAPS(PNGEncCaps),
 	.configure_pid = pngenc_configure_pid,
 	.process = pngenc_process,
+	.hint_class_type = GF_FS_CLASS_ENCODER
 };
 
 #endif

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2022
+ *			Copyright (c) Telecom ParisTech 2022-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / gpac application
@@ -25,7 +25,7 @@
 
 #include "gpac.h"
 
-#ifndef GPAC_DISABLE_PLAYER
+#ifndef GPAC_DISABLE_COMPOSITOR
 
 #include <gpac/main.h>
 #include <gpac/events.h>
@@ -792,10 +792,9 @@ Bool mp4c_event_proc(void *ptr, GF_Event *evt)
 	case GF_EVENT_AUTHORIZATION:
 	{
 		u32 nb_retry = 4;
-		assert( evt->type == GF_EVENT_AUTHORIZATION);
-		assert( evt->auth.user);
-		assert( evt->auth.password);
-		assert( evt->auth.site_url);
+		gf_fatal_assert( evt->auth.user);
+		gf_fatal_assert( evt->auth.password);
+		gf_assert( evt->auth.site_url);
 		while ((!strlen(evt->auth.user) || !strlen(evt->auth.password)) && (nb_retry > 0) ) {
 			nb_retry--;
 			fprintf(stderr, "**** Authorization required for site %s ****\n", evt->auth.site_url);
@@ -1036,10 +1035,8 @@ void load_compositor(GF_Filter *filter)
 	}
 #endif
 
-	if (gf_opts_get_bool("core", "proxy-on")) {
-		str = gf_opts_get_key("core", "proxy-name");
-		if (str) fprintf(stderr, "HTTP Proxy %s enabled\n", str);
-	}
+	str = gf_opts_get_key("core", "proxy");
+	if (str) fprintf(stderr, "HTTP Proxy %s enabled\n", str);
 
 	if (rti_file) {
 		update_rti("At GPAC load time\n");
@@ -1192,7 +1189,7 @@ void unload_compositor()
 Bool mp4c_task()
 {
 	if (eos_seen && gf_sc_get_option(compositor, GF_OPT_IS_OVER)) {
-		if (!auto_exit) return GF_FALSE;
+		if (auto_exit) return GF_TRUE;
 		if (!loop_at_end) {
 			gf_sc_disconnect(compositor);
 			return GF_TRUE;
@@ -1228,21 +1225,22 @@ Bool mp4c_task()
 	return GF_FALSE;
 }
 
+static char szBuf[8192];
+
 Bool mp4c_handle_prompt(u8 char_val)
 {
 	MP4C_Command cmdtype = get_gui_cmd(char_val);
 	switch (cmdtype) {
 	case MP4C_OPEN:
 	{
-		char szURL[2000];
 		gf_sc_disconnect(compositor);
 		fprintf(stderr, "Enter the absolute URL\n");
-		if (1 > scanf("%1999s", szURL)) {
+		if (1 > scanf("%8191s", szBuf)) {
 			fprintf(stderr, "Cannot read absolute URL, aborting\n");
 			break;
 		}
 		if (rti_file) init_rti_logs(rti_file, use_rtix);
-		gf_sc_connect_from_time(compositor, szURL, 0, 0, 0, NULL);
+		gf_sc_connect_from_time(compositor, szBuf, 0, 0, 0, NULL);
 	}
 		break;
 	case MP4C_RELOAD:
@@ -1336,21 +1334,21 @@ Bool mp4c_handle_prompt(u8 char_val)
 
 	case MP4C_DUMPSCENE:
 		if (is_connected) {
-			char radname[GF_MAX_PATH], *sExt;
+			char *sExt;
 			Bool xml_dump, std_out;
-			radname[0] = 0;
+			szBuf[0] = 0;
 			do {
 				fprintf(stderr, "Enter file radical name (+\'.x\' for XML dumping) - \"std\" for stderr: ");
 				fflush(stderr);
-			} while( 1 > scanf("%1023s", radname));
-			sExt = strrchr(radname, '.');
+			} while( 1 > scanf("%8191s", szBuf));
+			sExt = strrchr(szBuf, '.');
 			xml_dump = 0;
 			if (sExt) {
 				if (!stricmp(sExt, ".x")) xml_dump = 1;
 				sExt[0] = 0;
 			}
-			std_out = strnicmp(radname, "std", 3) ? 0 : 1;
-			GF_Err e = gf_sc_dump_scene(compositor, std_out ? NULL : radname, NULL, xml_dump, 0);
+			std_out = strnicmp(szBuf, "std", 3) ? 0 : 1;
+			GF_Err e = gf_sc_dump_scene(compositor, std_out ? NULL : szBuf, NULL, xml_dump, 0);
 			if (e<0)
 				fprintf(stderr, "Dump failed: %s\n", gf_error_to_string(e));
 			else
@@ -1398,42 +1396,41 @@ Bool mp4c_handle_prompt(u8 char_val)
 		break;
 	case MP4C_UPDATE:
 	{
-		char szCom[8192];
 		fprintf(stderr, "Enter command to send:\n");
-		szCom[0] = 0;
-		if (1 > scanf("%8191[^\t\n]", szCom)) {
+		szBuf[0] = 0;
+		if (1 > scanf("%8191[^\t\n]", szBuf)) {
 			fprintf(stderr, "Cannot read command to send, aborting.\n");
 			break;
 		}
-		GF_Err e = gf_sc_scene_update(compositor, NULL, szCom);
+		GF_Err e = gf_sc_scene_update(compositor, NULL, szBuf);
 		if (e) fprintf(stderr, "Processing command failed: %s\n", gf_error_to_string(e));
 	}
 	break;
 	case MP4C_EVALJS:
 	{
-		char jsCode[8192];
 		fprintf(stderr, "Enter JavaScript code to evaluate:\n");
-		jsCode[0] = 0;
-		if (1 > scanf("%8191[^\t\n]", jsCode)) {
+		szBuf[0] = 0;
+		if (1 > scanf("%8191[^\t\n]", szBuf)) {
 			fprintf(stderr, "Cannot read code to evaluate, aborting.\n");
 			break;
 		}
-		GF_Err e = gf_sc_scene_update(compositor, "application/ecmascript", jsCode);
+		GF_Err e = gf_sc_scene_update(compositor, "application/ecmascript", szBuf);
 		if (e) fprintf(stderr, "Processing JS code failed: %s\n", gf_error_to_string(e));
 	}
 	break;
 
 	case MP4C_LOGS:
 	{
-		char szLog[1024], *cur_logs;
+		char *cur_logs;
 		cur_logs = gf_log_get_tools_levels();
 		fprintf(stderr, "Enter new log level (current tools %s):\n", cur_logs);
 		gf_free(cur_logs);
-		if (scanf("%1023s", szLog) < 1) {
+		szBuf[0] = 0;
+		if (scanf("%8191s", szBuf) < 1) {
 			fprintf(stderr, "Cannot read new log level, aborting.\n");
 			break;
 		}
-		gf_log_modify_tools_levels(szLog);
+		gf_log_modify_tools_levels(szBuf);
 	}
 	break;
 
@@ -1515,7 +1512,7 @@ static void mp4c_take_screenshot(Bool for_coverage)
 			e = gf_sc_get_offscreen_buffer(compositor, &fb, offscreen_view-1, 0);
 		} else {
 			sprintf(szFileName, "gpac_video_dump_"LLU".png", gf_net_get_utc() );
-			e = gf_sc_get_screen_buffer(compositor, &fb, 0);
+			e = gf_sc_get_screen_buffer(compositor, &fb, GF_SC_GRAB_DEPTH_NONE);
 		}
 		offscreen_view++;
 		if (e) {
@@ -1639,4 +1636,4 @@ static void close_console()
 
 #endif
 
-#endif //#ifndef GPAC_DISABLE_PLAYER
+#endif //#ifndef GPAC_DISABLE_COMPOSITOR

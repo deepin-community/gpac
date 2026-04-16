@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2019
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / general OS configuration file
@@ -311,6 +311,9 @@ char * my_str_lwr(char *str);
 #include <string.h>
 #include <assert.h>
 
+/*! file descriptor support*/
+#define GPAC_HAS_FD
+
 #if __APPLE__ && defined GPAC_CONFIG_IOS
 #include <TargetConditionals.h>
 #endif
@@ -381,6 +384,36 @@ char * my_str_lwr(char *str);
 #define NULL 0
 #endif
 
+
+#ifdef GPAC_HAS_FD
+#ifndef WIN32
+#include <unistd.h>
+#define lseek_64 lseek
+#define O_BINARY 0
+#else
+#include <io.h>
+#define lseek_64 _lseeki64
+#endif
+#include <fcntl.h>
+#include <sys/stat.h>
+
+#if defined(WIN32) && !defined(open)
+#  define open _open
+#  define close _close
+#  define read _read
+#  define write _write
+#endif
+
+#if defined(WIN32) && !defined(S_IWUSR)
+#  define S_IWUSR _S_IWRITE
+#  define S_IRUSR _S_IREAD
+#  define S_IRGRP 0
+#  define S_IWGRP 0
+#  define S_IROTH 0
+# endif
+
+#endif
+
 //! @endcond
 
 
@@ -410,6 +443,12 @@ typedef u8 bin128[16];
 #define GF_INT_MAX			INT_MAX
 /*! min possible value for s32*/
 #define GF_INT_MIN			INT_MIN
+/*! max possible value for u64*/
+#define GF_UINT64_MAX		ULLONG_MAX
+/*! max possible value for s64*/
+#define GF_INT64_MAX		LLONG_MAX
+/*! min possible value for s64*/
+#define GF_INT64_MIN		LLONG_MIN
 
 #ifndef MIN
 /*! get the smallest of two numbers*/
@@ -420,7 +459,7 @@ typedef u8 bin128[16];
 #define MAX(X, Y) ((X)>(Y)?(X):(Y))
 #endif
 
-/*! get the absolute difference betwee two numbers*/
+/*! get the absolute difference between two numbers*/
 #define ABSDIFF(a, b)	( ( (a) > (b) ) ? ((a) - (b)) : ((b) - (a)) )
 
 #ifndef ABS
@@ -435,6 +474,10 @@ typedef enum {
 	GF_TRUE
 } Bool;
 #endif
+
+#define GF_OPT_ENUM(name, ...)						\
+        typedef enum { __VA_ARGS__ } name##_t;		\
+        typedef u32 name
 
 /*! 32 bit fraction*/
 typedef struct {
@@ -550,7 +593,11 @@ typedef struct {
 
 
 #if !defined(GF_EXPORT)
-#if defined(__GNUC__) && __GNUC__ >= 4 && !defined(GPAC_CONFIG_IOS)
+#if defined(GPAC_CONFIG_EMSCRIPTEN)
+//global include for using EM_ASM
+#include <emscripten/emscripten.h>
+#define GF_EXPORT EMSCRIPTEN_KEEPALIVE
+#elif defined(__GNUC__) && __GNUC__ >= 4 && !defined(GPAC_CONFIG_IOS)
 /*! macro for cross-platform signaling of exported function of libgpac*/
 #define GF_EXPORT __attribute__((visibility("default")))
 #else
@@ -568,11 +615,47 @@ typedef struct {
 #define GPAC_STATIC_MODULES
 #endif
 
-/*safety checks on macros*/
+/*dependency checks on macros*/
+
+#ifdef GPAC_DISABLE_NETWORK
+# ifndef GPAC_DISABLE_STREAMING
+# define GPAC_DISABLE_STREAMING
+# endif
+# ifndef GPAC_DISABLE_ROUTE
+# define GPAC_DISABLE_ROUTE
+# endif
+# ifdef GPAC_HAS_IPV6
+# undef GPAC_HAS_IPV6
+# endif
+# ifdef GPAC_HAS_SOCK_UN
+# undef GPAC_HAS_SOCK_UN
+# endif
+# ifndef GPAC_DISABLE_NETCAP
+# define GPAC_DISABLE_NETCAP
+# endif
+#endif
+
+
+#if !defined(GPAC_DISABLE_NETWORK) || defined(GPAC_CONFIG_EMSCRIPTEN)
+#define GPAC_USE_DOWNLOADER
+#endif
+
 
 #ifdef GPAC_DISABLE_ZLIB
 # define GPAC_DISABLE_LOADER_BT
 # define GPAC_DISABLE_SWF_IMPORT
+#endif
+
+#ifdef GPAC_DISABLE_EVG
+# ifndef GPAC_DISABLE_COMPOSITOR
+# define GPAC_DISABLE_COMPOSITOR
+# endif
+# ifndef GPAC_DISABLE_SVG
+# define GPAC_DISABLE_SVG
+# endif
+# ifndef GPAC_DISABLE_FONTS
+# define GPAC_DISABLE_FONTS
+# endif
 #endif
 
 #ifdef GPAC_DISABLE_VRML
@@ -669,9 +752,23 @@ typedef struct {
 # endif
 #endif
 
+#ifdef GPAC_DISABLE_MEDIA_IMPORT
+# ifndef GPAC_DISABLE_VTT
+# define GPAC_DISABLE_VTT
+# endif
+#endif
+
 //we currently disable all extra IPMP/IPMPX/OCI/extra MPEG-4 descriptors parsing
 #ifndef GPAC_MINIMAL_ODF
 #define GPAC_MINIMAL_ODF
+#endif
+
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+#define EM_CAST_PTR	(int)
+#endif
+
+#if defined(GPAC_DISABLE_DASHER) && defined(GPAC_DISABLE_DASHIN)
+#define GPAC_DISABLE_MPD
 #endif
 
 //define this to remove most of built-in doc of libgpac - for now filter description and help is removed, but argument help is not
@@ -761,6 +858,55 @@ void* gf_realloc(void *ptr, size_t size);
 \return same as strlcpy
 */
 size_t gf_strlcpy(char *dst, const char *src, size_t dsize);
+
+#ifdef GPAC_ASSERT_FATAL
+/*! fatal error assert, will always kill the program if condition is false
+ \param _cond condition to test
+*/
+#define gf_fatal_assert(_cond) if (! (_cond)) { fprintf(stderr, "Fatal error " #_cond " file %s line %d, exiting\n", (strstr(__FILE__, "gpac") ? strstr(__FILE__, "gpac") + 5 : __FILE__), __LINE__ ); exit(10); }
+/*!  error assert, will assert if condition is false but will not always kill the program
+ \param _cond condition to test
+*/
+#define gf_assert(_cond) gf_fatal_assert(_cond)
+#elif defined(NDEBUG)
+//! @cond Doxygen_Suppress
+#define gf_assert(_cond)
+#define gf_fatal_assert(_cond) if (! (_cond)) { fprintf(stderr, "Fatal error " #_cond " file %s line %d, exiting\n", (strstr(__FILE__, "gpac") ? strstr(__FILE__, "gpac") + 5 : __FILE__), __LINE__ ); exit(10); }
+//! @endcond
+#else
+//! @cond Doxygen_Suppress
+#define gf_assert(_cond) assert(_cond)
+#define gf_fatal_assert(_cond) assert(_cond)
+//! @endcond
+#endif
+
+#if defined(_DEBUG)
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
+#endif
+
+#if defined(NDEBUG)
+#ifdef GPAC_ENABLE_DEBUG
+#undef GPAC_ENABLE_DEBUG
+#endif
+#else
+#ifndef GPAC_ENABLE_DEBUG
+/*! Macro for detecting debug configurations*/
+#define GPAC_ENABLE_DEBUG
+#endif
+#endif
+
+
+//! @cond Doxygen_Suppress
+/*needed for unittests (disabled)*/
+#ifndef GF_STATIC
+#define GF_STATIC static
+#endif
+#ifndef GF_NOT_EXPORTED
+#define GF_NOT_EXPORTED
+#endif
+//! @endcond
 
 #ifdef __cplusplus
 }

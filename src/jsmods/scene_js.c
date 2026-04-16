@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2007-2022
+ *			Copyright (c) Telecom ParisTech 2007-2025
  *			All rights reserved
  *
  *  This file is part of GPAC / JavaScript Compositor extensions
@@ -26,7 +26,7 @@
 
 #include <gpac/setup.h>
 
-#if defined(GPAC_HAS_QJS) && !defined(GPAC_DISABLE_PLAYER)
+#if defined(GPAC_HAS_QJS) && !defined(GPAC_DISABLE_COMPOSITOR)
 
 /*base SVG type*/
 #include <gpac/nodes_svg.h>
@@ -64,6 +64,7 @@ typedef struct
 	GF_List *event_queue;
 	GF_Mutex *event_mx;
 
+	Bool owns_fs_api;
 } GF_SCENEJSExt;
 
 enum {
@@ -123,6 +124,7 @@ enum {
 	GJS_OM_PROP_DISABLED,
 	GJS_OM_PROP_NTP_SENDER_DIFF,
 	GJS_OM_PROP_BUFFERING,
+	GJS_OM_PROP_FORCED_SUB,
 };
 
 enum {
@@ -175,21 +177,21 @@ static void scenejs_finalize(JSRuntime *rt, JSValue obj);
 static void scenejs_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
 	GF_SCENEJSExt *ext = JS_GetOpaque(val, scene_class_id);
-    if (ext) {
+	if (ext) {
 		JS_MarkValue(rt, ext->evt_fun, mark_func);
-    }
+	}
 }
 
 JSClassDef sceneClass = {
-    "JSSCENE",
-    .finalizer = scenejs_finalize,
-    .gc_mark = scenejs_gc_mark
+	"JSSCENE",
+	.finalizer = scenejs_finalize,
+	.gc_mark = scenejs_gc_mark
 };
 JSClassDef gpacEvtClass = {
-    "GPACEVT"
+	"GPACEVT"
 };
 JSClassDef odmClass = {
-    "MediaObject"
+	"MediaObject"
 };
 JSClassDef anyClass = {
 	"GPACOBJECT"
@@ -766,7 +768,7 @@ static JSValue odm_getProperty(JSContext *ctx, JSValueConst this_val, int magic)
 		return JS_NewInt32(ctx, odi.max_bitrate);
 	case GJS_OM_PROP_SERVICE_HANDLER:
 		gf_odm_get_object_info(odm, &odi);
-            return JS_NewString(ctx, odi.service_handler ? odi.service_handler : "unloaded");
+		return JS_NewString(ctx, odi.service_handler ? odi.service_handler : "unloaded");
 	case GJS_OM_PROP_CODEC:
 		gf_odm_get_object_info(odm, &odi);
 		return JS_NewString(ctx, odi.codec_name ? odi.codec_name : "unloaded");
@@ -824,15 +826,15 @@ static JSValue odm_getProperty(JSContext *ctx, JSValueConst this_val, int magic)
 		return JS_NewInt32(ctx,  (!odm->addon && odm->subscene) ? odm->subscene->selected_service_id : odm->parentscene->selected_service_id);
 		break;
 	case GJS_OM_PROP_BANDWIDTH_DOWN:
-        if (odm->scene_ns->source_filter) {
+		if (odm->scene_ns->source_filter) {
 			JSValue ret;
-            GF_PropertyEntry *pe=NULL;
-            const GF_PropertyValue *prop = gf_filter_get_info(odm->scene_ns->source_filter, GF_PROP_PID_DOWN_RATE, &pe);
-            ret = JS_NewInt32(ctx, prop ? prop->value.uint/1000 : 0);
-            gf_filter_release_property(pe);
-            return ret;
-        }
-        return JS_NewInt32(ctx, 0);
+			GF_PropertyEntry *pe=NULL;
+			const GF_PropertyValue *prop = gf_filter_get_info(odm->scene_ns->source_filter, GF_PROP_PID_DOWN_RATE, &pe);
+			ret = JS_NewInt32(ctx, prop ? prop->value.uint/1000 : 0);
+			gf_filter_release_property(pe);
+			return ret;
+		}
+		return JS_NewInt32(ctx, 0);
 
 	case GJS_OM_PROP_NB_HTTP:
 		if (odm->scene_ns->source_filter) {
@@ -916,9 +918,13 @@ static JSValue odm_getProperty(JSContext *ctx, JSValueConst this_val, int magic)
 
 	case GJS_OM_PROP_SERVICE_NAME:
 		if (odm->pid) {
-			const GF_PropertyValue *p = gf_filter_pid_get_property(odm->pid, GF_PROP_PID_SERVICE_NAME);
+			GF_PropertyEntry *pe=NULL;
+			JSValue ret = JS_NULL;
+			const GF_PropertyValue *p = gf_filter_pid_get_info(odm->pid, GF_PROP_PID_SERVICE_NAME, &pe);
 			if (p && p->value.string)
-				return JS_NewString(ctx, p->value.string);
+				ret = JS_NewString(ctx, p->value.string);
+			gf_filter_release_property(pe);
+			return ret;
 		}
 		return JS_NULL;
 
@@ -1003,6 +1009,13 @@ static JSValue odm_getProperty(JSContext *ctx, JSValueConst this_val, int magic)
 		if (odm->parentscene)
 			return JS_NewBool(ctx, odm->parentscene->nb_buffering ? 1 : 0);
 		return JS_NewBool(ctx, odm->subscene->nb_buffering ? 1 : 0);
+	case GJS_OM_PROP_FORCED_SUB:
+		if (odm->pid) {
+			if (odm->flags & GF_ODM_SUB_FORCED) return JS_NewInt32(ctx, 3);
+			const GF_PropertyValue *p = gf_filter_pid_get_property(odm->pid, GF_PROP_PID_FORCED_SUB);
+			if (p) return JS_NewInt32(ctx, p->value.uint);
+		}
+		return JS_NewInt32(ctx, 0);
 	}
 	return JS_UNDEFINED;
 }
@@ -1017,6 +1030,7 @@ static JSValue gjs_odm_get_quality(JSContext *ctx, JSValueConst this_val, int ar
 	u32 sr=0, ch=0, w=0, h=0, bw=0, par_n=1, par_d=1, tile_adaptation_mode=0,dependent_group_index=0;
 	Bool ilced=GF_FALSE, disabled=GF_FALSE, selected=GF_FALSE, automatic=GF_FALSE;
 	Double fps=30.0;
+	u32 ssr = 0;
 	s32 idx;
 	s32 dep_idx=0;
 
@@ -1087,6 +1101,9 @@ static JSValue gjs_odm_get_quality(JSContext *ctx, JSValueConst this_val, int ar
 		else if (!strncmp(qdesc, "sar=", 4)) {
 			sscanf(qdesc, "sar=%d/%d", &par_n, &par_d);
 		}
+		else if (!strncmp(qdesc, "ssr=", 4)) {
+			sscanf(qdesc, "ssr=%u", &ssr);
+		}
 		if (!sep) break;
 		sep[0]=':';
 		qdesc = sep+2;
@@ -1131,6 +1148,7 @@ static JSValue gjs_odm_get_quality(JSContext *ctx, JSValueConst this_val, int ar
 	JS_SetPropertyStr(ctx, a, "channels", JS_NewInt32(ctx, ch));
 	JS_SetPropertyStr(ctx, a, "par_num", JS_NewInt32(ctx, par_n));
 	JS_SetPropertyStr(ctx, a, "par_den", JS_NewInt32(ctx, par_d));
+	JS_SetPropertyStr(ctx, a, "ssr", JS_NewInt32(ctx, ssr));
 	JS_SetPropertyStr(ctx, a, "disabled", JS_NewBool(ctx, disabled));
 	JS_SetPropertyStr(ctx, a, "is_selected", JS_NewBool(ctx, selected));
 	JS_SetPropertyStr(ctx, a, "automatic", JS_NewBool(ctx, automatic));
@@ -1289,7 +1307,7 @@ static JSValue gjs_odm_select(JSContext *ctx, JSValueConst this_val, int argc, J
 	GF_ObjectManager *odm = JS_GetOpaque(this_val, odm_class_id);
 	if (!odm) return GF_JS_EXCEPTION(ctx);
 
-#ifndef GPAC_DISABLE_PLAYER
+#ifndef GPAC_DISABLE_COMPOSITOR
 	gf_scene_select_object(odm->parentscene, odm);
 #endif
 	return JS_UNDEFINED;
@@ -1571,7 +1589,7 @@ static Bool gjs_event_filter(void *udta, GF_Event *evt, Bool consumed_by_composi
 		evt_clone = gf_malloc(sizeof(GF_Event));
 		memcpy(evt_clone, evt, sizeof(GF_Event));
 		gf_list_add(sjs->event_queue, evt_clone);
-		GF_LOG(GF_LOG_INFO, GF_LOG_COMPOSE, ("[SCENEJS] Couldn't lock % mutex, queing event\n", (lock_fail==2) ? "JavaScript" : "Compositor"));
+		GF_LOG(GF_LOG_INFO, GF_LOG_COMPOSE, ("[SCENEJS] Couldn't lock % mutex, queuing event\n", (lock_fail==2) ? "JavaScript" : "Compositor"));
 		gf_mx_v(sjs->event_mx);
 
 		if (lock_fail==2){
@@ -1818,6 +1836,7 @@ static const JSCFunctionListEntry odm_funcs[] = {
 	JS_CGETSET_MAGIC_DEF("vr_scene", odm_getProperty, NULL, GJS_OM_PROP_IS_VR_SCENE),
 	JS_CGETSET_MAGIC_DEF("disabled", odm_getProperty, NULL, GJS_OM_PROP_DISABLED),
 	JS_CGETSET_MAGIC_DEF("buffering", odm_getProperty, NULL, GJS_OM_PROP_BUFFERING),
+	JS_CGETSET_MAGIC_DEF("forced", odm_getProperty, NULL, GJS_OM_PROP_FORCED_SUB),
 
 	JS_CFUNC_DEF("declare_addon", 0, gjs_odm_declare_addon),
 	JS_CFUNC_DEF("enable_addon", 0, gjs_odm_enable_addon),
@@ -1856,13 +1875,13 @@ static void scenejs_finalize(JSRuntime *rt, JSValue obj)
 	gf_list_del(sjs->event_queue);
 	gf_mx_del(sjs->event_mx);
 
-	if (sjs->compositor && sjs->compositor->filter) {
+	if (sjs->owns_fs_api && sjs->compositor && sjs->compositor->filter) {
 		gf_fs_unload_script(sjs->compositor->filter->session, NULL);
 	}
 	/*if we destroy the script context holding the gpac event filter (only one for the time being), remove the filter*/
 	JS_FreeValueRT(rt, sjs->evt_fun);
 	if (sjs->evt_filter.udta) {
-		if (sjs->compositor)
+		if (sjs->owns_fs_api && sjs->compositor)
 			gf_filter_remove_event_listener(sjs->compositor->filter, &sjs->evt_filter);
 		sjs->evt_filter.udta = NULL;
 	}
@@ -1929,6 +1948,7 @@ static int js_scene_init(JSContext *c, JSModuleDef *m)
 		//don't check error code, this may fail if global JS has been set but the script may still run
 		if (gf_fs_load_js_api(c, fs) == GF_OK) {
 			scene->attached_session = fs;
+			sjs->owns_fs_api = GF_TRUE;
 		}
 	}
 
@@ -1979,7 +1999,7 @@ static int js_scene_init(JSContext *c, JSModuleDef *m)
 
 	JS_FreeValue(c, global);
 
-    JS_SetModuleExport(c, m, "scene", sjs->scene_obj);
+	JS_SetModuleExport(c, m, "scene", sjs->scene_obj);
 	return 0;
 }
 

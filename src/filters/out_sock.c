@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2019-2022
+ *			Copyright (c) Telecom ParisTech 2019-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / generic socket output filter
@@ -25,6 +25,9 @@
 
 
 #include <gpac/filters.h>
+
+#ifndef GPAC_DISABLE_NETWORK
+
 #include <gpac/constants.h>
 #include <gpac/network.h>
 
@@ -66,6 +69,8 @@ typedef struct
 	GF_FilterPacket *rev_pck;
 	u32 next_pckd_idx, next_pckr_idx;
 	u32 nb_pckd_wnd, nb_pckr_wnd;
+
+	GF_SockGroup *sg;
 } GF_SockOutCtx;
 
 
@@ -75,6 +80,7 @@ static GF_Err sockout_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool i
 	GF_SockOutCtx *ctx = (GF_SockOutCtx *) gf_filter_get_udta(filter);
 	if (is_remove) {
 		ctx->pid = NULL;
+		gf_sk_group_unregister(ctx->sg, ctx->socket);
 		gf_sk_del(ctx->socket);
 		ctx->socket = NULL;
 		return GF_OK;
@@ -160,7 +166,7 @@ static GF_Err sockout_initialize(GF_Filter *filter)
 	}
 	gf_filter_override_caps(filter, ctx->in_caps, 2);
 
-	/*create our ourput socket*/
+	/*create our output socket*/
 
 	if (!strnicmp(ctx->dst, "udp://", 6)) {
 		sock_type = GF_SOCK_TYPE_UDP;
@@ -182,8 +188,9 @@ static GF_Err sockout_initialize(GF_Filter *filter)
 	//skip ://
 	url = strchr(ctx->dst, ':');
 	url += 3;
+	if (!url[0]) return GF_IP_ADDRESS_NOT_FOUND;
 
-	ctx->socket = gf_sk_new(sock_type);
+	ctx->socket = gf_sk_new_ex(sock_type, gf_filter_get_netcap_id(filter));
 	if (! ctx->socket ) {
 		GF_LOG(GF_LOG_ERROR, GF_LOG_NETWORK, ("[SockOut] Failed to open socket for %s\n", ctx->dst));
 		return GF_IO_ERR;
@@ -208,7 +215,7 @@ static GF_Err sockout_initialize(GF_Filter *filter)
 		|| (sock_type == GF_SOCK_TYPE_UDP_UN)
 #endif
 	) {
-		e = gf_sk_bind(ctx->socket, ctx->ifce, port, url, port, GF_SOCK_REUSE_PORT | GF_SOCK_FAKE_BIND);
+		e = gf_sk_bind(ctx->socket, ctx->ifce, port, url, port, GF_SOCK_REUSE_PORT|GF_SOCK_IS_SENDER);
 		ctx->listen = GF_FALSE;
 	} else if (ctx->listen) {
 		e = gf_sk_bind(ctx->socket, NULL, port, url, 0, GF_SOCK_REUSE_PORT);
@@ -228,8 +235,11 @@ static GF_Err sockout_initialize(GF_Filter *filter)
 		ctx->socket = NULL;
 		return e;
 	}
-
+	ctx->sg = gf_sk_group_new();
 	gf_sk_set_buffer_size(ctx->socket, 0, ctx->sockbuf);
+	if (!ctx->listen) {
+		gf_sk_group_register(ctx->sg, ctx->socket);
+	}
 
 	return GF_OK;
 }
@@ -247,6 +257,8 @@ static void sockout_finalize(GF_Filter *filter)
 	}
 
 	if (ctx->socket) gf_sk_del(ctx->socket);
+	if (ctx->sg) gf_sk_group_del(ctx->sg);
+
 }
 
 static GF_Err sockout_send_packet(GF_SockOutCtx *ctx, GF_FilterPacket *pck, GF_Socket *dst_sock)
@@ -262,18 +274,21 @@ static GF_Err sockout_send_packet(GF_SockOutCtx *ctx, GF_FilterPacket *pck, GF_S
 
 	pck_data = gf_filter_pck_get_data(pck, &pck_size);
 	if (pck_data) {
-		e = gf_sk_send(dst_sock, pck_data, pck_size);
+		u32 nb_bytes_sent = 0;
+		e = gf_sk_send_ex(dst_sock, pck_data, pck_size, &nb_bytes_sent);
 		if ((e==GF_IP_CONNECTION_CLOSED) || (e==GF_URL_REMOVED)) return GF_IP_CONNECTION_CLOSED;
 
 		if (e) {
 			GF_LOG(GF_LOG_ERROR, GF_LOG_NETWORK, ("[SockOut] Write error: %s\n", gf_error_to_string(e) ));
 		}
-		ctx->nb_bytes_sent += pck_size;
+		ctx->nb_bytes_sent += nb_bytes_sent;
 		return e;
 	}
 	hwf = gf_filter_pck_get_frame_interface(pck);
 	if (!hwf) {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_NETWORK, ("[SockOut] output file handle is not opened, discarding %d bytes\n", pck_size));
+		if (pck_size) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_NETWORK, ("[SockOut] output file handle is not opened, discarding %d bytes\n", pck_size));
+		}
 		return GF_OK;
 	}
 
@@ -345,6 +360,7 @@ static GF_Err sockout_process(GF_Filter *filter)
 		}
 	}
 
+
 	if (ctx->listen) {
 		GF_Socket *new_conn=NULL;
 		e = gf_sk_accept(ctx->socket, &new_conn);
@@ -369,6 +385,9 @@ static GF_Err sockout_process(GF_Filter *filter)
 			sc->pck_pending = ctx->pck_pending;
 			if (!ctx->nb_pck_processed)
 				sc->is_tuned = GF_TRUE;
+
+			gf_sk_group_register(ctx->sg, sc->socket);
+
 		}
 		if (!ctx->pid_started) {
 			gf_filter_ask_rt_reschedule(filter, 50000);
@@ -379,21 +398,30 @@ static GF_Err sockout_process(GF_Filter *filter)
 		return GF_OK;
 	}
 
+	e = gf_sk_group_select(ctx->sg, 10, GF_SK_SELECT_WRITE);
+	if (e == GF_IP_NETWORK_EMPTY) {
+		gf_filter_ask_rt_reschedule(filter, 5000);
+		return GF_OK;
+	} else if (e<0) {
+		return e;
+	}
+
 	pck = gf_filter_pid_get_packet(ctx->pid);
 	if (!pck) {
-		if (gf_filter_pid_is_eos(ctx->pid)) {
+		if (gf_filter_pid_is_eos(ctx->pid) && !gf_filter_pid_is_flush_eos(ctx->pid) ) {
 			if (ctx->rev_pck) {
 				is_pck_ref = GF_TRUE;
 				pck = ctx->rev_pck;
 			} else {
 				if (!ctx->listen) {
+					gf_sk_group_unregister(ctx->sg, ctx->socket);
 					gf_sk_del(ctx->socket);
 					ctx->socket = NULL;
 					return GF_EOS;
 				}
 				if (!ctx->ka)
 					return GF_EOS;
-				//keep alive, ask for real-time reschedule of 100 ms - we should use socket groups and selects !
+				//keep alive, ask for real-time reschedule of 100 ms
 				gf_filter_ask_rt_reschedule(filter, 100000);
 			}
 		}
@@ -453,6 +481,9 @@ static GF_Err sockout_process(GF_Filter *filter)
 			GF_SockOutClient *sc = gf_list_get(ctx->clients, i);
 			if (!sc->socket) continue;
 
+			if (!gf_sk_group_sock_is_set(ctx->sg, sc->socket, GF_SK_SELECT_WRITE))
+				continue;
+
 			if (!sc->is_tuned) {
 
 			}
@@ -463,6 +494,7 @@ static GF_Err sockout_process(GF_Filter *filter)
 
 			e = sockout_send_packet(ctx, pck, sc->socket);
 			if (e==GF_IP_CONNECTION_CLOSED) {
+				gf_sk_group_unregister(ctx->sg, sc->socket);
 				gf_sk_del(sc->socket);
 				sc->socket = NULL;
 				gf_list_rem(ctx->clients, i);
@@ -492,12 +524,17 @@ static GF_Err sockout_process(GF_Filter *filter)
 		if (ctx->pck_pending) return GF_OK;
 
 	} else {
+		if (!gf_sk_group_sock_is_set(ctx->sg, ctx->socket, GF_SK_SELECT_WRITE)) {
+			gf_filter_ask_rt_reschedule(filter, 5000);
+			return GF_OK;
+		}
 		e = sockout_send_packet(ctx, pck, ctx->socket);
 		if (e == GF_BUFFER_TOO_SMALL) return GF_OK;
 		if (e==GF_IP_CONNECTION_CLOSED) {
 			GF_FilterEvent evt;
 			GF_FEVT_INIT(evt, GF_FEVT_STOP, ctx->pid);
 			gf_filter_pid_send_event(ctx->pid, &evt);
+			gf_sk_group_unregister(ctx->sg, ctx->socket);
 			gf_sk_del(ctx->socket);
 			ctx->socket = NULL;
 		}
@@ -606,7 +643,8 @@ GF_FilterRegister SockOutRegister = {
 	.finalize = sockout_finalize,
 	.configure_pid = sockout_configure_pid,
 	.process = sockout_process,
-	.flags = GF_FS_REG_TEMP_INIT
+	.flags = GF_FS_REG_TEMP_INIT,
+	.hint_class_type = GF_FS_CLASS_NETWORK_IO
 };
 
 
@@ -622,3 +660,9 @@ const GF_FilterRegister *sockout_register(GF_FilterSession *session)
 	return &SockOutRegister;
 }
 
+#else
+const GF_FilterRegister *sockout_register(GF_FilterSession *session)
+{
+	return NULL;
+}
+#endif // GPAC_DISABLE_NETWORK

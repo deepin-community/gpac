@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / AMR&EVRC&SMV reframer filter
@@ -27,6 +27,8 @@
 #include <gpac/constants.h>
 #include <gpac/bitstream.h>
 #include <gpac/internal/media_dev.h>
+
+#ifndef GPAC_DISABLE_RFQCP
 
 typedef struct
 {
@@ -190,7 +192,7 @@ static void qcpdmx_check_dur(GF_Filter *filter, GF_QCPDmxCtx *ctx)
 			gf_fseek(stream, size, SEEK_CUR);
 		}
 		data_chunk_size-= size;
-		
+
 		duration += ctx->block_size;
 		cur_dur += ctx->block_size;
 		if (cur_dur > ctx->index * ctx->sample_rate) {
@@ -432,7 +434,7 @@ GF_Err qcpdmx_process(GF_Filter *filter)
 		if (gf_filter_pid_is_eos(ctx->ipid)) {
 			if (ctx->opid)
 				gf_filter_pid_set_eos(ctx->opid);
-			assert(ctx->remaining == 0);
+			gf_assert(ctx->remaining == 0);
 			return GF_EOS;
 		}
 		return GF_OK;
@@ -656,7 +658,7 @@ GF_Err qcpdmx_process(GF_Filter *filter)
 		remain -= size;
 
 
-		//don't demux too much of input, abort when we would block. This avoid dispatching
+		//don't demux too much of input, abort when we would block. This avoids dispatching
 		//a huge number of frames in a single call
 		if (gf_filter_pid_would_block(ctx->opid)) {
 			ctx->resume_from = (u32) ((char *)start -  (char *)data);
@@ -678,19 +680,26 @@ static void qcpdmx_finalize(GF_Filter *filter)
 
 static const char *qcpdmx_probe_data(const u8 *data, u32 size, GF_FilterProbeScore *score)
 {
+	if (size < 4)
+		return NULL;
+
 	char magic[5];
 	Bool is_qcp = GF_TRUE;
 	GF_BitStream *bs = gf_bs_new(data, size, GF_BITSTREAM_READ);
 
 	magic[4] = 0;
-	gf_bs_read_data(bs, magic, 4);
-	if (strnicmp(magic, "RIFF", 4)) {
+	if (gf_bs_read_data(bs, magic, 4) != 4) {
 		is_qcp = GF_FALSE;
-	} else {
-		/*riff_size = */gf_bs_read_u32_le(bs);
-		gf_bs_read_data(bs, magic, 4);
-		if (strnicmp(magic, "QLCM", 4)) {
+	}
+	else {
+		if (strnicmp(magic, "RIFF", 4)) {
 			is_qcp = GF_FALSE;
+		} else {
+			/*riff_size = */gf_bs_read_u32_le(bs);
+			gf_bs_read_data(bs, magic, 4);
+			if (strnicmp(magic, "QLCM", 4)) {
+				is_qcp = GF_FALSE;
+			}
 		}
 	}
 	gf_bs_del(bs);
@@ -732,12 +741,18 @@ GF_FilterRegister QCPDmxRegister = {
 	.configure_pid = qcpdmx_configure_pid,
 	.process = qcpdmx_process,
 	.probe_data = qcpdmx_probe_data,
-	.process_event = qcpdmx_process_event
+	.process_event = qcpdmx_process_event,
+	.hint_class_type = GF_FS_CLASS_FRAMING
 };
 
 
-const GF_FilterRegister *qcpdmx_register(GF_FilterSession *session)
+const GF_FilterRegister *rfqcp_register(GF_FilterSession *session)
 {
 	return &QCPDmxRegister;
 }
-
+#else
+const GF_FilterRegister *rfqcp_register(GF_FilterSession *session)
+{
+	return NULL;
+}
+#endif //#ifndef GPAC_DISABLE_RFQCP

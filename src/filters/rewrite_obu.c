@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2018-2022
+ *			Copyright (c) Telecom ParisTech 2018-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / AV1 OBU rewrite filter
@@ -28,7 +28,7 @@
 #include <gpac/bitstream.h>
 #include <gpac/internal/media_dev.h>
 
-#ifndef GPAC_DISABLE_AV_PARSERS
+#if !defined(GPAC_DISABLE_AV_PARSERS) && !defined(GPAC_DISABLE_UFOBU)
 
 typedef enum {
 	FRAMING_OBU 	= 0,
@@ -58,6 +58,7 @@ typedef struct
 	GF_AV1Config *av1c;
 	u32 av1b_cfg_size;
 	u32 codec_id;
+	Bool passthrough;
 } GF_OBUMxCtx;
 
 GF_Err obumx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remove)
@@ -78,9 +79,12 @@ GF_Err obumx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remove)
 		return GF_NOT_SUPPORTED;
 
 	dcd = gf_filter_pid_get_property(pid, GF_PROP_PID_DECODER_CONFIG);
-	if (!dcd) return GF_NON_COMPLIANT_BITSTREAM;
+	//may happen if first frame not yet received by reframer
+	if (!dcd)
+		crc = -1;
+	else
+		crc = gf_crc_32(dcd->value.data.ptr, dcd->value.data.size);
 
-	crc = gf_crc_32(dcd->value.data.ptr, dcd->value.data.size);
 	if (ctx->crc == crc) return GF_OK;
 	ctx->crc = crc;
 
@@ -93,6 +97,11 @@ GF_Err obumx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remove)
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_UNFRAMED, &PROP_BOOL(GF_TRUE) );
 
 	ctx->ipid = pid;
+	ctx->passthrough = GF_FALSE;
+	p = gf_filter_pid_get_property_str(pid, "nodata");
+	if (p && p->value.boolean) ctx->passthrough = GF_TRUE;
+
+	if (!dcd) return GF_OK;
 
 	p = gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_CODECID);
 	ctx->codec_id = p ? p->value.uint : 0;
@@ -136,7 +145,7 @@ GF_Err obumx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remove)
 
 		while ((obu = gf_list_enum(ctx->av1c->obu_array, &i))) {
 			//we don't output sequence header since it shall be present in sync sample
-			//this avoids creating duplicate of the seqeunce header in the output stream
+			//this avoids creating duplicate of the sequence header in the output stream
 			if (obu->obu_type==OBU_SEQUENCE_HEADER) {
 				i--;
 				gf_list_rem(ctx->av1c->obu_array, i);
@@ -301,7 +310,7 @@ static GF_Err obumx_process_mpeg2au(GF_OBUMxCtx *ctx, GF_FilterPacket *src_pck, 
 		if (obu_data) gf_free(obu_data);
 	}
 	// create last packet from any pending data
-	obumx_add_packet(ctx->opid,ctx->bs_w, src_pck, pcks);
+	obumx_add_packet(ctx->opid, ctx->bs_w, src_pck, pcks);
 	gf_bs_del(ctx->bs_w);
 	ctx->bs_w = NULL;
 
@@ -357,6 +366,11 @@ GF_Err obumx_process(GF_Filter *filter)
 			gf_filter_pid_set_eos(ctx->opid);
 			return GF_EOS;
 		}
+		return GF_OK;
+	}
+	if (ctx->passthrough) {
+		gf_filter_pck_forward(pck, ctx->opid);
+		gf_filter_pid_drop_packet(ctx->ipid);
 		return GF_OK;
 	}
 
@@ -469,7 +483,7 @@ GF_Err obumx_process(GF_Filter *filter)
 		u32 frame_idx = 0;
 		//temporal unit
 		gf_av1_leb128_write(ctx->bs_w, av1b_frame_size);
-		assert(frame_sizes[0]);
+		gf_assert(frame_sizes[0]);
 		gf_av1_leb128_write(ctx->bs_w, frame_sizes[0]);
 
 		//write temporal delim with obu size set
@@ -513,7 +527,7 @@ GF_Err obumx_process(GF_Filter *filter)
 			gf_bs_write_data(ctx->bs_w, data+start, obu_size);
 
 		}
-		assert(gf_bs_get_position(ctx->bs_w) == size);
+		gf_assert(gf_bs_get_position(ctx->bs_w) == size);
 	} else {
 
 		//write IVF headers
@@ -584,6 +598,7 @@ GF_Err obumx_process(GF_Filter *filter)
 
 	return GF_OK;
 }
+
 static void obumx_finalize(GF_Filter *filter)
 {
 	GF_OBUMxCtx *ctx = gf_filter_get_udta(filter);
@@ -612,12 +627,12 @@ static const GF_FilterArgs OBUMxArgs[] =
 	{0}
 };
 
-
 GF_FilterRegister OBUMxRegister = {
 	.name = "ufobu",
-	GF_FS_SET_DESCRIPTION("IVF/OBU/annexB writer")
+	GF_FS_SET_DESCRIPTION("IVF/OBU/annexB rewriter")
 	GF_FS_SET_HELP("This filter rewrites VPx or AV1 bitstreams into a IVF, annexB or OBU sequence.\n"
-	"The temporal delimiter OBU is re-inserted in annexB (`.av1` and `.av1b`files, with obu_size set) and OBU sequences (`.obu`files, without obu_size)\n"
+	"The temporal delimiter OBU is re-inserted in annexB (`.av1` and `.av1b` files, with obu_size set) and OBU sequences (`.obu` files, without obu_size)\n"
+	"Timecode metadata optionally inserted\n"
 	"Note: VP8/9 codecs will only use IVF output (equivalent to file extension `.ivf` or `:ext=ivf` set on output).\n"
 	)
 	.private_size = sizeof(GF_OBUMxCtx),
@@ -625,19 +640,20 @@ GF_FilterRegister OBUMxRegister = {
 	SETCAPS(OBUMxCaps),
 	.finalize = obumx_finalize,
 	.configure_pid = obumx_configure_pid,
-	.process = obumx_process
+	.process = obumx_process,
+	.hint_class_type = GF_FS_CLASS_FRAMING
 };
 
 
-const GF_FilterRegister *obumx_register(GF_FilterSession *session)
+const GF_FilterRegister *ufobu_register(GF_FilterSession *session)
 {
 	return &OBUMxRegister;
 }
-
 #else
-const GF_FilterRegister *obumx_register(GF_FilterSession *session)
+const GF_FilterRegister *ufobu_register(GF_FilterSession *session)
 {
 	return NULL;
 }
-#endif // GPAC_DISABLE_AV_PARSERS
+#endif // #if !defined(GPAC_DISABLE_AV_PARSERS) && !defined(GPAC_DISABLE_UFOBU)
+
 

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -26,6 +26,8 @@
 
 #include <gpac/internal/compositor_dev.h>
 #include <gpac/constants.h>
+
+#if !defined(GPAC_DISABLE_COMPOSITOR)
 
 GF_EXPORT
 GF_ObjectManager *gf_odm_new()
@@ -372,7 +374,7 @@ void gf_odm_setup_object(GF_ObjectManager *odm, GF_SceneNamespace *parent_ns, GF
 
 	/*empty object, use a dynamic scene*/
 	if (! odm->pid && odm->subscene) {
-		assert(odm->subscene->root_od==odm);
+		gf_assert(odm->subscene->root_od==odm);
 		odm->subscene->is_dynamic_scene = GF_TRUE;
 	} else if (odm->pid) {
 		GF_LOG(GF_LOG_DEBUG, GF_LOG_COMPTIME, ("[Compositor] Setting up object streams\n"));
@@ -487,7 +489,7 @@ void gf_odm_setup_object(GF_ObjectManager *odm, GF_SceneNamespace *parent_ns, GF
 	}
 	/*object is the root, always start*/
 	else if (!odm->parentscene) {
-		assert(odm->subscene && (odm->subscene->root_od==odm));
+		gf_assert(odm->subscene && (odm->subscene->root_od==odm));
 		odm->flags &= ~GF_ODM_NOT_SETUP;
 		gf_odm_start(odm);
 	}
@@ -552,7 +554,7 @@ void gf_odm_setup_object(GF_ObjectManager *odm, GF_SceneNamespace *parent_ns, GF
 
 			if (!role_set) {
 				const GF_PropertyValue *prop = gf_filter_pid_get_property(for_pid ? for_pid : odm->pid, GF_PROP_PID_ROLE);
-				if (prop && prop->value.string && !strcmp(prop->value.string, "main")) {
+				if (prop && prop->value.string_list.nb_items && !strcmp(prop->value.string_list.vals[0], "main")) {
 					odm->addon->addon_type = GF_ADDON_TYPE_MAIN;
 				}
 			}
@@ -571,8 +573,8 @@ void gf_odm_setup_object(GF_ObjectManager *odm, GF_SceneNamespace *parent_ns, GF
 		}
 	} else if (odm->parentscene) {
 		const GF_PropertyValue *prop = gf_filter_pid_get_property(for_pid ? for_pid : odm->pid, GF_PROP_PID_ROLE);
-		if (prop && prop->value.string && !strncmp(prop->value.string, "ambi", 4)) {
-			odm->ambi_ch_id = atoi(prop->value.string + 4);
+		if (prop && prop->value.string_list.nb_items && !strncmp(prop->value.string_list.vals[0], "ambi", 4)) {
+			odm->ambi_ch_id = atoi(prop->value.string_list.vals[0] + 4);
 			if (odm->ambi_ch_id > odm->parentscene->ambisonic_type)
 				odm->parentscene->ambisonic_type = odm->ambi_ch_id;
 		}
@@ -687,7 +689,7 @@ GF_Err gf_odm_setup_pid(GF_ObjectManager *odm, GF_FilterPid *pid)
 		GF_Scene *parent = gf_scene_get_root_scene(scene);
 		clockID = scene->root_od->ck->clock_id;
 		ck_namespace = parent->root_od->scene_ns->clocks;
-		assert(ck_namespace);
+		gf_fatal_assert(ck_namespace);
 	}
 
 
@@ -701,7 +703,7 @@ GF_Err gf_odm_setup_pid(GF_ObjectManager *odm, GF_FilterPid *pid)
 		scene->root_od->ck = ck;
 
 clock_setup:
-	assert(ck);
+	gf_fatal_assert(ck);
 	odm->ck = ck;
 	odm->clock_inherited = clock_inherited;
 
@@ -761,7 +763,7 @@ void gf_odm_start(GF_ObjectManager *odm)
 		/*look for a given segment name to play*/
 		if (odm->subscene) {
 			char *url, *frag=NULL;
-			assert(odm->subscene->root_od==odm);
+			gf_assert(odm->subscene->root_od==odm);
 
 			url = (odm->mo && odm->mo->URLs.count) ? odm->mo->URLs.vals[0].url : odm->scene_ns->url;
 			frag = strrchr(url, '#');
@@ -1085,7 +1087,7 @@ void gf_odm_stop(GF_ObjectManager *odm, Bool force_close)
 		odm->parentscene->root_od->addon->started = 0;
 	}
 	if (odm->nb_buffering) {
-		assert(scene->nb_buffering>=odm->nb_buffering);
+		gf_assert(scene->nb_buffering>=odm->nb_buffering);
 		scene->nb_buffering -= odm->nb_buffering;
 		while (odm->nb_buffering && odm->ck) {
 			gf_clock_buffer_off(odm->ck);
@@ -1531,8 +1533,8 @@ static Bool odm_update_buffer(GF_Scene *scene, GF_ObjectManager *odm, GF_FilterP
 	//TODO abort buffering when errors are found on the input chain !!
 	if (odm->blocking_media || (buffer_duration >= odm->buffer_playout_ms)) {
 		odm->nb_buffering--;
-		assert(scene->nb_buffering);
-		scene->nb_buffering--;
+		if (scene->nb_buffering)
+			scene->nb_buffering--;
 		if (!scene->nb_buffering) {
 			*signal_eob = GF_TRUE;
 		}
@@ -1540,8 +1542,8 @@ static Bool odm_update_buffer(GF_Scene *scene, GF_ObjectManager *odm, GF_FilterP
 			gf_clock_buffer_off(odm->ck);
 	} else if (gf_filter_pid_has_seen_eos(pid) ) {
 		odm->nb_buffering--;
-		assert(scene->nb_buffering);
-		scene->nb_buffering--;
+		if (scene->nb_buffering)
+			scene->nb_buffering--;
 		//if eos while buffering, consider the last rebuffer an error
 		//fixeme, we need a way to probe for eos being "close" but not yet detected
 		if (odm->nb_rebuffer)
@@ -1571,7 +1573,7 @@ Bool gf_odm_check_buffering(GF_ObjectManager *odm, GF_FilterPid *pid)
 	Bool check_disc = GF_FALSE;
 	Bool check_full_buffer = GF_TRUE;
 
-	assert(odm);
+	gf_assert(odm);
 
 	if (!pid) {
 		check_full_buffer = GF_FALSE;
@@ -2056,7 +2058,7 @@ GF_Err gf_odm_get_object_info(GF_ObjectManager *odm, GF_MediaInfo *info)
 			prop = gf_filter_pid_get_property(pid, GF_PROP_PID_HEIGHT);
 			if (prop) info->height = prop->value.uint;
 			prop = gf_filter_pid_get_property(pid, GF_PROP_PID_SAR);
-			if (prop) info->par = (prop->value.frac.num) << 16 | (prop->value.frac.den);
+			if (prop && (prop->value.frac.num>0)) info->par = (prop->value.frac.num) << 16 | (prop->value.frac.den);
 			break;
 		case GF_STREAM_AUDIO:
 			prop = gf_filter_pid_get_property(pid, GF_PROP_PID_SAMPLE_RATE);
@@ -2111,3 +2113,4 @@ void gf_odm_check_clock_mediatime(GF_ObjectManager *odm)
 	}
 }
 
+#endif //!defined(GPAC_DISABLE_COMPOSITOR)

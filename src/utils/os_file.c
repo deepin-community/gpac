@@ -1,7 +1,7 @@
 /*
  *			GPAC - Multimedia Framework C SDK
  *
- *			Authors: Jean Le Feuvre - Copyright (c) Telecom ParisTech 2000-2022
+ *			Authors: Jean Le Feuvre - Copyright (c) Telecom ParisTech 2000-2025
  *			         Romain Bouqueau - Copyright (c) Romain Bouqueau 2015
  *					All rights reserved
  *
@@ -157,10 +157,15 @@ Bool gf_dir_exists(const char* DirPathName)
 	gf_free(wcsDirPathName);
 	return (att != INVALID_FILE_ATTRIBUTES && (att & FILE_ATTRIBUTE_DIRECTORY)) ? GF_TRUE : GF_FALSE;
 #else
-	DIR* dir = opendir(DirPathName);
-	if (!dir) return GF_FALSE;
-	closedir(dir);
-	return GF_TRUE;
+	struct stat sb;
+	if (stat(DirPathName, &sb) == 0 && S_ISDIR(sb.st_mode)) {
+		return GF_TRUE;
+	}
+	return GF_FALSE;
+//	DIR* dir = opendir(DirPathName);
+//	if (!dir) return GF_FALSE;
+//	closedir(dir);
+//	return GF_TRUE;
 #endif
 	return GF_FALSE;
 }
@@ -190,6 +195,49 @@ GF_Err gf_dir_cleanup(const char* DirPathName)
 	return GF_OK;
 }
 
+#include <gpac/list.h>
+GF_List *gfio_delete_handlers = NULL;
+
+GF_EXPORT
+GF_Err gf_fileio_register_delete_proc(gfio_delete_proc del_proc)
+{
+	if (!del_proc) return GF_OK;
+
+	if (!gfio_delete_handlers) gfio_delete_handlers = gf_list_new();
+	if (!gfio_delete_handlers) return GF_OUT_OF_MEM;
+	if (gf_list_find(gfio_delete_handlers, del_proc)>=0) return GF_BAD_PARAM;
+	return gf_list_add(gfio_delete_handlers, del_proc);
+}
+GF_EXPORT
+void gf_fileio_unregister_delete_proc(gfio_delete_proc del_proc)
+{
+	if (!del_proc || !gfio_delete_handlers) return;
+	gf_list_del_item(gfio_delete_handlers, del_proc);
+	if (!gf_list_count(gfio_delete_handlers)) {
+		gf_list_del(gfio_delete_handlers);
+		gfio_delete_handlers = NULL;
+	}
+}
+
+GF_Err gf_fileio_file_delete(const char *fileName, const char *parent_gfio)
+{
+	if (!gfio_delete_handlers || !fileName) return GF_OK;
+	if (!parent_gfio) {
+		if (strncmp(fileName, "gfio://", 7)) return GF_EOS;
+	} else {
+		if (strncmp(parent_gfio, "gfio://", 7)) return GF_EOS;
+	}
+
+	u32 i, count=gf_list_count(gfio_delete_handlers);
+	for (i=0; i<count; i++) {
+		gfio_delete_proc del_proc = gf_list_get(gfio_delete_handlers, i);
+		GF_Err ret = del_proc(fileName, parent_gfio);
+		if (ret==GF_EOS) continue;
+		return ret;
+	}
+	return GF_OK;
+}
+
 GF_EXPORT
 GF_Err gf_file_delete(const char *fileName)
 {
@@ -197,6 +245,10 @@ GF_Err gf_file_delete(const char *fileName)
 		GF_LOG(GF_LOG_DEBUG, GF_LOG_CORE, ("gf_file_delete with no param - ignoring\n"));
 		return GF_OK;
 	}
+	if (!strncmp(fileName, "gfio://", 7)) {
+		return gf_fileio_file_delete(fileName, NULL);
+	}
+
 #if defined(_WIN32_WCE)
 	TCHAR swzName[MAX_PATH];
 	CE_CharToWide((char*)fileName, swzName);
@@ -289,7 +341,7 @@ Bool gf_file_exists_ex(const char *fileName, const char *par_name)
 	}
 	gf_free(wname);
 	return res;
-#elif defined(GPAC_CONFIG_LINUX)
+#elif defined(GPAC_CONFIG_LINUX) || defined(GPAC_CONFIG_EMSCRIPTEN)
 	Bool res = (access(fileName, 4) == -1) ? GF_FALSE : GF_TRUE;
 	if (res && gf_dir_exists(fileName))
 		res = GF_FALSE;
@@ -354,6 +406,10 @@ GF_Err gf_file_move(const char *fileName, const char *newFileName)
 	if (!fileName || !newFileName) {
 		e = GF_IO_ERR;
 	} else {
+		//try direct rename - will fail if moving across file systems but faster for most use cases
+		int res = rename(fileName, newFileName);
+		if (!res) return GF_OK;
+		//use mv command
 		arg1 = gf_sanetize_single_quoted_string(fileName);
 		arg2 = gf_sanetize_single_quoted_string(newFileName);
 		if (snprintf(cmd, sizeof cmd, "mv %s %s", arg1, arg2) >= sizeof cmd) goto error;
@@ -465,14 +521,22 @@ u32 gf_file_handles_count()
 	return gpac_file_handles;
 }
 
+#include <gpac/thread.h>
+extern GF_Mutex *logs_mx;
+
 #ifdef GPAC_MEMORY_TRACKING
 const char *enum_open_handles(u32 *idx)
 {
 	GF_FileHandle *h;
+	gf_mx_p(logs_mx);
 	u32 count = gf_list_count(gpac_open_files);
-	if (*idx >= count) return NULL;
+	if (*idx >= count) {
+		gf_mx_v(logs_mx);
+		return NULL;
+	}
 	h = gf_list_get(gpac_open_files, *idx);
 	(*idx)++;
+	gf_mx_v(logs_mx);
 	return h->url;
 }
 #endif
@@ -485,6 +549,7 @@ static void gf_register_file_handle(char *filename, FILE *ptr, Bool is_temp_file
 #endif
 	) {
 		GF_FileHandle *h;
+		gf_mx_p(logs_mx);
 		if (!gpac_open_files) gpac_open_files = gf_list_new();
 		GF_SAFEALLOC(h, GF_FileHandle);
 		if (h) {
@@ -497,19 +562,17 @@ static void gf_register_file_handle(char *filename, FILE *ptr, Bool is_temp_file
 			}
 			gf_list_add(gpac_open_files, h);
 		}
+		gf_mx_v(logs_mx);
 	}
 	gpac_file_handles++;
 }
-
-#include <gpac/thread.h>
-extern GF_Mutex *logs_mx;
 
 static Bool gf_unregister_file_handle(FILE *ptr)
 {
 	u32 i, count;
 	Bool res = GF_FALSE;
-	assert(gpac_file_handles);
-	gpac_file_handles--;
+	if (gpac_file_handles)
+		gpac_file_handles--;
 
 	if (!gpac_open_files)
 		return GF_FALSE;
@@ -671,7 +734,7 @@ GF_Err gf_enum_directory(const char *dir, Bool enum_directory, gf_enum_dir_item 
 	struct stat st;
 #endif
 
-	if (!dir || !enum_dir_fct) return GF_BAD_PARAM;
+	if (!dir || !strlen(dir) || !enum_dir_fct) return GF_BAD_PARAM;
 
 	if (filter && (!strcmp(filter, "*") || !filter[0])) filter=NULL;
 
@@ -756,8 +819,16 @@ GF_Err gf_enum_directory(const char *dir, Bool enum_directory, gf_enum_dir_item 
 	}
 
 #else
-	strcpy(path, dir);
-	if (path[strlen(path)-1] != '/') strcat(path, "/");
+	size_t dir_len = strlen(dir);
+	if (dir_len < GF_ARRAY_LENGTH(path)) {
+		strcpy(path, dir);
+	}
+	else {
+		memcpy(path, dir, GF_ARRAY_LENGTH(path));
+		path[ GF_ARRAY_LENGTH(path) - 1] = 0;
+	}
+	size_t path_len = strlen(path);
+	if (path_len && path[path_len-1] != '/') strcat(path, "/");
 #endif
 
 #ifdef WIN32
@@ -765,9 +836,10 @@ GF_Err gf_enum_directory(const char *dir, Bool enum_directory, gf_enum_dir_item 
 	if (SearchH == INVALID_HANDLE_VALUE) return GF_IO_ERR;
 
 #if defined (_WIN32_WCE)
-	_path[strlen(_path)-1] = 0;
+	_path[strlen(_path) ? strlen(_path)-1:0] = 0;
 #else
-	path[wcslen(path)-1] = 0;
+	size_t path_len = wcslen(path);
+	path[ path_len ? path_len-1 : 0] = 0;
 #endif
 
 	while (SearchH != INVALID_HANDLE_VALUE) {
@@ -906,6 +978,7 @@ GF_Err gf_enum_directory(const char *dir, Bool enum_directory, gf_enum_dir_item 
 		}
 #endif
 
+		Bool done = GF_FALSE;
 #ifdef WIN32
 		mbs_file = gf_wcs_to_utf8(file);
 		mbs_item_path = gf_wcs_to_utf8(item_path);
@@ -924,13 +997,14 @@ GF_Err gf_enum_directory(const char *dir, Bool enum_directory, gf_enum_dir_item 
 #else
 		if (enum_dir_fct(cbck, file, item_path, &file_info)) {
 #endif
-			break;
+			done = GF_TRUE;
 		}
 
 #ifdef WIN32
 		gf_free(mbs_file);
 		gf_free(mbs_item_path);
 #endif
+		if (done) break;
 
 next:
 #ifdef WIN32
@@ -966,14 +1040,18 @@ struct __gf_file_io
 	s64 (*tell)(GF_FileIO *fileio);
 	Bool (*eof)(GF_FileIO *fileio);
 	int (*printf)(GF_FileIO *gfio, const char *format, va_list args);
+	char *(*gets)(GF_FileIO *gfio, char *ptr, u32 size);
 
 	char *url;
 	char *res_url;
 	void *udta;
 
+	u32 creation_time;
 	u64 bytes_done, file_size_plus_one;
-	Bool cache_complete, main_th;
+	Bool main_th;
+	GF_FileIOCacheState cache_state;
 	u32 bytes_per_sec;
+	u32 write_state;
 
 	u32 printf_alloc;
 	u8* printf_buf;
@@ -991,28 +1069,88 @@ Bool gf_fileio_check(FILE *fp)
 	return GF_FALSE;
 }
 
+GF_EXPORT
+GF_FileIOWriteState gf_fileio_write_ready(FILE *fp)
+{
+	GF_FileIO *fio = (GF_FileIO *)fp;
+	if ((fp==stdin) || (fp==stderr) || (fp==stdout))
+		return GF_FIO_WRITE_READY;
+
+	//GFIO, check state
+	if (fio && !fio->_reserved_null && (fio->__this==fio)) {
+		return fio->write_state;
+	}
+	//sync stdio
+	return GF_FIO_WRITE_READY;
+}
+
+u32 gf_fileio_get_write_rate(FILE *fp)
+{
+	GF_FileIO *fio = (GF_FileIO *)fp;
+	if ((fp==stdin) || (fp==stderr) || (fp==stdout))
+		return 0;
+
+	if (fio && !fio->_reserved_null && (fio->__this==fio)) {
+		return fio->bytes_per_sec;
+	}
+	//sync stdio
+	return 0;
+}
+
 typedef struct
 {
 	u8 *data;
 	u32 size;
 	u32 pos;
+	u32 url_crc;
+	u32 nb_ref;
 } GF_FileIOBlob;
 
 static GF_FileIO *gfio_blob_open(GF_FileIO *fileio_ref, const char *url, const char *mode, GF_Err *out_error)
 {
 	GF_FileIOBlob *blob = gf_fileio_get_udta(fileio_ref);
-	if (!url) {
+	if (!strcmp(mode, "close") || !strcmp(mode, "unref")) {
+		if (blob->nb_ref) blob->nb_ref--;
+		blob->pos = 0;
+		if (blob->nb_ref)
+			return NULL;
+
 		gf_free(blob);
 		gf_fileio_del(fileio_ref);
+		return NULL;
 	}
-	return NULL;
+	if (!strcmp(mode, "ref")) {
+		blob->nb_ref++;
+		*out_error = GF_OK;
+		return NULL;
+	}
+	if (!strcmp(mode, "url")) {
+		*out_error = GF_BAD_PARAM;
+		return NULL;
+	}
+	if (!strcmp(mode, "probe")) {
+		u32 crc = gf_crc_32(url, (u32) strlen(url) );
+		*out_error = (crc==blob->url_crc) ? GF_OK : GF_URL_ERROR;
+		return NULL;
+	}
+	if (mode[0]!='r') {
+		*out_error = GF_BAD_PARAM;
+		return NULL;
+	}
+	blob->nb_ref++;
+	if (blob->nb_ref>2) {
+		*out_error = GF_BAD_PARAM;
+		return NULL;
+	}
+	*out_error = GF_OK;
+	return fileio_ref;
 }
 
 static GF_Err gfio_blob_seek(GF_FileIO *fileio, u64 offset, s32 whence)
 {
 	GF_FileIOBlob *blob = gf_fileio_get_udta(fileio);
 	if (whence==SEEK_END) blob->pos = blob->size;
-	else if (whence==SEEK_SET) blob->pos = 0;
+	else if (whence==SEEK_SET) blob->pos = (u32) offset;
 	else {
 		if (blob->pos + offset > blob->size) return GF_BAD_PARAM;
 		blob->pos += (u32) offset;
@@ -1041,6 +1179,27 @@ static Bool gfio_blob_eof(GF_FileIO *fileio)
 	if (blob->pos==blob->size) return GF_TRUE;
 	return GF_FALSE;
 }
+
+static char *gfio_blob_gets(GF_FileIO *fileio, char *ptr, u32 size)
+{
+	GF_FileIOBlob *blob = gf_fileio_get_udta(fileio);
+	char *buf = blob->data + blob->pos;
+	u32 len = blob->size - blob->pos;
+	if (!len) return NULL;
+
+	char *next = memchr(buf, '\n', len);
+	if (next) {
+		len = (u32) (next - buf);
+		if (len + blob->pos<blob->size) len++;
+	}
+	if (len + 1 > size) len = size - 1;
+	memcpy(ptr, blob->data+blob->pos, len);
+	blob->pos += len;
+	ptr[len] = 0;
+	return ptr;
+}
+
+GF_List *allocated_gfios = NULL;
 
 GF_EXPORT
 GF_FileIO *gf_fileio_new(char *url, void *udta,
@@ -1073,9 +1232,18 @@ GF_FileIO *gf_fileio_new(char *url, void *udta,
 	if (url)
 		tmp->res_url = gf_strdup(url);
 
-	sprintf(szURL, "gfio://%p", tmp);
+	//add clock as cookie to avoid creating twice th same gfio url in case the above malloc returns
+	//the same adress as a previously allocated gfio
+	tmp->creation_time = gf_sys_clock();
+	sprintf(szURL, "gfio://%p&%u", tmp, tmp->creation_time);
 	tmp->url = gf_strdup(szURL);
 	tmp->__this = tmp;
+	//track all allocated gfios so that we don't attempt accessing a freed one !
+	gf_mx_p(logs_mx);
+	if (!allocated_gfios) allocated_gfios = gf_list_new();
+	gf_list_add(allocated_gfios, tmp);
+	gf_mx_v(logs_mx);
+
 	return tmp;
 }
 
@@ -1095,10 +1263,23 @@ GF_EXPORT
 void gf_fileio_del(GF_FileIO *gfio)
 {
 	if (!gfio) return;
+	gf_mx_p(logs_mx);
+	if (gf_list_del_item(allocated_gfios, gfio)<0) {
+		gf_mx_v(logs_mx);
+		return;
+	}
+	if (!gf_list_count(allocated_gfios)) {
+		gf_list_del(allocated_gfios);
+		allocated_gfios = NULL;
+	}
+	gf_mx_v(logs_mx);
+
 	if (gfio->url) gf_free(gfio->url);
 	if (gfio->res_url) gf_free(gfio->res_url);
 	if (gfio->printf_buf) gf_free(gfio->printf_buf);
 	gf_free(gfio);
+
+
 }
 
 GF_EXPORT
@@ -1173,16 +1354,24 @@ GF_EXPORT
 GF_FileIO *gf_fileio_from_url(const char *url)
 {
 	char szURL[100];
+	u32 cookie=0;
 	GF_FileIO *ptr=NULL;
 	if (!url) return NULL;
 	if (strncmp(url, "gfio://", 7)) return NULL;
 
-	sscanf(url, "gfio://%p", &ptr);
-	sprintf(szURL, "gfio://%p", ptr);
+	sscanf(url, "gfio://%p&%u", &ptr, &cookie);
+	sprintf(szURL, "gfio://%p&%u", ptr, cookie);
 	if (strcmp(url, szURL))
 		return NULL;
 
-	if (ptr && ptr->url && !strcmp(ptr->url, url) ) {
+	gf_mx_p(logs_mx);
+	if (gf_list_find(allocated_gfios, ptr)<0) {
+		gf_mx_v(logs_mx);
+		return NULL;
+	}
+	gf_mx_v(logs_mx);
+
+	if (ptr && ptr->url && !strcmp(ptr->url, url) && (ptr->creation_time==cookie) ) {
 		return ptr;
 	}
 	return NULL;
@@ -1197,7 +1386,7 @@ const char * gf_fileio_translate_url(const char *url)
 
 Bool gf_fileio_eof(GF_FileIO *fileio)
 {
-	if (!fileio || !fileio->tell) return GF_TRUE;
+	if (!fileio || !fileio->eof) return GF_TRUE;
 	return fileio->eof(fileio);
 }
 
@@ -1219,25 +1408,31 @@ const char *gf_fileio_factory(GF_FileIO *gfio, const char *new_res_url)
 }
 
 GF_EXPORT
-void gf_fileio_set_stats(GF_FileIO *gfio, u64 bytes_done, u64 file_size, Bool cache_complete, u32 bytes_per_sec)
+void gf_fileio_set_stats(GF_FileIO *gfio, u64 bytes_done, u64 file_size, GF_FileIOCacheState cache_state, u32 bytes_per_sec)
 {
 	if (!gfio) return;
 	gfio->bytes_done = bytes_done;
 	gfio->file_size_plus_one = file_size ? (1 + file_size) : 0;
-	gfio->cache_complete = cache_complete;
+	gfio->cache_state = cache_state;
 	gfio->bytes_per_sec = bytes_per_sec;
 }
 
+GF_EXPORT
+void gf_fileio_set_write_state(GF_FileIO *gfio, GF_FileIOWriteState write_state)
+{
+	if (!gfio) return;
+	gfio->write_state = write_state;
+}
 
 GF_EXPORT
-Bool gf_fileio_get_stats(GF_FileIO *gfio, u64 *bytes_done, u64 *file_size, Bool *cache_complete, u32 *bytes_per_sec)
+Bool gf_fileio_get_stats(GF_FileIO *gfio, u64 *bytes_done, u64 *file_size, GF_FileIOCacheState *cache_state, u32 *bytes_per_sec)
 {
 	if (!gf_fileio_check((FILE *)gfio))
 		return GF_FALSE;
 
 	if (bytes_done) *bytes_done = gfio->bytes_done;
 	if (file_size) *file_size = gfio->file_size_plus_one ? gfio->file_size_plus_one-1 : 0;
-	if (cache_complete) *cache_complete = gfio->cache_complete;
+	if (cache_state) *cache_state = gfio->cache_state;
 	if (bytes_per_sec) *bytes_per_sec = gfio->bytes_per_sec;
 	return GF_TRUE;
 }
@@ -1257,6 +1452,7 @@ Bool gf_fileio_is_main_thread(const char *url)
 	if (!gfio) return GF_FALSE;
 	return gfio->main_th;
 }
+
 
 
 GF_EXPORT
@@ -1330,26 +1526,69 @@ static GF_FileIO *gf_fileio_from_blob(const char *file_name)
 	GF_FileIOBlob *gfio_blob;
 	GF_Err e = gf_blob_get(file_name, &blob_data, &blob_size, &flags);
 	if (e || !blob_data) return NULL;
-    gf_blob_release(file_name);
-    
-    if (flags) {
-        GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[Core] Attempt at creating a GFIO object on blob corrupted or in transfer, not supported !"));
-        return NULL;
-    }
-    
+	gf_blob_release(file_name);
+
+	if (flags) {
+		GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[Core] Attempt at creating a GFIO object on blob corrupted or in transfer, not supported !"));
+		return NULL;
+	}
+
 	GF_SAFEALLOC(gfio_blob, GF_FileIOBlob);
 	if (!gfio_blob) return NULL;
 	gfio_blob->data = blob_data;
 	gfio_blob->size = blob_size;
-	return gf_fileio_new((char *) file_name, gfio_blob, gfio_blob_open, gfio_blob_seek, gfio_blob_read, NULL, gfio_blob_tell, gfio_blob_eof, NULL);
+	GF_FileIO *res = gf_fileio_new((char *) file_name, gfio_blob, gfio_blob_open, gfio_blob_seek, gfio_blob_read, NULL, gfio_blob_tell, gfio_blob_eof, NULL);
+	if (!res) {
+		gf_free(gfio_blob);
+		return NULL;
+	}
+	res->gets = gfio_blob_gets;
+	if (file_name)
+		gfio_blob->url_crc = gf_crc_32(file_name, (u32) strlen(file_name) );
+	return res;
 }
+
+GF_EXPORT
+GF_FileIO *gf_fileio_from_mem(const char *URL, const u8 *data, u32 size)
+{
+	GF_FileIOBlob *gfio_blob;
+	GF_SAFEALLOC(gfio_blob, GF_FileIOBlob);
+	if (!gfio_blob) return NULL;
+	gfio_blob->data = (u8 *) data;
+	gfio_blob->size = size;
+	GF_FileIO *res = gf_fileio_new((char *) URL, gfio_blob, gfio_blob_open, gfio_blob_seek, gfio_blob_read, NULL, gfio_blob_tell, gfio_blob_eof, NULL);
+	if (!res)  {
+		gf_free(gfio_blob);
+		return NULL;
+	}
+	res->gets = gfio_blob_gets;
+	if (URL)
+		gfio_blob->url_crc = gf_crc_32(URL, (u32) strlen(URL) );
+	gf_fopen(gf_fileio_url(res), "r");
+	return res;
+}
+
+
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+static u32 mainloop_th_id = 0;
+void gf_set_mainloop_thread(u32 thread_id)
+{
+	mainloop_th_id = thread_id;
+}
+#endif
+
 GF_EXPORT
 FILE *gf_fopen_ex(const char *file_name, const char *parent_name, const char *mode, Bool no_warn)
 {
 	FILE *res = NULL;
 	u32 gfio_type = 0;
+	Bool is_mkdir = GF_FALSE;
 
-	if (!file_name) return NULL;
+	if (!file_name || !mode) return NULL;
+	if (!strcmp(mode, "mkdir")) {
+		is_mkdir = GF_TRUE;
+		mode = "w";
+	}
 
 	if (!strncmp(file_name, "gmem://", 7)) {
 		GF_FileIO *new_gfio;
@@ -1383,7 +1622,7 @@ FILE *gf_fopen_ex(const char *file_name, const char *parent_name, const char *mo
 			GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("FileIO %s is not read-enabled and open mode %s was requested\n", file_name, mode));
 			return NULL;
 		}
-		if ((strchr(mode, 'w') || strchr(mode, 'a'))  && !gf_fileio_write_mode(gfio_ref)) {
+		if (strpbrk(mode, "wa") && !gf_fileio_write_mode(gfio_ref)) {
 			GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("FileIO %s is not write-enabled and open mode %s was requested\n", file_name, mode));
 			return NULL;
 		}
@@ -1426,7 +1665,14 @@ FILE *gf_fopen_ex(const char *file_name, const char *parent_name, const char *mo
 			sep = n_sep;
 		}
 		gf_free(fname);
+		if (is_mkdir) return NULL;
 	}
+
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+	if (mainloop_th_id && strchr(mode, 'r') && (gf_th_id() != mainloop_th_id)) {
+		GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[Core] Opening file in read mode outside of main loop will likely deadlock - please report to GPAC devs\n"));
+	}
+#endif
 
 #if defined(WIN32)
 	wchar_t *wname;
@@ -1457,16 +1703,38 @@ FILE *gf_fopen_ex(const char *file_name, const char *parent_name, const char *mo
 
 		GF_LOG(GF_LOG_DEBUG, GF_LOG_CORE, ("[Core] file \"%s\" opened in mode \"%s\" - %d file handles\n", file_name, mode, gpac_file_handles));
 	} else if (!no_warn) {
-		if (strchr(mode, 'w') || strchr(mode, 'a')) {
+		if (strpbrk(mode, "wa")) {
 #if defined(WIN32)
 			u32 err = GetLastError();
-			GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[Core] system failure for file opening of \"%s\" in mode \"%s\": 0x%08x\n", file_name, mode, err));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[Core] system failure for file opening of \"%s\" in mode \"%s\": 0x%08x (%u opened)\n", file_name, mode, err, gpac_file_handles));
 #else
-			GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[Core] system failure for file opening of \"%s\" in mode \"%s\": %d\n", file_name, mode, errno));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("[Core] system failure for file opening of \"%s\" in mode \"%s\": %d (%u opened)\n", file_name, mode, errno, gpac_file_handles));
 #endif
 		}
 	}
 	return res;
+}
+
+
+GF_EXPORT
+s32 gf_fd_open(const char *file_name, u32 oflags, u32 uflags)
+{
+	if (!file_name) return -1;
+
+#if defined(WIN32)
+	wchar_t *wname = gf_utf8_to_wcs(file_name);
+	if (!wname) return -1;
+	int res = _wopen(wname, oflags, uflags);
+	gf_free(wname);
+	return res;
+#elif defined(GPAC_CONFIG_LINUX) && !defined(GPAC_CONFIG_ANDROID)
+	return open(file_name, oflags, uflags);
+#elif (defined(GPAC_CONFIG_FREEBSD) || defined(GPAC_CONFIG_DARWIN))
+	return open(file_name, oflags, uflags);
+#else
+	return open(file_name, oflags, uflags);
+#endif
+	return -1;
 }
 
 GF_EXPORT
@@ -1550,8 +1818,11 @@ char *gf_fgets(char *ptr, size_t size, FILE *stream)
 {
 	if (gf_fileio_check(stream)) {
 		GF_FileIO *fio = (GF_FileIO *)stream;
+		if (fio->gets)
+			return fio->gets(fio, ptr, (u32) size);
+
 		u32 i, read, nb_read=0;
-		for (i=0; i<size; i++) {
+		for (i=0; i<size-1; i++) {
 			u8 buf[1];
 			read = (u32) gf_fileio_read(fio, buf, 1);
 			if (!read) break;
@@ -1560,6 +1831,7 @@ char *gf_fgets(char *ptr, size_t size, FILE *stream)
 			nb_read++;
 			if (buf[0]=='\n') break;
 		}
+		ptr[nb_read]=0;
 		if (!nb_read) return NULL;
 		return ptr;
 	}
@@ -1646,6 +1918,8 @@ int gf_fflush(FILE *stream)
 GF_EXPORT
 int gf_feof(FILE *stream)
 {
+	if (!stream) return 1;
+
 	if (gf_fileio_check(stream)) {
 		return gf_fileio_eof((GF_FileIO *)stream) ? 1 : 0;
 	}
@@ -1680,6 +1954,31 @@ u64 gf_fsize(FILE *fp)
 	gf_fseek(fp, 0, SEEK_SET);
 	return size;
 }
+
+
+GF_EXPORT
+u64 gf_fd_fsize(int fd)
+{
+	u64 size=0;
+#ifdef GPAC_HAS_FD
+
+	if (fd >= 0) {
+
+#if defined(WIN32)
+		struct _stat64  sb;
+		_fstat64(fd, &sb);
+#else
+		struct stat sb;
+		fstat(fd, &sb);
+#endif
+		size = (u64) sb.st_size;
+	}
+
+#endif
+	return size;
+}
+
+
 
 /**
   * Returns a pointer to the start of a filepath basename
@@ -1724,11 +2023,18 @@ char* gf_file_ext_start(const char* filename)
 
 	if (basename) {
 		char *ext = strrchr(basename, '.');
-		if (ext && !strcmp(ext, ".gz")) {
+		if (!ext) return NULL;
+		if (!strcmp(ext, ".gz")) {
 			ext[0] = 0;
 			char *ext2 = strrchr(basename, '.');
 			ext[0] = '.';
 			if (ext2) return ext2;
+		}
+		//consider that if we have a space after a dot and before any common separator, we have no file extension
+		u32 i;
+		for (i=1; ext[i] ; i++) {
+			if ((ext[i]==':') || (ext[i]=='@') || (ext[i]=='#') || (ext[i]=='?')) break;
+			if (ext[i]==' ') return NULL;
 		}
 		return ext;
 	}
@@ -1828,4 +2134,3 @@ char* gf_url_colon_suffix(const char *path, char assign_sep)
 	}
 	return sep;
 }
-

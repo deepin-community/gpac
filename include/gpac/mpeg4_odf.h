@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2025
  *					All rights reserved
  *
  *  This file is part of GPAC / MPEG-4 Object Descriptor sub-project
@@ -347,7 +347,7 @@ enum
 	IPMP_CP_CM = 3,
 	/*control point in BIFS tree (???)*/
 	IPMP_CP_BIFS = 4
-	               /*the rest is reserved or forbidden(0xFF)*/
+	                     /*the rest is reserved or forbidden(0xFF)*/
 };
 
 /*! IPMPX base classe*/
@@ -855,7 +855,7 @@ typedef struct {
 } GF_ContentCreatorInfo;
 
 /*! Content Creator Name GF_Descriptor
-\note The desctructor will delete all the items in the list
+\note The destructor will delete all the items in the list
 (GF_ContentCreatorInfo items) */
 typedef struct {
 	BASE_DESCRIPTOR
@@ -1052,7 +1052,7 @@ typedef struct
 } GF_VVCConfig;
 
 
-/*! used for storing AV1 OBUs*/
+/*! used for storing AV1 or IAMF OBUs*/
 typedef struct
 {
 	u64 obu_length;
@@ -1122,6 +1122,14 @@ typedef struct {
 	//internal, force dvhe or dvh1 signaling
 	u8 force_dv;
 } GF_DOVIDecoderConfigurationRecord;
+
+/*! AVS3 Video av3C */
+typedef struct {
+	u8 configurationVersion;
+	u16 sequence_header_length;
+	u8* sequence_header; // 8*sequence_header_length bits
+	u8 library_dependency_idc; // 6 bits reserved at '1' + 2 bits
+} GF_AVS3VConfig;
 
 /*! Media Segment Descriptor used for Media Control Extensions*/
 typedef struct
@@ -1330,7 +1338,7 @@ GF_ESD *gf_odf_desc_esd_new(u32 sl_predefined);
 /*! special function for authoring - convert DSI to BIFSConfig
 \param dsi BIFS decoder specific info
 \param codecid BIFS codecid/object type indication
-\return decoded BIFS Config descriptor - It is the caller responsability of freeing it
+\return decoded BIFS Config descriptor - It is the caller responsibility of freeing it
  */
 GF_BIFSConfig *gf_odf_get_bifs_config(GF_DefaultDescriptor *dsi, u32 codecid);
 /*! special function for authoring - convert DSI to LASERConfig
@@ -1349,7 +1357,7 @@ GF_Err gf_odf_get_laser_config(GF_DefaultDescriptor *dsi, GF_LASERConfig *cfg);
 GF_Err gf_odf_get_text_config(u8 *data, u32 data_len, u32 codecid, GF_TextConfig *cfg);
 /*! converts UIConfig to dsi - does not destroy input descr but does create output one
 \param cfg the UI config object
-\param out_dsi the decoder specific info created. It is the caller responsability of freeing it
+\param out_dsi the decoder specific info created. It is the caller responsibility of freeing it
 \return error if any
  */
 GF_Err gf_odf_encode_ui_config(GF_UIConfig *cfg, GF_DefaultDescriptor **out_dsi);
@@ -1368,7 +1376,7 @@ void gf_odf_avc_cfg_del(GF_AVCConfig *cfg);
 GF_AVCConfig *gf_odf_avc_cfg_read(u8 *dsi, u32 dsi_size);
 /*! writes GF_AVCConfig
 \param cfg the AVC config to encode
-\param outData encoded dsi buffer - it is the caller responsability to free this
+\param outData encoded dsi buffer - it is the caller responsibility to free this
 \param outSize  encoded dsi buffer size
 \return error if any
  */
@@ -1413,7 +1421,7 @@ GF_Err gf_odf_hevc_cfg_write_bs(GF_HEVCConfig *cfg, GF_BitStream *bs);
 
 /*! writes GF_HEVCConfig as MPEG-4 DSI
 \param cfg the HEVC config to encode
-\param outData encoded dsi buffer - it is the caller responsability to free this
+\param outData encoded dsi buffer - it is the caller responsibility to free this
 \param outSize  encoded dsi buffer size
 \return error if any
  */
@@ -1452,7 +1460,7 @@ GF_Err gf_odf_vvc_cfg_write_bs(GF_VVCConfig *cfg, GF_BitStream *bs);
 
 /*! writes GF_VVCConfig as MPEG-4 DSI
 \param cfg the VVC config to encode
-\param outData encoded dsi buffer - it is the caller responsability to free this
+\param outData encoded dsi buffer - it is the caller responsibility to free this
 \param outSize  encoded dsi buffer size
 \return error if any
  */
@@ -1481,7 +1489,7 @@ void gf_odf_av1_cfg_del(GF_AV1Config *cfg);
 
 /*! writes AV1 config to buffer
 \param cfg the AV1 config to write
-\param outData set to an allocated encoded buffer - it is the caller responsability to free this
+\param outData set to an allocated encoded buffer - it is the caller responsibility to free this
 \param outSize set to the encoded dsi buffer size
 \return error if any
 */
@@ -1531,7 +1539,7 @@ void gf_odf_vp_cfg_del(GF_VPConfig *cfg);
 GF_Err gf_odf_vp_cfg_write_bs(GF_VPConfig *cfg, GF_BitStream *bs, Bool is_v0);
 /*! writes VPx config to buffer
 \param cfg the VPx config to write
-\param outData set to an allocated encoded buffer - it is the caller responsability to free this
+\param outData set to an allocated encoded buffer - it is the caller responsibility to free this
 \param outSize set to the encoded buffer size
 \param is_v0 if GF_TRUE, this is a version 0 config
 \return error if any
@@ -1564,6 +1572,38 @@ GF_Err gf_odf_dovi_cfg_write_bs(GF_DOVIDecoderConfigurationRecord *cfg, GF_BitSt
 /*! destroys a DolbyVision config
 \param cfg the DolbyVision config to destroy*/
 void gf_odf_dovi_cfg_del(GF_DOVIDecoderConfigurationRecord *cfg);
+
+/*! creates a AVS3 Video descriptor
+\return a newly allocated descriptor
+*/
+GF_AVS3VConfig *gf_odf_avs3v_cfg_new();
+/*! AVS3 Video config constructor
+\param cfg the AVS3 Video config to destroy*/
+void gf_odf_avs3v_cfg_del(GF_AVS3VConfig *cfg);
+/*! writes AVS3 Video config to bitstream
+\param cfg the AVS3 Video config to write
+\param bs bitstream containing the encoded AVS3 Video decoder specific info
+\return error code if any
+*/
+GF_Err gf_odf_avs3v_cfg_write_bs(GF_AVS3VConfig *cfg, GF_BitStream *bs);
+/*! writes AVS3 Video config to buffer
+\param cfg the AVS3 Video config to write
+\param outData set to an allocated encoded buffer - it is the caller responsibility to free this
+\param outSize set to the encoded buffer size
+\return error if any
+*/
+GF_Err gf_odf_avs3v_cfg_write(GF_AVS3VConfig *cfg, u8 **outData, u32 *outSize);
+/*! gets AVS3 Video config from bitstream
+\param bs bitstream containing the encoded AV1 decoder specific info
+\return the decoded AVS3 Video config
+*/
+GF_AVS3VConfig *gf_odf_avs3v_cfg_read_bs(GF_BitStream *bs);
+/*! gets AVS3 Video config from buffer
+\param dsi encoded AVS3 Video config
+\param dsi_size size of encoded AVS3 Video config
+\return the decoded AVS3 Video config
+*/
+GF_AVS3VConfig *gf_odf_avs3v_cfg_read(u8 *dsi, u32 dsi_size);
 
 
 /*! AC-3 and E-AC3 stream info */
@@ -1640,7 +1680,7 @@ GF_Err gf_odf_ac3_cfg_write(GF_AC3Config *cfg, u8 **data, u32 *size);
 \param cfg the AC3/EC3 config to fill
 \return Error if any
 */
-GF_Err gf_odf_ac3_config_parse(u8 *dsi, u32 dsi_len, Bool is_ec3, GF_AC3Config *cfg);
+GF_Err gf_odf_ac3_cfg_parse(u8 *dsi, u32 dsi_len, Bool is_ec3, GF_AC3Config *cfg);
 
 /*! parses an AC3/EC3 sample description from bitstream
 \param bs the bitstream object
@@ -1648,8 +1688,205 @@ GF_Err gf_odf_ac3_config_parse(u8 *dsi, u32 dsi_len, Bool is_ec3, GF_AC3Config *
 \param cfg the AC3/EC3 config to fill
 \return Error if any
 */
-GF_Err gf_odf_ac3_config_parse_bs(GF_BitStream *bs, Bool is_ec3, GF_AC3Config *cfg);
+GF_Err gf_odf_ac3_cfg_parse_bs(GF_BitStream *bs, Bool is_ec3, GF_AC3Config *cfg);
 
+typedef struct {
+    u8 b_4_back_channels_present;
+    u8 b_centre_present;
+    u8 top_channels_present;
+    u8 dsi_sf_multiplier;
+    u8 b_substream_bitrate_indicator;
+    u8 substream_bitrate_indicator;
+    u32 dsi_substream_channel_mask;
+    u8 b_ajoc;
+    u8 b_static_dmx;
+    u8 n_dmx_objects_minus1;
+    u8 n_umx_objects_minus1;
+    u8 b_substream_contains_bed_objects;
+    u8 b_substream_contains_dynamic_objects;
+    u8 b_substream_contains_ISF_objects;
+
+	// auxiliary information, used to parse the frame
+	u8 b_lfe;
+	u32 ch_mode;
+} GF_AC4SubStream;
+
+typedef struct {
+	u8 b_substreams_present;
+	u8 b_hsf_ext;
+	u8 b_channel_coded;
+	u8 b_content_type;
+	u8 content_classifier;
+	u8 b_language_indicator;
+	u8 n_language_tag_bytes;
+	u8 language_tag_bytes[64]; // n_language_tag_bytes is 6 bits
+	u8 dolby_atmos_indicator;
+	u8 n_lf_substreams;
+	GF_List *substreams; // GF_AC4SubStream
+} GF_AC4SubStreamGroupV1;
+
+typedef struct {
+    u8 bit_rate_mode;
+    u32 bit_rate;
+    u32 bit_rate_precision;
+} GF_AC4BitrateDsi;
+
+typedef struct {
+    u16 name_len;
+    u8 presentation_name[256]; // restrict to 256 char
+    u8 n_targets;
+    u8 target_md_compat[32];
+    u8 target_device_category[32];
+} GF_AC4AlternativeInfo;
+
+typedef struct {
+	u8 presentation_version;
+	u8 presentation_config;
+	u8 mdcompat;
+	u8 b_presentation_id;
+	u8 presentation_id;
+	u8 dsi_frame_rate_multiply_info;
+	u8 dsi_frame_rate_fraction_info;
+	u8 presentation_emdf_version;
+	u16 presentation_key_id;
+	u8 b_presentation_channel_coded;
+	u8 dsi_presentation_ch_mode;
+	u8 pres_b_4_back_channels_present;
+	u8 pres_top_channel_pairs;
+	u32 presentation_channel_mask_v1;
+	u8 b_presentation_core_differs;
+	u8 b_presentation_core_channel_coded;
+	u8 dsi_presentation_channel_mode_core;
+	u8 b_presentation_filter;
+	u8 b_enable_presentation;
+	u8 n_filter_bytes;
+	u8 b_multi_pid;
+	u8 n_skip_bytes;
+	u8 b_pre_virtualized;
+	u8 b_add_emdf_substreams;
+	u8 n_add_emdf_substreams;
+	u8 substream_emdf_version[128];
+	u16 substream_key_id[128];
+	u8 b_presentation_bitrate_info;
+	GF_AC4BitrateDsi ac4_bitrate_dsi;
+	u8 b_alternative;
+	GF_AC4AlternativeInfo alternative_info;
+	u8 de_indicator;
+	u8 dolby_atmos_indicator;
+	u8 b_extended_presentation_id;
+	u16 extended_presentation_id;
+	u8 n_substream_groups;
+	GF_List *substream_groups; // GF_AC4SubStreamGroupV1
+
+	// auxiliary information, not exist in DSI
+	GF_List *substream_group_indexs;
+} GF_AC4PresentationV1;
+
+/*! AC-4 stream info */
+typedef struct __ac4_stream
+{
+	u8 ac4_dsi_version;
+	u8 bitstream_version;
+	u8 fs_index;
+	u8 frame_rate_index;
+	u8 b_iframe_global;
+	u8 b_program_id;
+	u16 short_program_id;
+	u8 b_uuid;
+	u8 program_uuid[16];
+	GF_AC4BitrateDsi ac4_bitrate_dsi;
+	u16 n_presentations;
+	GF_List *presentations; // GF_AC4PresentationV1
+} GF_AC4StreamInfo;
+
+/*! AC4 config record  - see dolby specs ETSI TS 103 190 */
+/*  please use gf_odf_ac4_cfg_deep_copy(), gf_odf_ac4_cfg_clean_list() to copy and destroy GF_AC4Config*/
+typedef struct __ac4_config
+{
+	/*! streams info */
+	GF_AC4StreamInfo stream;
+	/*! sample rate */
+	u32 sample_rate;
+	/*! size of the complete frame*/
+	u32 frame_size;
+	/*  channel count */
+	u32 channel_count;
+	/*  sample_delta [units of media time scale] */
+	u32 sample_duration;
+	/*  media time scale [1/sec]*/
+	u32 media_time_scale;
+	/*  sync frame header size */
+	u32 header_size;
+	/*  sync frame CRC size */
+	u32 crc_size;
+	/*  frame toc size */
+	u32 toc_size;
+} GF_AC4Config;
+
+#define GF_AC4_DESCMODE_PARSE 0
+#define GF_AC4_DESCMODE_WRITE 1
+#define GF_AC4_DESCMODE_GETSIZE 2
+
+/*! parse/write/get the size of Dolby AC4 DSI V1
+\param dsi the GF_AC4StreamInfo to parse/write/get the size
+\param bs the bitstream object in which to write the config
+\param size the address of the size
+\param desc_mode the mode should be GF_AC4_DESCMODE_PARSE/GF_AC4_DESCMODE_WRITE/GF_AC4_DESCMODE_GETSIZE
+\return error if any
+*/
+GF_Err gf_odf_ac4_cfg_dsi_v1(GF_AC4StreamInfo *dsi, GF_BitStream *bs, u64 *size, u8 desc_mode);
+
+/*! writes Dolby AC4 config to buffer
+\param cfg the Dolby AC4 config to write
+\param bs the bitstream object in which to write the config
+\return error if any
+*/
+GF_Err gf_odf_ac4_cfg_write_bs(GF_AC4Config *cfg, GF_BitStream *bs);
+
+/*! writes Dolby AC4 config to buffer
+\param cfg the Dolby AC4 config to write
+\param data set to created output buffer, must be freed by caller
+\param size set to created output buffer size
+\return error if any
+*/
+GF_Err gf_odf_ac4_cfg_write(GF_AC4Config *cfg, u8 **data, u32 *size);
+
+/*! parses an AC4 sample description
+\param dsi the encoded config
+\param dsi_len the encoded config size
+\param cfg the AC4 config to fill
+\return Error if any
+*/
+GF_Err gf_odf_ac4_cfg_parse(u8 *dsi, u32 dsi_len, GF_AC4Config *cfg);
+
+/*! parses an AC4 sample description from bitstream
+\param bs the bitstream object
+\param cfg the AC4 config to fill
+\return Error if any
+*/
+GF_Err gf_odf_ac4_cfg_parse_bs(GF_BitStream *bs, GF_AC4Config *cfg);
+
+/*! get the size of an AC4 sample description from bitstream
+\param cfg the AC4 config to fill
+\return 0 if any
+*/
+u64 gf_odf_ac4_cfg_size(GF_AC4Config *cfg);
+
+/*! copy the GF_AC4Config
+\param dst the address of AC4 config to fill
+\param src the address of source
+*/
+void gf_odf_ac4_cfg_deep_copy(GF_AC4Config *dst, GF_AC4Config *src);
+
+/*! clean the GF_List data in GF_AC4Config
+\param hdr the address of AC4 config to clean
+*/
+void gf_odf_ac4_cfg_clean_list(GF_AC4Config *hdr);
+
+/*! destroy the GF_AC4Config
+\param cfg the address of AC4 config to destroy
+*/
+void gf_odf_ac4_cfg_del(GF_AC4Config *cfg);
 
 
 /*! Opus decoder config*/
@@ -1707,6 +1944,77 @@ GF_Err gf_odf_opus_cfg_parse(u8 *dsi, u32 dsi_len, GF_OpusConfig *cfg);
 */
 GF_Err gf_odf_opus_cfg_parse_bs(GF_BitStream *bs, GF_OpusConfig *cfg);
 
+/*! Used for storing IAMF OBUs */
+typedef struct
+{
+	/* Size of raw_obu_bytes, including the header and payload.
+	 * This is different from `obu_size` in the IAMF spec Section 3.2,
+	 * which includes only the partial header size and the payload.
+	 */
+	u64 obu_length;
+	int obu_type;  /* IamfObuType */
+	u8* raw_obu_bytes;
+} GF_IamfObu;
+
+/*! Used for storing the IAMF configuration from the `iacb` box */
+typedef struct
+{
+	u8 configurationVersion;
+	u32 configOBUs_size;
+	GF_List *configOBUs;  /* GF_IamfObu */
+} GF_IAConfig;
+
+/*! IAMF config constructor
+\return the created config
+*/
+GF_IAConfig *gf_odf_iamf_cfg_new();
+
+/*! writes IAMF config to buffer
+\param cfg the IAMF config to write
+\param outData set to an allocated encoded buffer - it is the caller responsibility to free this
+\param outSize set to the encoded dsi buffer size
+\return error if any
+*/
+GF_Err gf_odf_iamf_cfg_write(GF_IAConfig *cfg, u8 **outData, u32 *outSize);
+
+/*! Writes the IAMF config to bitstream
+\param cfg the IAMF config to write
+\param bs the bitstream object
+\return error code if any
+*/
+GF_Err gf_odf_iamf_cfg_write_bs(GF_IAConfig *cfg, GF_BitStream *bs);
+
+/*! IAMF config destructor
+\param cfg the IAMF config to destroy
+*/
+void gf_odf_iamf_cfg_del(GF_IAConfig *cfg);
+
+/*! gets GF_IAConfig from MPEG-4 DSI
+\param dsi encoded IAMF decoder specific info
+\param dsi_size encoded IAMF decoder specific info size
+\return the decoded IAMF config
+ */
+GF_IAConfig *gf_odf_iamf_cfg_read(u8 *dsi, u32 dsi_size);
+
+/*! Reads the IAMF config from the bitstream
+ \param bs bitstream containing the encoded IAMF descriptors
+ \return the IAMF config
+ */
+GF_IAConfig *gf_odf_iamf_cfg_read_bs(GF_BitStream *bs);
+
+/*! Reads the IAMF config from the bitstream
+ \param bs bitstream containing the encoded IAMF descriptors
+ \param size size of the encoded structure in the bitstream. A value of 0 means "until the end", equivalent to gf_odf_iamf_cfg_read_bs
+ \return the IAMF config
+ */
+GF_IAConfig *gf_odf_iamf_cfg_read_bs_size(GF_BitStream *bs, u32 size);
+
+/*! Returns the size of the IAMF config
+ \param cfg the IAMF config
+ \return 0 if error, otherwise the IAMF config size
+ */
+u32 gf_odf_iamf_cfg_size(GF_IAConfig *cfg);
+
 /*! destroy the descriptors in a list but not the list
 \param descList descriptor list to destroy
 \return error if any
@@ -1718,7 +2026,7 @@ the raw descriptor MUST be formatted with tag and size field!!!
 a new desc is created and you must delete it when done
 \param raw_desc encoded descriptor to decode
 \param descSize size of descriptor to decode
-\param outDesc output decoded descriptor - it is the caller responsability to free this
+\param outDesc output decoded descriptor - it is the caller responsibility to free this
 \return error if any
 */
 GF_Err gf_odf_desc_read(u8 *raw_desc, u32 descSize, GF_Descriptor **outDesc);
@@ -1727,7 +2035,7 @@ GF_Err gf_odf_desc_read(u8 *raw_desc, u32 descSize, GF_Descriptor **outDesc);
 the desc will be formatted with tag and size field
 the output buffer is allocated and you must delete it when done
 \param desc descriptor to encode
-\param outEncDesc output encoded descriptor - it is the caller responsability to free this
+\param outEncDesc output encoded descriptor - it is the caller responsibility to free this
 \param outSize size of encoded descriptor
 \return error if any
  */
@@ -1748,7 +2056,7 @@ u32 gf_odf_desc_size(GF_Descriptor *desc);
 
 /*! duplicate descriptors
 \param inDesc descriptor to copy
-\param outDesc copied descriptor - it is the caller responsability to free this
+\param outDesc copied descriptor - it is the caller responsibility to free this
 \return error if any
  */
 GF_Err gf_odf_desc_copy(GF_Descriptor *inDesc, GF_Descriptor **outDesc);
@@ -1794,6 +2102,46 @@ GF_Err gf_odf_desc_list_write(GF_List *descList, u8 **outEncList, u32 *outSize);
 \return error if any
  */
 GF_Err gf_odf_desc_list_size(GF_List *descList, u32 *outSize);
+
+/*! DTS audio configuration*/
+typedef struct
+{
+	u32 SamplingFrequency;
+	u32 MaxBitrate;
+	u32 AvgBitrate;
+	u8 SampleDepth;
+	u8 FrameDuration;
+	u8 StreamConstruction;
+	u8 CoreLFEPresent;
+	u8 CoreLayout;
+	u16 CoreSize;
+	u8 StereoDownmix;
+	u8 RepresentationType;
+	u16 ChannelLayout;
+	u8 MultiAssetFlag;
+	u8 LBRDurationMod;
+} GF_DTSConfig;
+
+
+/*! UDTS audio configuration*/
+typedef struct
+{
+	u8 DecoderProfileCode;
+	u8 FrameDurationCode;
+	u8 MaxPayloadCode;
+	u8 NumPresentationsCode;
+	u32 ChannelMask;
+	u8 BaseSamplingFrequencyCode;
+	u8 SampleRateMod;
+	u8 RepresentationType;
+	u8 StreamIndex;
+	u8 ExpansionBoxPresent;
+	u8 IDTagPresent[32];
+	u8 *PresentationIDTagData;
+	u16 PresentationIDTagDataSize;
+	u8 *ExpansionBoxData;
+	u32 ExpansionBoxDataSize;
+} GF_UDTSConfig;
 
 
 //! @cond Doxygen_Suppress

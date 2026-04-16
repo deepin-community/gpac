@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2025
  *					All rights reserved
  *
  *  This file is part of GPAC / BIFS codec sub-project
@@ -523,7 +523,7 @@ GF_Err gf_bifs_dec_field(GF_BifsDecoder * codec, GF_BitStream *bs, GF_Node *node
 
 //	if (codec->LastError) return codec->LastError;
 
-	assert(node);
+	if (!node) return GF_BAD_PARAM;
 //	if (field->fieldType == GF_SG_VRML_UNKNOWN) return GF_NON_COMPLIANT_BITSTREAM;
 
 	if (gf_sg_vrml_is_sf_field(field->fieldType)) {
@@ -920,18 +920,28 @@ GF_Node *gf_bifs_dec_node(GF_BifsDecoder * codec, GF_BitStream *bs, u32 NDT_Tag)
 
 	/*QP 14 is a special quant mode for IndexFace/Line(2D)Set to quantize the
 	coordonate(2D) child, based on the first field parsed
-	we must check the type of the node and notfy the QP*/
+	we must check the type of the node and notify the QP*/
 	switch (node_tag) {
 	case TAG_MPEG4_Coordinate:
 	case TAG_MPEG4_Coordinate2D:
 		gf_bifs_dec_qp14_enter(codec, GF_TRUE);
 	}
 
-	if (gf_bs_read_int(bs, 1)) {
+	codec->tree_depth++;
+	//don't allow too deep trees, will likely result in stack overflow
+#define MAX_TREE_DEPTH	1500
+	if (codec->tree_depth > MAX_TREE_DEPTH) {
+		GF_LOG(GF_LOG_ERROR, GF_LOG_CODING, ("[BIFS] Maximum tree depth (%u) exceeded, cannot decode\n", MAX_TREE_DEPTH));
+		e = GF_NON_COMPLIANT_BITSTREAM;
+	}
+	else if (gf_bs_read_int(bs, 1)) {
 		e = gf_bifs_dec_node_mask(codec, bs, new_node, proto ? GF_TRUE : GF_FALSE);
 	} else {
 		e = gf_bifs_dec_node_list(codec, bs, new_node, proto ? GF_TRUE : GF_FALSE);
 	}
+	codec->tree_depth--;
+#undef MAX_TREE_DEPTH
+
 	if (codec->coord_stored && reset_qp14)
 		gf_bifs_dec_qp14_reset(codec);
 

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2018-2022
+ *			Copyright (c) Telecom ParisTech 2018-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / generic pipe output filter
@@ -27,6 +27,8 @@
 #include <gpac/filters.h>
 #include <gpac/constants.h>
 
+#ifndef GPAC_DISABLE_POUT
+
 #ifdef WIN32
 
 #include <windows.h>
@@ -36,7 +38,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#ifdef GPAC_CONFIG_LINUX
+#if defined(GPAC_CONFIG_LINUX) || defined(GPAC_CONFIG_EMSCRIPTEN)
 #include <sys/types.h>
 #include <sys/stat.h>
 #endif
@@ -54,7 +56,7 @@ typedef struct
 	//options
 	Double start, speed;
 	char *dst, *mime, *ext;
-	Bool dynext, mkp, ka;
+	Bool dynext, mkp, ka, marker, force_close;
 	u32 block_size;
 
 
@@ -90,6 +92,7 @@ static GF_Err pipeout_open_close(GF_PipeOutCtx *ctx, const char *filename, const
 		if (ctx->fd>=0) close(ctx->fd);
 		ctx->fd = -1;
 #endif
+		ctx->force_close = GF_FALSE;
 		return GF_OK;
 	}
 
@@ -210,12 +213,9 @@ static GF_Err pipeout_setup_file(GF_PipeOutCtx *ctx, Bool explicit_overwrite)
 	if (p && p->value.string) {
 		return pipeout_open_close(ctx, p->value.string, NULL, 0, explicit_overwrite);
 	} else if (ctx->dynext) {
-		p = gf_filter_pid_get_property(ctx->pid, GF_PROP_PCK_FILENUM);
-		if (!p) {
-			p = gf_filter_pid_get_property(ctx->pid, GF_PROP_PID_FILE_EXT);
-			if (p && p->value.string) {
-				return pipeout_open_close(ctx, ctx->dst, p->value.string, 0, explicit_overwrite);
-			}
+		p = gf_filter_pid_get_property(ctx->pid, GF_PROP_PID_FILE_EXT);
+		if (p && p->value.string) {
+			return pipeout_open_close(ctx, ctx->dst, p->value.string, 0, explicit_overwrite);
 		}
 	} else {
 		return pipeout_open_close(ctx, ctx->dst, NULL, 0, explicit_overwrite);
@@ -266,6 +266,7 @@ static GF_Err pipeout_initialize(GF_Filter *filter)
 		ext = gf_file_ext_start(ctx->dst);
 		if (ext) ext++;
 	}
+	ctx->force_close = GF_TRUE;
 
 #ifdef WIN32
 	ctx->pipe = INVALID_HANDLE_VALUE;
@@ -300,6 +301,12 @@ static GF_Err pipeout_initialize(GF_Filter *filter)
 static void pipeout_finalize(GF_Filter *filter)
 {
 	GF_PipeOutCtx *ctx = (GF_PipeOutCtx *) gf_filter_get_udta(filter);
+
+	//pipe was not open, do an open/close - this allows signaling broken pipe when we had an error before opening
+	if (ctx->force_close) {
+		pipeout_open_close(ctx, ctx->dst, NULL, 0, GF_FALSE);
+	}
+
 	pipeout_open_close(ctx, NULL, NULL, 0, GF_FALSE);
 
 	if (ctx->szFileName) {
@@ -309,11 +316,35 @@ static void pipeout_finalize(GF_Filter *filter)
 	}
 }
 
+#define PIPE_FLUSH_MARKER	"GPACPIF"
+static void pout_write_marker(GF_PipeOutCtx *ctx)
+{
+	if (ctx->marker) {
+		u32 nb_write;
+#ifdef WIN32
+		if (! WriteFile(ctx->pipe, PIPE_FLUSH_MARKER, 8, (LPDWORD) &nb_write, NULL)) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_MMIO, ("[PipeOut] Failed to write marker: error %d\n", GetLastError() ));
+			return;
+		}
+#else
+		nb_write = (s32) write(ctx->fd, PIPE_FLUSH_MARKER, 8);
+		if (nb_write != 8) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_MMIO, ("[PipeOut] Failed to write marker: %s\n", gf_errno_str(errno)));
+			return;
+		}
+#endif
+		GF_LOG(GF_LOG_INFO, GF_LOG_MMIO, ("[PipeOut] Wrote flush marker\n"));
+	} else {
+		GF_LOG(GF_LOG_DEBUG, GF_LOG_MMIO, ("[PipeOut] Got flush marker (write disabled)\n"));
+	}
+}
+
 static GF_Err pipeout_process(GF_Filter *filter)
 {
 	GF_FilterPacket *pck;
 	const GF_PropertyValue *fname, *p;
 	Bool start, end, broken=GF_FALSE;
+	GF_Err e = GF_OK;
 	const char *pck_data;
 	u32 pck_size;
 	s32 nb_write;
@@ -322,8 +353,12 @@ static GF_Err pipeout_process(GF_Filter *filter)
 	pck = gf_filter_pid_get_packet(ctx->pid);
 	if (!pck) {
 		if (gf_filter_pid_is_eos(ctx->pid)) {
-			pipeout_open_close(ctx, NULL, NULL, 0, GF_FALSE);
-			return GF_EOS;
+			if (gf_filter_pid_is_flush_eos(ctx->pid)) {
+				pout_write_marker(ctx);
+			} else {
+				pipeout_open_close(ctx, NULL, NULL, 0, GF_FALSE);
+				return GF_EOS;
+			}
 		}
 		return GF_OK;
 	}
@@ -345,8 +380,6 @@ static GF_Err pipeout_process(GF_Filter *filter)
 		}
 		//filename change at packet start, open new file
 		if (!fname) fname = gf_filter_pck_get_property(pck, GF_PROP_PCK_FILENAME);
-		if (!fname) fname = gf_filter_pck_get_property(pck, GF_PROP_PID_OUTPATH);
-		if (!fext) fext = gf_filter_pck_get_property(pck, GF_PROP_PID_FILE_EXT);
 		if (fname) name = fname->value.string;
 
 		if (end && gf_filter_pck_get_seek_flag(pck))
@@ -450,20 +483,26 @@ static GF_Err pipeout_process(GF_Filter *filter)
 		} else {
 			GF_LOG(GF_LOG_WARNING, GF_LOG_MMIO, ("[PipeOut] No data associated with packet, cannot write\n"));
 		}
-	} else {
+	} else if (pck_size) {
 		GF_LOG(GF_LOG_ERROR, GF_LOG_MMIO, ("[PipeOut] Output file handle is not opened, discarding %d bytes\n", pck_size));
 	}
 	gf_filter_pid_drop_packet(ctx->pid);
+	GF_LOG(GF_LOG_DEBUG, GF_LOG_MMIO, ("[PipeOut] Wrote packet %d bytes\n", pck_size));
 
 	if (broken && !ctx->ka) {
+		//abort and send stop
 		gf_filter_pid_set_discard(ctx->pid, GF_TRUE);
+		GF_FilterEvent evt;
+		GF_FEVT_INIT(evt, GF_FEVT_STOP, ctx->pid);
+		gf_filter_pid_send_event(ctx->pid, &evt);
 		end = GF_TRUE;
+		e = GF_IO_ERR;
 	}
 
 	if (end) {
 		pipeout_open_close(ctx, NULL, NULL, 0, GF_FALSE);
 	}
-	return GF_OK;
+	return e;
 }
 
 static GF_FilterProbeScore pipeout_probe_url(const char *url, const char *mime)
@@ -485,8 +524,9 @@ static const GF_FilterArgs PipeOutArgs[] =
 	{ OFFS(start), "set playback start offset. A negative value means percent of media duration with -1 equal to duration", GF_PROP_DOUBLE, "0.0", NULL, 0},
 	{ OFFS(speed), "set playback speed. If negative and start is 0, start is set to -1", GF_PROP_DOUBLE, "1.0", NULL, 0},
 	{ OFFS(mkp), "create pipe if not found", GF_PROP_BOOL, "false", NULL, 0 },
-	{ OFFS(block_size), "buffer size used to write to pipe, windows only", GF_PROP_UINT, "5000", NULL, GF_FS_ARG_HINT_ADVANCED },
+	{ OFFS(block_size), "buffer size used to write to pipe, Windows only", GF_PROP_UINT, "5000", NULL, GF_FS_ARG_HINT_ADVANCED },
 	{ OFFS(ka), "keep pipe alive when broken pipe is detected", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
+	{ OFFS(marker), "inject marker upon pipeline flush events", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{0}
 };
 
@@ -500,7 +540,7 @@ static const GF_FilterCapability PipeOutCaps[] =
 
 GF_FilterRegister PipeOutRegister = {
 	.name = "pout",
-	GF_FS_SET_DESCRIPTION("pipe output")
+	GF_FS_SET_DESCRIPTION("Pipe output")
 	GF_FS_SET_HELP("This filter handles generic output pipes (mono-directional) in blocking mode only.\n"
 		"Warning: Output pipes do not currently support non blocking mode.\n"
 		"The associated protocol scheme is `pipe://` when loaded as a generic output (e.g. -o `pipe://URL` where URL is a relative or absolute pipe name).\n"
@@ -518,6 +558,9 @@ GF_FilterRegister PipeOutRegister = {
 		"The pipe can be kept alive after a broken pipe is detected using [-ka](). This is typically used when clients crash/exits and resumes.\n"
 		"When a keep-alive pipe is broken, input data is discarded and the filter will keep trashing data as fast as possible.\n"
 		"It is therefore recommended to use this mode with real-time inputs (use a [reframer](reframer) if needed)."
+		"\n"
+		"If [-marker]() is set, the string `GPACPIF` (8 bytes including 0-terminator) will be written to the pipe at each detected pipeline flush.\n"
+		"Pipeline flushing is currently triggered by DASH segment end or ISOBMF fragment end.\n"
 	"")
 	.private_size = sizeof(GF_PipeOutCtx),
 	.args = PipeOutArgs,
@@ -527,15 +570,22 @@ GF_FilterRegister PipeOutRegister = {
 	.finalize = pipeout_finalize,
 	.configure_pid = pipeout_configure_pid,
 	.process = pipeout_process,
-	.flags = GF_FS_REG_TEMP_INIT
+	.flags = GF_FS_REG_TEMP_INIT,
+	.hint_class_type = GF_FS_CLASS_NETWORK_IO
 };
 
 
-const GF_FilterRegister *pipeout_register(GF_FilterSession *session)
+const GF_FilterRegister *pout_register(GF_FilterSession *session)
 {
 	if (gf_opts_get_bool("temp", "get_proto_schemes")) {
 		gf_opts_set_key("temp_out_proto", PipeOutRegister.name, "pipe");
 	}
 	return &PipeOutRegister;
 }
+#else
+const GF_FilterRegister *pout_register(GF_FilterSession *session)
+{
+	return NULL;
+}
+#endif // GPAC_DISABLE_POUT
 

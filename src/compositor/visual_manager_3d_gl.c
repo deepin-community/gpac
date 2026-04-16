@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -26,7 +26,7 @@
 #include "visual_manager.h"
 #include "texturing.h"
 
-#ifndef GPAC_DISABLE_3D
+#if !defined(GPAC_DISABLE_3D) && !defined(GPAC_DISABLE_COMPOSITOR)
 
 #include <gpac/nodes_mpeg4.h>
 #include "gl_inc.h"
@@ -127,7 +127,7 @@ void gf_sc_load_opengl_extensions(GF_Compositor *compositor, Bool has_gl_context
 	if (CHECK_GL_EXT("EXT_unpack_subimage") ) {
 		compositor->gl_caps.gles2_unpack = 1;
 	}
-	
+
 	if (!has_gl_context) return;
 
 
@@ -1329,7 +1329,7 @@ void visual_3d_enable_antialias(GF_VisualManager *visual, Bool bOn)
 		glHint(GL_POINT_SMOOTH, GL_DONT_CARE);
 		glHint(GL_LINE_SMOOTH, GL_DONT_CARE);
 		glHint(GL_POLYGON_SMOOTH_HINT, GL_DONT_CARE);
-	
+
 		glDisable( GL_MULTISAMPLE_ARB);
 */
 	}
@@ -2423,7 +2423,7 @@ static void visual_3d_draw_mesh_shader_only(GF_TraverseState *tr_state, GF_Mesh 
 	//setup mesh normal vertex attribute - only available for some shaders
 	if (!visual->has_material_2d && num_lights && (mesh->mesh_type==MESH_TRIANGLES) ) {
 		GF_Matrix normal_mx;
-		assert(flags & GF_GL_HAS_LIGHT);
+		gf_assert(flags & GF_GL_HAS_LIGHT);
 
 		gf_mx_copy(normal_mx, tr_state->camera->modelview);
 		gf_mx_add_matrix(&normal_mx, &tr_state->model_matrix);
@@ -2489,7 +2489,7 @@ static void visual_3d_draw_mesh_shader_only(GF_TraverseState *tr_state, GF_Mesh 
 					yuv_mode = 2;
 					break;
 				}
-			
+
 				glUniform1i(loc, yuv_mode);
 			}
 			GL_CHECK_ERR()
@@ -3021,10 +3021,11 @@ static void visual_3d_set_debug_color(u32 col)
 }
 
 
+#if !defined(GPAC_USE_GLES2)
 /*note we don't perform any culling for normal drawing...*/
 static void visual_3d_draw_normals(GF_TraverseState *tr_state, GF_Mesh *mesh)
 {
-#if !defined( GPAC_USE_TINYGL) && !defined(GPAC_USE_GLES2)
+#if !defined( GPAC_USE_TINYGL)
 
 	GF_Vec pt, end;
 	u32 i, j;
@@ -3102,6 +3103,7 @@ static void visual_3d_draw_normals(GF_TraverseState *tr_state, GF_Mesh *mesh)
 
 #endif	/*GPAC_USE_TINYGL*/
 }
+#endif //GPAC_USE_GLES2
 
 
 void visual_3d_draw_aabb_nodeBounds(GF_TraverseState *tr_state, AABBNode *node)
@@ -3167,7 +3169,6 @@ void visual_3d_mesh_paint(GF_TraverseState *tr_state, GF_Mesh *mesh)
 
 	GL_CHECK_ERR()
 
-	gf_rmt_begin_gl(visual_3d_mesh_paint);
 	glGetError();
 
 	GF_LOG(GF_LOG_DEBUG, GF_LOG_COMPOSE, ("[V3D] Drawing mesh %p\n", mesh));
@@ -3213,7 +3214,6 @@ void visual_3d_mesh_paint(GF_TraverseState *tr_state, GF_Mesh *mesh)
 
 	GF_LOG(GF_LOG_DEBUG, GF_LOG_COMPOSE, ("[V3D] Done drawing mesh %p\n", mesh));
 
-	gf_rmt_end_gl();
 	glGetError();
 }
 
@@ -3963,7 +3963,7 @@ GF_Err compositor_3d_setup_fbo(u32 width, u32 height, u32 *fbo_id, u32 *tx_id, u
 		glGenRenderbuffers(1, depth_id);
 
 	glBindRenderbuffer(GL_RENDERBUFFER, *depth_id);
-#if defined(GPAC_CONFIG_IOS) ||  defined(GPAC_CONFIG_ANDROID)
+#if defined(GPAC_CONFIG_IOS) ||  defined(GPAC_CONFIG_ANDROID) || defined(GPAC_USE_GLES2)
 	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, width, height);
 #else
 	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height);
@@ -4024,4 +4024,4 @@ void visual_3d_clean_state(GF_VisualManager *visual)
 	glGetError();
 }
 
-#endif // GPAC_DISABLE_3D
+#endif //!defined(GPAC_DISABLE_3D) && !defined(GPAC_DISABLE_COMPOSITOR)

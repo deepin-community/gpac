@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2018-2022
+ *			Copyright (c) Telecom ParisTech 2018-2025
  *					All rights reserved
  *
  *  This file is part of GPAC / audio resample filter
@@ -28,7 +28,7 @@
 #include <gpac/filters.h>
 #include <gpac/internal/compositor_dev.h>
 
-#ifndef GPAC_DISABLE_PLAYER
+#ifndef GPAC_DISABLE_RESAMPLE
 
 typedef struct
 {
@@ -64,7 +64,7 @@ static u8 *resample_fetch_frame(void *callback, u32 *size, u32 *planar_stride, u
 	GF_ResampleCtx *ctx = (GF_ResampleCtx *) callback;
 	if (!ctx->data) {
 		//fetch data if none present (we may have drop the previous frame while mixing)
-		assert(!ctx->in_pck);
+		gf_assert(!ctx->in_pck);
 		ctx->in_pck = gf_filter_pid_get_packet(ctx->ipid);
 		if (!ctx->in_pck) {
 			*size = 0;
@@ -79,7 +79,7 @@ static u8 *resample_fetch_frame(void *callback, u32 *size, u32 *planar_stride, u
 		}
 	}
 
-	assert(ctx->data);
+	gf_assert(ctx->data);
 	*size = ctx->size - ctx->bytes_consumed;
 	sample_offset = ctx->bytes_consumed;
 	//planar mode, bytes consumed correspond to all channels, so move frame pointer
@@ -95,7 +95,7 @@ static void resample_release_frame(void *callback, u32 nb_bytes)
 {
 	GF_ResampleCtx *ctx = (GF_ResampleCtx *) callback;
 	ctx->bytes_consumed += nb_bytes;
-	assert(ctx->bytes_consumed<=ctx->size);
+	gf_assert(ctx->bytes_consumed<=ctx->size);
 	if (ctx->bytes_consumed==ctx->size) {
 		//trash packet and get a new one
 		gf_filter_pid_drop_packet(ctx->ipid);
@@ -306,6 +306,8 @@ static GF_Err resample_process(GF_Filter *filter)
 				}
 			}
 		}
+		if (!ctx->speed)
+			return GF_OK;
 
 		if (ctx->passthrough) {
 			gf_filter_pck_forward(ctx->in_pck, ctx->opid);
@@ -456,6 +458,12 @@ static const GF_FilterCapability ResamplerCaps[] =
 	CAP_UINT(GF_CAPS_INPUT,GF_PROP_PID_CODECID, GF_CODECID_RAW),
 	CAP_UINT(GF_CAPS_OUTPUT, GF_PROP_PID_STREAM_TYPE, GF_STREAM_AUDIO),
 	CAP_UINT(GF_CAPS_OUTPUT, GF_PROP_PID_CODECID, GF_CODECID_RAW),
+	{0},
+	CAP_UINT(GF_CAPFLAG_RECONFIG, GF_PROP_PID_SAMPLE_RATE, 0),
+	CAP_UINT(GF_CAPFLAG_RECONFIG, GF_PROP_PID_NUM_CHANNELS, 0),
+	CAP_UINT(GF_CAPFLAG_RECONFIG, GF_PROP_PID_AUDIO_FORMAT, 0),
+	CAP_LUINT(GF_CAPFLAG_RECONFIG, GF_PROP_PID_CHANNEL_LAYOUT, 0),
+	CAP_DOUBLE(GF_CAPFLAG_RECONFIG, GF_PROP_PID_AUDIO_SPEED, 0),
 };
 
 #define OFFS(_n)	#_n, offsetof(GF_ResampleCtx, _n)
@@ -464,7 +472,7 @@ static GF_FilterArgs ResamplerArgs[] =
 	{ OFFS(och), "desired number of output audio channels (0 for auto)", GF_PROP_UINT, "0", NULL, 0},
 	{ OFFS(osr), "desired sample rate of output audio (0 for auto)", GF_PROP_UINT, "0", NULL, 0},
 	{ OFFS(osfmt), "desired sample format of output audio (`none` for auto)", GF_PROP_PCMFMT, "none", NULL, 0},
-	{ OFFS(olayout), "desired CICP layout of output audio (null for auto)", GF_PROP_STRING, NULL, NULL, 0},
+	{ OFFS(olayout), "desired CICP layout of output audio (null for auto)", GF_PROP_CICP_LAYOUT, NULL, NULL, 0},
 	{0}
 };
 
@@ -482,9 +490,8 @@ GF_FilterRegister ResamplerRegister = {
 	.process = resample_process,
 	.reconfigure_output = resample_reconfigure_output,
 	.process_event = resample_process_event,
+	.hint_class_type = GF_FS_CLASS_AV
 };
-
-const char *gf_audio_fmt_cicp_all_names();
 
 const GF_FilterRegister *resample_register(GF_FilterSession *session)
 {
@@ -492,10 +499,9 @@ const GF_FilterRegister *resample_register(GF_FilterSession *session)
 	return &ResamplerRegister;
 }
 #else
-
 const GF_FilterRegister *resample_register(GF_FilterSession *session)
 {
 	return NULL;
 }
+#endif //#ifndef GPAC_DISABLE_RESAMPLE
 
-#endif // GPAC_DISABLE_PLAYER

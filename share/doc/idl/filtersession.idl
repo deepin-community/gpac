@@ -26,7 +26,7 @@ attribute JSFilterSession session;
 \param log the string to write
 */
 void print(DOMString log);
-/*! global context function for printing 
+/*! global context function for printing
 \param log_level the log level to use: GF_LOG_DEBUG, GF_LOG_INFO, GF_LOG_WARNING, GF_LOG_ERROR. The special value -2 means print as gf_sys_format_help without highlight, the special value -1 means print as gf_sys_format_help with hightlight of first)
 \param log_str the string to write
 */
@@ -36,16 +36,30 @@ void print(long log_level, DOMString log_str);
 /*!\brief JSFilterSession API
 
 The JSFilterSession interface has a single instance exposed to the script under the name "session".
-It implements binding to the underlying filter session object, see \ref GF_FilterSession.
+It implements binding to the underlying filter session object, see \ref fs_grp.
+
 */
 interface JSFilterSession {
 
+/*!
+Constructor for creating a user-defined filter session
+\return a filter session, created in blocking mode
+*/
+JSFilterSession FilterSession();
+
+/*!
+Constructor for creating a user-defined filter session
+\param config configuration for session
+\return a filter session
+*/
+JSFilterSession FilterSession(JSFilterSessionConfig config);
 
 /*! posts a task to the main scheduler - see \ref gf_fs_post_user_task
 \param task_callback the callback function to use. This callback functions has no parameters, and returns false or an exception to abort the task, true to reschedule the task immediately or a reschedule time in milliseconds
 \param task_name optional value giving a label for the task
+\return identifier for callback
 */
-void post_task(function task_callback, optional DOMString task_name=null);
+unsigned int post_task(function task_callback, optional DOMString task_name=null);
 
 /*! aborts the filter session - see \ref gf_fs_abort
 \param flush_type if true, wait for all packets currently pending to be processed before closing the session
@@ -58,58 +72,52 @@ The session only needs to be locked when enumerating filters
 */
 void lock_filters(boolean do_lock);
 
-/*! returns the JSFSFilter object for the given index. 
-\param index index of filter to query. This index is only valid when session is locked 
+/*! returns the JSFSFilter object for the given index.
+\param index index of filter to query. This index is only valid when session is locked
 \return the filter object, null if none found
 */
 JSFSFilter get_filter(unsigned long index);
 
-/*! returns the JSFSFilter object for a given filter iname. 
-\param iname the iname of filter to query 
+/*! returns the JSFSFilter object for a given filter iname.
+\param iname the iname of filter to query
 \return the filter object, null if none found
 */
 JSFSFilter get_filter(DOMString iname);
-
-
-/*! enable remotery - this should be called as early as possible in the session
-*/
-void enable_rmt();
-
-/*! sends the given string to the remotery client(s)
-\param command the command to send
-\return error code if any
-*/
-void rmt_send(DOMString command);
-
-/*! sets callback function to use when processing remotery client request
-\param callback the callback function to call. This function takes one parameter which is the text being received
-\return error code if any
-*/
-void set_rmt_fun(function callback);
 
 /*! inserts a filter in graph
 
 \param filter_to_add string describin the filter to add, can be in the form "src=" for sources, "dst=" for sinks or regular string for filters.
 \param link_from filter used as source for the created filters - see \ref gf_filter_set_source
-\param link_args arguments for the link (used to assign new filter SID - see \ref gf_filter_set_source
+\param link_args arguments for the link (used to assign new filter SID - see \ref gf_filter_set_source). An empty string means no arguments
 \param relative_to_script if false, URLs for source and sinks filters are relative to the current working directory, if true they are relative to the script path
 \return new filter created
 */
 JSFSFilter add_filter(DOMString filter_to_add, optional JSFSFilter link_from=null, optional DOMString link_args=null, optional boolean relative_to_script=false);
 
+/*! removes a filter in the media session
+\param filter filter object to remove, can be a JSFSFilter object (in this case, function is equivalent to JSFSFilter.remove) or a JSFilter object
+\param src_filter source filter. If set, disconnect the chain between the source and the filter before removing the filter. The source must be a valid source (no input pids) - cf \ref gf_filter_remove_src
+*/
+void remove_filter(Object filter, Object src_filter=null);
+
+
 /*! sets callback function to get notifications upon each new filter creation.
 \param callback callback function - it is passed a single parameter, the filter object
+\return identifier for callback
 */
-void set_new_filter_fun(function callback);
+unsigned int set_new_filter_fun(function callback);
 
 /*! sets callback function to get notifications upon each filter destruction.
 \param callback the callback function - it is passed a single parameter, the filter object
+\return identifier for callback
 */
-void set_del_filter_fun(function callback);
+unsigned int set_del_filter_fun(function callback);
 
-/*! sets callback function to get events being sent back to application (see \ref gf_fs_set_ui_callback). 
-\param callback callback function - it is passed a single parameter set, an event instance of FilterEvent interface. The return value of the function should be as indicated for each event type*/
-void set_event_fun(function callback);
+/*! sets callback function to get events being sent back to application (see \ref gf_fs_set_ui_callback).
+\param callback callback function - it is passed a single parameter set, an event instance of FilterEvent interface. The return value of the function should be as indicated for each event type
+\return identifier for callback
+*/
+unsigned int set_event_fun(function callback);
 
 /*! sets callback function to get authentication requests (see \ref gf_fs_set_ui_callback).
 \param callback callback function - the function takes 5 parameters and no return value type:
@@ -118,9 +126,14 @@ void set_event_fun(function callback);
 	- pass: password if known
 	- secure: boolean indicating if connection is secured (TLS)
 	- auth_obj: object used to acknowledge authentication, with a single function `done()` taking up to 3 parameters: user, passord and boolean indicating if credentials should be stored. If user or password are not set, authentication fails
+\return identifier for callback
 */
-void set_auth_fun(function callback);
+unsigned int set_auth_fun(function callback);
 
+/*! removes callback function by identifier
+\param callback_id the callback identifier
+*/
+void remove_callback(callback_id);
 
 /*! fires a given event on all registered user event if no filter is specified, or on the filter
 \param evt the event to send
@@ -129,14 +142,14 @@ void set_auth_fun(function callback);
 \return true if event was fired, false if no event target was found or if the filter is not an event target*/
 boolean fire_event(FilterEvent evt, optional JSFSFilter *filter=null, optional boolean upstream=false);
 
-/*! enables session reporting - see \ref gf_fs_enable_reporting. 
+/*! enables session reporting - see \ref gf_fs_enable_reporting.
 \param enable enables reporting if true*/
 void reporting(boolean enable);
 
 /*! creates a new custom JS filter. This filter will share the same script context as the filter session script - see \ref JSFilter
 \note A custom filter cannot use default arguments, and will not have the initialize callback function called.
 
-\param name name for the filter
+\param name name for the filter. Optional internal filter arguments may be set after the name, e.g. `MyName:ITAG=test`
 \return new filter
 */
 JSFilter new_filter(DOMString name=null);
@@ -149,8 +162,29 @@ JSFilter new_filter(DOMString name=null);
 */
 Array filter_args(DOMString desciption);
 
+/*! print graph for session*/
+void print_connections();
 
-/*! number of filters in the session - see \ref gf_fs_get_filters_count. 
+/*! print stats for session*/
+void print_stats();
+
+/*! run a session, only valid for user-created sessions
+\return error code if any
+*/
+long run();
+
+/*! stop a session, only valid for user-created sessions
+\return error code if any
+*/
+long stop();
+
+/*! abort a session, only valid for user-created sessions
+\param flush_type flush type, cf \ref GF_FSFlushType
+\return error code if any
+*/
+long abort(optional unsigned long flush_type);
+
+/*! number of filters in the session - see \ref gf_fs_get_filters_count.
 This number is only valid when session is locked*/
 attribute long nb_filters;
 
@@ -176,11 +210,23 @@ readonly attribute DOMString jspath;
 
 };
 
+/*! Configuration object for user-defined sessions*/
+interface JSFilterSessionConfig
+{
+/*! number of extra threads to use, -1 means all available cores*/
+readonly signed long threads;
+/*! scheduler mode, cf \ref GF_FilterSchedulerType*/
+readonly unsigned long scheduler;
+/*! flags for session, cf \ref GF_FilterSessionFlags*/
+readonly unsigned long flags;
+/*! blacklist of filters for session, same as -blcakclist option, cf \ref gf_fs_new*/
+readonly DOMString blacklist;
+};
 
 /*!\brief JSFSFilter API
 
-The JSFSFilter interface provides tools to query and update filters in a session. 
-It implements binding to the underlying filter object, see \ref GF_Filter.
+The JSFSFilter interface provides tools to query and update filters in a session.
+It implements binding to the underlying filter object, see \ref fs_filter.
 */
 interface JSFSFilter {
 /*! filter name - may be changed at run-time by the filter*/
@@ -189,6 +235,10 @@ attribute readonly DOMString name;
 attribute readonly DOMString ID;
 /*! filter registry name */
 attribute readonly DOMString type;
+/*! filter TAG */
+attribute readonly DOMString tag;
+/*! filter inherited TAG */
+attribute readonly DOMString itag;
 /*! number of input PIDs for the filter*/
 attribute readonly unsigned long nb_ipid;
 /*! number of output PIDs for the filter*/
@@ -217,8 +267,10 @@ attribute readonly unsigned long long pck_ifce_sent;
 attribute readonly unsigned long long bytes_sent;
 /*! number of tasks executed*/
 attribute readonly unsigned long tasks;
-/*! number of errors*/
+/*! number of errors on the filter, never reseted*/
 attribute readonly unsigned long errors;
+/*! number of consecutive errors, reseted at each successfull processing*/
+attribute readonly unsigned long current_errors;
 /*! set to true if report has been updated since last query*/
 attribute readonly boolean report_updated;
 /*! class of filter, can be "rawin", "demuxer", "decoder", "encoder", "muxer", "rawout", "mediasink", "mediasource", "unknown"*/
@@ -257,7 +309,7 @@ FilterProperty ipid_props(unsigned long idx, DOMString name);
 
 /*! Enumerates properties on input pid
 \param idx the index of the input pid to query
-\param fun_callback function called for each property in the input pid. The function has three parameters: name (DOMString), type (DOMString), value (FilterProperty) 
+\param fun_callback function called for each property in the input pid. The function has three parameters: name (DOMString), type (DOMString), value (FilterProperty)
 */
 void ipid_props(unsigned long idx, function fun_callback);
 
@@ -270,7 +322,7 @@ FilterProperty opid_props(unsigned long idx, DOMString name);
 
 /*! Enumerates properties on output pid
 \param idx the index of the output pid to query
-\param fun_callback function called for each property in the output pid. The function has three parameters: name (DOMString), type (DOMString), value (FilterProperty) 
+\param fun_callback function called for each property in the output pid. The function has three parameters: name (DOMString), type (DOMString), value (FilterProperty)
 */
 void opid_props(unsigned long idx, function fun_callback);
 
@@ -293,7 +345,7 @@ Object opid_stats(unsigned long idx, optional unsigned int mode=0);
 void require_source_id();
 
 
-/*! computes link from an output pid of the filter to a given filter description
+/*! computes link from an output pid of the filter to a given filter description - cf \ref gf_filter_probe_link
 \param idx the index of the output pid to query
 \param description filter descrition, destination can be specified using dst=URL
 \param load_args if set, will load all possible arguments for each filter
@@ -306,6 +358,13 @@ If arguments are not loaded, the return value is an array registry names
 */
 Array compute_link(unsigned long idx, DOMString description, optional Boolean load_args=false);
 
+
+
+/*! get possible direct destinations for a filter - cf \ref gf_filter_get_possible_destinations
+\param pid_idx the index of the output pid to query, -1 to consider all output pids
+\return comma-separated string of found filters, NULL if not found
+*/
+DOMString get_destinations(unsigned long pid_idx=-1);
 
 /*! Gets source filter for an input pid
 \param idx the index of the input pid to query
@@ -321,13 +380,13 @@ Array opid_sinks(unsigned long idx);
 
 /*! Gets all arguments (options) of the filter
 \param value_only if true, only returns name (DOMString) and value (FilterProperty) of each argument. Otherwise returns the full argument (JSFSFilterArg)
-\return array of JSFSFilterArg 
+\return array of JSFSFilterArg
 */
 Array all_args(optional boolean value_only=true);
 
 /*! Gets value of a given argument of the filter
 \param arg_name argument name
-\return property value, or null 
+\return property value, or null
 */
 FilterProperty get_arg(DOMString arg_name);
 
@@ -347,7 +406,13 @@ void remove();
 */
 void insert(DOMString filter_to_add, optional DOMString link_args=null);
 
-/*! binds a JSObject with underlying filter javascript extensions, if any. Currently only dashin filter has such an extension (see \ref JSDASHClient).
+
+/*! reconnects a filter ouput(s)
+\param pid_idx output pid to reconnect, -1 for all output pids
+*/
+void reconnect(long pid_idx=-1);
+
+/*! binds a JSObject with underlying filter javascript extensions, if any. Currently only dashin  (see \ref JSDASHClient) and httpout  (see \ref JSHTTPServer) filters have such an extension.
 This will throw an exception if failure or no JS binding available
 \param obj the JS object to use as interface for the underlying filter script
 */
@@ -383,6 +448,4 @@ optional attribute DOMString hint;
 };
 
 
-
 /*! @} */
-

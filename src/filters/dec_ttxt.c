@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / 3GPP/MPEG4 text renderer filter
@@ -32,7 +32,7 @@
 #include <gpac/internal/compositor_dev.h>
 
 
-#if !defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_ISOM)
+#if !defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_ISOM) && !defined(GPAC_DISABLE_COMPOSITOR)
 
 
 /*
@@ -40,7 +40,7 @@
 	this scene graph is then used as an extra graph by the renderer, and manipulated by the decoder
 	for any time animation handling.
 	Translation from text to MPEG-4 scene graph:
-		* all modifiers (styles, hilight, etc) are unrolled into chunks forming a unique, linear
+		* all modifiers (styles, highlight, etc) are unrolled into chunks forming a unique, linear
 	sequence of text data (startChar, endChar) with associated styles & modifs
 		* chunks are mapped to classic MPEG-4/VRML text
 		* these chunks are then gathered in a Form node (supported by 2D and 3D renderers), with
@@ -54,7 +54,7 @@
 		* text color
 		* proper alignment (H and V) with horizontal text. Vertical text may not be properly layed out (not fully tested)
 		* style Records (font, size, fontstyles, and colors change) - any nb per sample supported
-		* hilighting (static only) with color or reverse video - any nb per sample supported
+		* highlighting (static only) with color or reverse video - any nb per sample supported
 		* hypertext links - any nb per sample supported
 		* blinking - any nb per sample supported
 		* complete scrolling: in, out, in+out, up, down, right and left directions. All other
@@ -62,7 +62,7 @@
 		* scroll delay
 
 	It does NOT support:
-		* dynamic hilighting (karaoke)
+		* dynamic highlighting (karaoke)
 		* wrap
 
 	The decoder only accepts complete timed text units TTU(1). In band reconfig (TTU(5) is not supported,
@@ -109,6 +109,8 @@ typedef struct
 	u8 *static_text;
 	u32 txt_static_alloc;
 	u64 sample_end;
+
+	u32 forced_sub;
 } GF_TTXTDec;
 
 
@@ -261,7 +263,7 @@ static GF_Err ttd_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_re
 	}
 	//TODO: we need to cleanup cap checking upon reconfigure
 	if (ctx->ipid && !gf_filter_pid_check_caps(pid)) return GF_NOT_SUPPORTED;
-	assert(!ctx->ipid || (ctx->ipid == pid));
+	gf_assert(!ctx->ipid || (ctx->ipid == pid));
 
 	st = codecid = 0;
 	p = gf_filter_pid_get_property(pid, GF_PROP_PID_STREAM_TYPE);
@@ -290,6 +292,9 @@ static GF_Err ttd_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_re
 	gf_filter_pid_copy_properties(ctx->opid, ctx->ipid);
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_STREAM_TYPE, &PROP_UINT(GF_STREAM_TEXT));
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_CODECID, &PROP_UINT(GF_CODECID_RAW));
+
+	p = gf_filter_pid_get_property(pid, GF_PROP_PID_FORCED_SUB);
+	ctx->forced_sub = p ? p->value.uint : 0;
 
 	if (ctx->simple_text) {
 		if (!ctx->cfg) ctx->cfg = (GF_TextConfig *) gf_odf_desc_new(GF_ODF_TEXT_CFG_TAG);
@@ -328,6 +333,13 @@ static GF_Err ttd_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_re
 				return e;
 			}
 			ctx->is_tx3g = GF_FALSE;
+
+			GF_TextSampleDescriptor *sd = gf_list_get(ctx->cfg->sample_descriptions, 0);
+			if (sd && (sd->displayFlags & GF_TXT_ALL_SAMPLES_FORCED))
+				ctx->forced_sub = 2;
+			else if (sd && (sd->displayFlags & GF_TXT_SOME_SAMPLES_FORCED))
+				ctx->forced_sub = 1;
+
 		} else if (codecid == GF_CODECID_TX3G) {
 			GF_TextSampleDescriptor * sd = gf_odf_tx3g_read(dsi->value.data.ptr, dsi->value.data.size);
 			if (!sd) {
@@ -338,9 +350,16 @@ static GF_Err ttd_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_re
 			if (!sd->default_style.text_color)
 				sd->default_style.text_color = 0xFFFFFFFF;
 
+			if (sd->displayFlags & GF_TXT_ALL_SAMPLES_FORCED)
+				ctx->forced_sub = 2;
+			if (sd->displayFlags & GF_TXT_SOME_SAMPLES_FORCED)
+				ctx->forced_sub = 1;
+
 			gf_list_add(ctx->cfg->sample_descriptions, sd);
 			ctx->is_tx3g = GF_TRUE;
 		}
+
+		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_FORCED_SUB, &PROP_UINT(ctx->forced_sub));
 
 		if (needs_init && ctx->odm && ctx->scene) {
 			ttd_setup_scene(ctx);
@@ -573,8 +592,8 @@ typedef struct
 {
 	u32 start_char, end_char;
 	GF_StyleRecord *srec;
-	Bool is_hilight;
-	u32 hilight_col;	/*0 means RV*/
+	Bool is_highlight;
+	u32 highlight_col;	/*0 means RV*/
 	GF_TextHyperTextBox *hlink;
 	Bool has_blink;
 	/*karaoke not done yet*/
@@ -582,7 +601,7 @@ typedef struct
 	layout to handle new lines and proper scrolling*/
 } TTDTextChunk;
 
-static void ttd_new_text_chunk(GF_TTXTDec *ctx, GF_TextSampleDescriptor *tsd, M_Form *form, u16 *utf16_txt, TTDTextChunk *tc)
+static void ttd_new_text_chunk(GF_TTXTDec *ctx, GF_TextSampleDescriptor *tsd, M_Form *form, u16 *utf16_txt, u32 utf_alloc_size, TTDTextChunk *tc)
 {
 	GF_Node *txt_model, *n2, *txt_material;
 	M_Text *text;
@@ -663,10 +682,10 @@ static void ttd_new_text_chunk(GF_TTXTDec *ctx, GF_TextSampleDescriptor *tsd, M_
 	if ((styleFlags & GF_TXT_STYLE_UNDERLINED) || (tc->hlink && tc->hlink->URL)) strcat(szStyle, " UNDERLINED");
 	if (styleFlags & GF_TXT_STYLE_STRIKETHROUGH) strcat(szStyle, " STRIKETHROUGH");
 
-	if (tc->is_hilight) {
-		if (tc->hilight_col) {
+	if (tc->is_highlight) {
+		if (tc->highlight_col) {
 			char szTxt[50];
-			sprintf(szTxt, " HIGHLIGHT#%x", tc->hilight_col);
+			sprintf(szTxt, " HIGHLIGHT#%x", tc->highlight_col);
 			strcat(szStyle, szTxt);
 		} else {
 			strcat(szStyle, " HIGHLIGHT#RV");
@@ -711,9 +730,8 @@ static void ttd_new_text_chunk(GF_TTXTDec *ctx, GF_TextSampleDescriptor *tsd, M_
 			if (i+1==tc->end_char) i++;
 
 			if (i!=start_char) {
-				char szLine[5000];
 				u32 len;
-				s16 wsChunk[5000], *sp;
+				s16 *sp;
 
 				/*splitting lines, duplicate node*/
 
@@ -736,17 +754,23 @@ static void ttd_new_text_chunk(GF_TTXTDec *ctx, GF_TextSampleDescriptor *tsd, M_
 				if (tc->has_blink && txt_material) gf_list_add(ctx->blink_nodes, txt_material);
 
 
-				memcpy(wsChunk, &utf16_txt[start_char], sizeof(s16)*(i-start_char));
-				wsChunk[i-start_char] = 0;
-				sp = &wsChunk[0];
-				len = gf_utf8_wcstombs(szLine, 5000, (const unsigned short **) &sp);
-				if (len == GF_UTF8_FAIL) len = 0;
-				szLine[len] = 0;
-				if (len && (szLine[len-1]=='\r'))
-					szLine[len-1] = 0;
+				s16 *wsChunk = gf_malloc(sizeof(s16)*utf_alloc_size);
+				char *szLine = gf_malloc(utf_alloc_size*2);
+				if (wsChunk && szLine) {
+					memcpy(wsChunk, &utf16_txt[start_char], sizeof(s16)*(i-start_char));
+					wsChunk[i-start_char] = 0;
+					sp = &wsChunk[0];
+					len = gf_utf8_wcstombs(szLine, utf_alloc_size*2, (const unsigned short **) &sp);
+					if (len == GF_UTF8_FAIL) len = 0;
+					szLine[len] = 0;
+					if (len && (szLine[len-1]=='\r'))
+						szLine[len-1] = 0;
 
-				gf_sg_vrml_mf_append(&text->string, GF_SG_VRML_MFSTRING, (void **) &st);
-				st->buffer = gf_strdup(szLine);
+					gf_sg_vrml_mf_append(&text->string, GF_SG_VRML_MFSTRING, (void **) &st);
+					st->buffer = gf_strdup(szLine);
+				}
+				if (szLine) gf_free(szLine);
+				if (wsChunk) gf_free(wsChunk);
 			}
 			start_char = i+1;
 			if (new_line) {
@@ -811,8 +835,8 @@ static void ttd_split_chunks(GF_TextSample *txt, u32 nb_chars, GF_List *chunks, 
 		/*assign mod*/
 		switch (mod->type) {
 		case GF_ISOM_BOX_TYPE_HLIT:
-			tc->is_hilight = GF_TRUE;
-			if (txt->highlight_color) tc->hilight_col = txt->highlight_color->hil_color;
+			tc->is_highlight = GF_TRUE;
+			if (txt->highlight_color) tc->highlight_col = txt->highlight_color->hil_color;
 			break;
 		case GF_ISOM_BOX_TYPE_HREF:
 			tc->hlink = (GF_TextHyperTextBox *) mod;
@@ -837,7 +861,6 @@ static void ttd_apply_sample(GF_TTXTDec *ctx, GF_TextSample *txt, u32 sample_des
 	GF_BoxRecord br;
 	M_Material2D *n;
 	M_Form *form;
-	u16 utf16_text[5000];
 	u32 char_offset, char_count;
 	GF_List *chunks;
 	TTDTextChunk *tc;
@@ -856,6 +879,7 @@ static void ttd_apply_sample(GF_TTXTDec *ctx, GF_TextSample *txt, u32 sample_des
 
 	ttd_reset_display(ctx);
 	if (!sample_desc_index || !txt || !txt->len) return;
+	if ((ctx->forced_sub==1) && !txt->is_forced) return;
 
 	if (ctx->is_tx3g) {
 		td = (GF_TextSampleDescriptor *)gf_list_get(ctx->cfg->sample_descriptions, 0);
@@ -1000,6 +1024,7 @@ static void ttd_apply_sample(GF_TTXTDec *ctx, GF_TextSample *txt, u32 sample_des
 		ctx->tr_scroll = NULL;
 	}
 
+	u16 *utf16_text = gf_malloc(sizeof(u16) * ((txt->len/2)*2 + 4) );
 	if (is_utf_16) {
 		memcpy((char *) utf16_text, txt->text, sizeof(char) * txt->len);
 		((char *) utf16_text)[txt->len] = 0;
@@ -1007,7 +1032,7 @@ static void ttd_apply_sample(GF_TTXTDec *ctx, GF_TextSample *txt, u32 sample_des
 		char_count = txt->len / 2;
 	} else {
 		char *p = txt->text;
-		char_count = gf_utf8_mbstowcs(utf16_text, 2500, (const char **) &p);
+		char_count = gf_utf8_mbstowcs(utf16_text, txt->len+1, (const char **) &p);
 		if (char_count == GF_UTF8_FAIL) char_count = 0;
 	}
 
@@ -1070,10 +1095,11 @@ static void ttd_apply_sample(GF_TTXTDec *ctx, GF_TextSample *txt, u32 sample_des
 	while (gf_list_count(chunks)) {
 		tc = (TTDTextChunk*)gf_list_get(chunks, 0);
 		gf_list_rem(chunks, 0);
-		ttd_new_text_chunk(ctx, td, form, utf16_text, tc);
+		ttd_new_text_chunk(ctx, td, form, utf16_text, (u32) sizeof(u16)*(txt->len+1), tc);
 		gf_free(tc);
 	}
 	gf_list_del(chunks);
+	gf_free(utf16_text);
 
 	if (form->groupsIndex.count && (form->groupsIndex.vals[form->groupsIndex.count-1] != -1))
 		ttd_add_line(form);
@@ -1276,6 +1302,10 @@ static Bool ttd_process_event(GF_Filter *filter, const GF_FilterEvent *evt)
 		ctx->is_playing = GF_FALSE;
 		ttd_toggle_display(ctx);
 		return GF_FALSE;
+	case GF_FEVT_QUALITY_SWITCH:
+		if ((ctx->forced_sub==1) && evt->quality_switch.up) ctx->forced_sub = 3;
+		else if ((ctx->forced_sub==3) && !evt->quality_switch.up) ctx->forced_sub = 1;
+		return GF_TRUE;
 	default:
 		return GF_FALSE;
 	}
@@ -1306,7 +1336,11 @@ static GF_Err ttd_render_simple_text(GF_TTXTDec *ctx, const char *pck_data, u32 
 		if (ctx->static_text) ctx->txt_static_alloc = pck_size+1;
 		else return GF_OUT_OF_MEM;
 	}
-	memcpy(ctx->static_text, pck_data, pck_size);
+	if (pck_data)
+		memcpy(ctx->static_text, pck_data, pck_size);
+	else if (pck_size)
+		return GF_IO_ERR;
+
 	ctx->static_text[pck_size] = 0;
 	static_txts.text = ctx->static_text;
 	static_txts.len = pck_size;
@@ -1348,7 +1382,9 @@ static GF_Err ttd_process(GF_Filter *filter)
 	ctx->is_eos = GF_FALSE;
 
 	//object clock shall be valid
-	assert(ctx->odm->ck);
+	if (!ctx->odm || !ctx->odm->ck)
+		return GF_OK;
+
 	if (pck) {
 		s64 delay;
 		cts = gf_filter_pck_get_cts( pck );
@@ -1422,6 +1458,7 @@ static GF_Err ttd_process(GF_Filter *filter)
 		txt = gf_isom_parse_text_sample(ctx->bs_r);
 		if (!txt) return GF_NON_COMPLIANT_BITSTREAM;
 		GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[TTXTDec] Applying new sample - duration %d text \"%s\"\n", sample_duration, txt->text ? txt->text : ""));
+
 		ttd_apply_sample(ctx, txt, sample_index, is_utf_16, sample_duration);
 		gf_isom_delete_text_sample(txt);
 
@@ -1430,7 +1467,7 @@ static GF_Err ttd_process(GF_Filter *filter)
 			break;
 		} else {
 			//tx3g mode, single sample per AU
-			assert(gf_bs_available(ctx->bs_r)==0);
+			gf_assert(gf_bs_available(ctx->bs_r)==0);
 			break;
 		}
 	}
@@ -1484,7 +1521,7 @@ GF_FilterRegister TTXTDecRegister = {
 	.name = "ttxtdec",
 	GF_FS_SET_DESCRIPTION("TTXT/TX3G decoder")
 	GF_FS_SET_HELP("This filter decodes TTXT/TX3G streams into a BIFS scene graph of the compositor filter.\n"
-		"The TTXT documentation is available at https://wiki.gpac.io/TTXT-Format-Documentation\n"
+		"The TTXT documentation is available at https://wiki.gpac.io/xmlformats/TTXT-Format-Documentation\n"
 		"\n"
 		"In stand-alone rendering (no associated video), the filter will use:\n"
 		"- `Width` and `Height` properties of input pid if any\n"
@@ -1501,18 +1538,16 @@ GF_FilterRegister TTXTDecRegister = {
 	.process = ttd_process,
 	.configure_pid = ttd_configure_pid,
 	.process_event = ttd_process_event,
+	.hint_class_type = GF_FS_CLASS_DECODER
 };
 
 #endif
 
 const GF_FilterRegister *ttxtdec_register(GF_FilterSession *session)
 {
-#if !defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_ISOM)
+#if !defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_ISOM) && !defined(GPAC_DISABLE_COMPOSITOR)
 	return &TTXTDecRegister;
 #else
 	return NULL;
 #endif
 }
-
-
-

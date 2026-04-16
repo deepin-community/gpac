@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / Media Tools sub-project
@@ -126,11 +126,11 @@ static void cryptinfo_node_start(void *sax_cbck, const char *node_name, const ch
 				GF_Err e;
 				has_key = GF_TRUE;
 				e = gf_bin128_parse(att->value, tkc->keys[0].key );
-                if (e != GF_OK) {
-                    GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[CENC] Cannnot parse key value in CrypTrack\n"));
+				if (e != GF_OK) {
+					GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[CENC] Cannnot parse key value in CrypTrack\n"));
 					info->last_parse_error = GF_BAD_PARAM;
-                    return;
-                }
+					return;
+				}
 			}
 			else if (!stricmp(att->name, "salt")) {
 				u32 len, j;
@@ -174,8 +174,12 @@ static void cryptinfo_node_start(void *sax_cbck, const char *node_name, const ch
 				}
 				else if (!strnicmp(att->value, "ForceClear", 10)) {
 					char *sep = strchr(att->value, '=');
-					if (sep) tkc->sel_enc_range = atoi(sep+1);
 					tkc->sel_enc_type = GF_CRYPT_SELENC_CLEAR_FORCED;
+					if (sep) {
+						tkc->sel_enc_range = atoi(sep+1);
+						//if set to 0, move to no selective encryption
+						if (!tkc->sel_enc_range) tkc->sel_enc_type = GF_CRYPT_SELENC_NONE;
+					}
 				}
 				else if (!stricmp(att->value, "None")) {
 				} else {
@@ -294,12 +298,16 @@ static void cryptinfo_node_start(void *sax_cbck, const char *node_name, const ch
 			else if (!stricmp(att->name, "clear_bytes")) {
 				tkc->clear_bytes = atoi(att->value);
 			}
+			else if (!stricmp(att->name, "byte_offset")) {
+				tkc->crypt_byte_offset = atoi(att->value);
+			}
 			else if (!stricmp(att->name, "constant_IV_size")
 				|| (!stricmp(att->name, "IV_size") && (tkc->scheme_type == GF_CRYPT_TYPE_CBCS))
 			) {
 				tkc->keys[0].constant_IV_size = atoi(att->value);
 				if ((tkc->keys[0].constant_IV_size != 8) && (tkc->keys[0].constant_IV_size != 16)) {
 					GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[CENC] Constant IV size %d is not 8 or 16\n", att->value));
+					info->last_parse_error = GF_BAD_PARAM;
 				}
 			}
 			else if (!stricmp(att->name, "constant_IV")
@@ -321,6 +329,14 @@ static void cryptinfo_node_start(void *sax_cbck, const char *node_name, const ch
 			}
 			else if (!stricmp(att->name, "encryptSliceHeader")) {
 				tkc->allow_encrypted_slice_header = !strcmp(att->value, "yes") ? GF_TRUE : GF_FALSE;
+			}
+			else if (!stricmp(att->name, "encryptNonVCLs")) {
+				if (!strcmp(att->value, "yes"))
+					tkc->allow_encrypted_nonVCLs = GF_CRYPT_NONVCL_CLEAR_NONE;
+				else if (!strcmp(att->value, "no"))
+					tkc->allow_encrypted_nonVCLs = GF_CRYPT_NONVCL_CLEAR_ALL;
+				else
+					tkc->allow_encrypted_nonVCLs = GF_CRYPT_NONVCL_CLEAR_SEI_AUD;
 			}
 			else if (!stricmp(att->name, "blockAlign")) {
 				if (!strcmp(att->value, "disable")) tkc->block_align = 1;
@@ -433,23 +449,27 @@ static void cryptinfo_node_start(void *sax_cbck, const char *node_name, const ch
 
 			if (!stricmp(att->name, "KID")) {
 				GF_Err e = gf_bin128_parse(att->value, tkc->keys[tkc->nb_keys].KID);
-                if (e != GF_OK) {
-                    GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[CENC] Cannnot parse KID\n"));
-                    return;
-                }
+				if (e != GF_OK) {
+					GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[CENC] Cannnot parse KID\n"));
+					info->last_parse_error = GF_BAD_PARAM;
+					return;
+				}
 			}
 			else if (!stricmp(att->name, "value")) {
 				GF_Err e = gf_bin128_parse(att->value, tkc->keys[tkc->nb_keys].key);
-                if (e != GF_OK) {
-                    GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[CENC] Cannnot parse key value\n"));
-                    return;
-                }
+				if (e != GF_OK) {
+					GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[CENC] Cannnot parse key value\n"));
+					info->last_parse_error = GF_BAD_PARAM;
+					return;
+				}
 			}
 			else if (!stricmp(att->name, "hlsInfo")) {
 				if (!strstr(att->value, "URI=\"")) {
-                    GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[CENC] Missing URI in HLS info %s\n", att->value));
-                    return;
+					GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[CENC] Missing URI in HLS info %s\n", att->value));
+					info->last_parse_error = GF_BAD_PARAM;
+					return;
 				}
+				if (tkc->keys[tkc->nb_keys].hls_info) gf_free(tkc->keys[tkc->nb_keys].hls_info);
 				tkc->keys[tkc->nb_keys].hls_info = gf_strdup(att->value);
 			}
 			else if (!stricmp(att->name, "IV_size")) {
@@ -470,6 +490,19 @@ static void cryptinfo_node_start(void *sax_cbck, const char *node_name, const ch
 					const_IV_size = (u8) strlen(sKey) / 2;
 					kas_civ = GF_TRUE;
 				}
+			}
+			else if (!stricmp(att->name, "rep")) {
+				if (tkc->keys[tkc->nb_keys].repID) gf_free(tkc->keys[tkc->nb_keys].repID);
+				tkc->keys[tkc->nb_keys].repID = gf_strdup(att->value);
+			}
+			else if (!stricmp(att->name, "period")) {
+				if (tkc->keys[tkc->nb_keys].periodID) gf_free(tkc->keys[tkc->nb_keys].periodID);
+				tkc->keys[tkc->nb_keys].periodID = gf_strdup(att->value);
+			}
+			else if (!stricmp(att->name, "as")) {
+				tkc->keys[tkc->nb_keys].ASID = atoi(att->value);
+			} else {
+				GF_LOG(GF_LOG_WARNING, GF_LOG_PARSER, ("[CENC] unrecognized attribute %s for `key`, ignoring\n", att->name));
 			}
 		}
 		tkc->keys[tkc->nb_keys].IV_size = IV_size;
@@ -514,6 +547,10 @@ void gf_crypt_info_del(GF_CryptInfo *info)
 		for (i=0; i<tci->nb_keys; i++) {
 			if (tci->keys[i].hls_info)
 				gf_free(tci->keys[i].hls_info);
+			if (tci->keys[i].repID)
+				gf_free(tci->keys[i].repID);
+			if (tci->keys[i].periodID)
+				gf_free(tci->keys[i].periodID);
 		}
 		if (tci->keys) gf_free(tci->keys);
 		if (tci->metadata) gf_free(tci->metadata);
@@ -558,6 +595,8 @@ GF_CryptInfo *gf_crypt_info_load(const char *file, GF_Err *out_err)
 	return info;
 }
 
+#ifndef GPAC_DISABLE_ISOM
+
 extern char gf_prog_lf;
 
 static Bool on_decrypt_event(void *_udta, GF_Event *evt)
@@ -596,6 +635,8 @@ static GF_Err gf_decrypt_file_ex(GF_ISOFile *mp4, const char *drm_file, const ch
 		return GF_OUT_OF_MEM;
 	}
 
+	//we use implicit mode, don't set any filter ID
+
 	sprintf(an_arg, "mp4dmx:mov=%p", mp4);
 	gf_dynstrcat(&szArgs, an_arg, NULL);
 	if (fragment_name) {
@@ -612,7 +653,7 @@ static GF_Err gf_decrypt_file_ex(GF_ISOFile *mp4, const char *drm_file, const ch
 		return e;
 	}
 
-	gf_dynstrcat(&szArgs, "cdcrypt:FID=1", NULL);
+	gf_dynstrcat(&szArgs, "cdcrypt", NULL);
 	if (drm_file) {
 		gf_dynstrcat(&szArgs, ":cfile=", NULL);
 		gf_dynstrcat(&szArgs, drm_file, NULL);
@@ -626,7 +667,7 @@ static GF_Err gf_decrypt_file_ex(GF_ISOFile *mp4, const char *drm_file, const ch
 		return e;
 	}
 
-	gf_dynstrcat(&szArgs, "SID=1", NULL);
+	gf_dynstrcat(&szArgs, "xps_inband=auto", NULL);
 	if (fragment_name) {
 		gf_dynstrcat(&szArgs, ":sseg:noinit:store=frag:refrag:cdur=1000000000", NULL);
 	} else {
@@ -637,8 +678,7 @@ static GF_Err gf_decrypt_file_ex(GF_ISOFile *mp4, const char *drm_file, const ch
 			gf_dynstrcat(&szArgs, ":store=flat", NULL);
 		}
 	}
-	gf_dynstrcat(&szArgs, ":xps_inband=auto", NULL);
-	
+
 	if (gf_isom_has_keep_utc_times(mp4))
 		gf_dynstrcat(&szArgs, ":keep_utc", NULL);
 
@@ -718,7 +758,7 @@ static GF_Err gf_crypt_file_ex(GF_ISOFile *mp4, const char *drm_file, const char
 	char an_arg[100];
 	char *arg_dst=NULL;
 	u32 progress = (u32) -1;
-	GF_Filter *src, *dst, *crypt;
+	GF_Filter *src, *dst, *cryptf;
 	GF_FilterSession *fsess;
 	GF_Err e = GF_OK;
 
@@ -747,12 +787,12 @@ static GF_Err gf_crypt_file_ex(GF_ISOFile *mp4, const char *drm_file, const char
 
 	gf_dynstrcat(&szArgs, "cecrypt:FID=1:cfile=", NULL);
 	gf_dynstrcat(&szArgs, drm_file, NULL);
-	crypt = gf_fs_load_filter(fsess, szArgs, &e);
+	cryptf = gf_fs_load_filter(fsess, szArgs, &e);
 
 	gf_free(szArgs);
 	szArgs = NULL;
 
-	if (!crypt) {
+	if (!cryptf) {
 		gf_fs_del(fsess);
 		GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[Encrypter] Cannot load encryptor: %s\n", gf_error_to_string(e) ));
 		return e;
@@ -828,5 +868,8 @@ GF_Err gf_crypt_file(GF_ISOFile *mp4, const char *drm_file, const char *dst_file
 	return gf_crypt_file_ex(mp4, drm_file, dst_file, interleave_time, NULL, fs_dump_flags);
 
 }
-#endif /* !defined(GPAC_DISABLE_ISOM_WRITE)*/
+#endif //GPAC_DISABLE_ISOM
+
+
+#endif /* !defined(GPAC_DISABLE_CRYPTO)*/
 

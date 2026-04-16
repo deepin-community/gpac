@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / MP3 reframer filter
@@ -27,7 +27,7 @@
 #include <gpac/constants.h>
 #include <gpac/filters.h>
 
-#ifndef GPAC_DISABLE_AV_PARSERS
+#if !defined(GPAC_DISABLE_AV_PARSERS) && !defined(GPAC_DISABLE_RFMP3)
 
 typedef struct
 {
@@ -110,6 +110,10 @@ GF_Err mp3_dmx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remov
 		ctx->opid = gf_filter_pid_new(filter);
 		gf_filter_pid_copy_properties(ctx->opid, ctx->ipid);
 		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_UNFRAMED, NULL);
+		p = gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_STREAM_TYPE);
+		if (!p || (p->value.uint==GF_STREAM_FILE)) {
+			gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_STREAM_TYPE, &PROP_UINT(GF_STREAM_AUDIO));
+		}
 	}
 	if (ctx->timescale) ctx->copy_props = GF_TRUE;
 	return GF_OK;
@@ -261,14 +265,16 @@ void id3dmx_flush(GF_Filter *filter, u8 *id3_buf, u32 id3_buf_size, GF_FilterPid
 			break;
 		}
 
-		if (buf_alloc<=fsize) {
-			_buf = gf_realloc(_buf, fsize+3);
-			buf_alloc = fsize+3;
+		if (buf_alloc <= fsize+3) {
+			_buf = gf_realloc(_buf, fsize+4);
+			buf_alloc = fsize+4;
 		}
 		//read into _buf+1 so that buf+1 is always %2 mem aligned as it can be loaded as unsigned short
+		// having 3 nulls allows for correct 2-char-wide null terminating string not matter the alignment
 		gf_bs_read_data(bs, _buf+1, fsize);
 		_buf[fsize+1]=0;
 		_buf[fsize+2]=0;
+		_buf[fsize+3]=0;
 		buf = _buf+1;
 
 		tag_idx = gf_itags_find_by_id3tag(ftag);
@@ -289,34 +295,38 @@ void id3dmx_flush(GF_Filter *filter, u8 *id3_buf, u32 id3_buf_size, GF_FilterPid
 			//then mime
 			sep = memchr(buf+1, 0, fsize-1);
 			/*pic_type = sep[1];*/
-			sep_desc = memchr(sep+2, 0, fsize-1);
+			sep_desc = sep ? memchr(sep+2, 0, fsize-1) : NULL;
 
 			if (sep_desc) {
 				GF_Err e;
 				pic_size = (u32) ( (sep_desc + 1) - buf);
-				pic_size = fsize - pic_size;
+				if (fsize>pic_size) {
+					pic_size = fsize - pic_size;
 
-				if (video_pid_p) {
-					e = gf_filter_pid_raw_new(filter, NULL, NULL, buf+1, NULL, sep_desc+1, pic_size, GF_FALSE, video_pid_p);
-					if (e) {
-						GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[MP3Dmx] error setting up video pid for cover art: %s\n", gf_error_to_string(e) ));
-					}
-					if (*video_pid_p) {
-						u8 *out_buffer;
-						GF_FilterPacket *dst_pck;
-						gf_filter_pid_set_name(*video_pid_p, "CoverArt");
-						gf_filter_pid_set_property(*video_pid_p, GF_PROP_PID_COVER_ART, &PROP_BOOL(GF_TRUE));
-						dst_pck = gf_filter_pck_new_alloc(*video_pid_p, pic_size, &out_buffer);
-						if (dst_pck) {
-							gf_filter_pck_set_framing(dst_pck, GF_TRUE, GF_TRUE);
-							memcpy(out_buffer, sep_desc+1, pic_size);
-							gf_filter_pck_send(dst_pck);
+					if (video_pid_p) {
+						e = gf_filter_pid_raw_new(filter, NULL, NULL, buf+1, NULL, sep_desc+1, pic_size, GF_FALSE, video_pid_p);
+						if (e) {
+							GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[MP3Dmx] error setting up video pid for cover art: %s\n", gf_error_to_string(e) ));
 						}
+						if (*video_pid_p) {
+							u8 *out_buffer;
+							GF_FilterPacket *dst_pck;
+							gf_filter_pid_set_name(*video_pid_p, "CoverArt");
+							gf_filter_pid_set_property(*video_pid_p, GF_PROP_PID_COVER_ART, &PROP_BOOL(GF_TRUE));
+							dst_pck = gf_filter_pck_new_alloc(*video_pid_p, pic_size, &out_buffer);
+							if (dst_pck) {
+								gf_filter_pck_set_framing(dst_pck, GF_TRUE, GF_TRUE);
+								memcpy(out_buffer, sep_desc+1, pic_size);
+								gf_filter_pck_send(dst_pck);
+							}
 
-						gf_filter_pid_set_eos(*video_pid_p);
+							gf_filter_pid_set_eos(*video_pid_p);
+						}
+					} else {
+						gf_filter_pid_set_property(audio_pid, GF_PROP_PID_COVER_ART, &PROP_DATA(sep_desc+1, pic_size) );
 					}
 				} else {
-					gf_filter_pid_set_property(audio_pid, GF_PROP_PID_COVER_ART, &PROP_DATA(sep_desc+1, pic_size) );
+					GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[MP3Dmx] Corrupted cover art, ignoring\n"));
 				}
 			}
 		} else if (tag_idx>=0) {
@@ -371,7 +381,10 @@ static void mp3_dmx_check_pid(GF_Filter *filter, GF_MP3DmxCtx *ctx)
 	ctx->copy_props = GF_FALSE;
 	//copy properties at init or reconfig
 	gf_filter_pid_copy_properties(ctx->opid, ctx->ipid);
-	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_STREAM_TYPE, & PROP_UINT( GF_STREAM_AUDIO));
+	const GF_PropertyValue *p = gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_STREAM_TYPE);
+	if (!p || (p->value.uint==GF_STREAM_FILE)) {
+		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_STREAM_TYPE, &PROP_UINT(GF_STREAM_AUDIO));
+	}
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_UNFRAMED, NULL );
 	if (ctx->is_file && ctx->index) {
 		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_PLAYBACK_MODE, & PROP_UINT(GF_PLAYBACK_MODE_FASTFORWARD) );
@@ -497,11 +510,15 @@ GF_Err mp3_dmx_process(GF_Filter *filter)
 {
 	GF_MP3DmxCtx *ctx = gf_filter_get_udta(filter);
 	GF_FilterPacket *pck, *dst_pck;
-	Bool is_eos=GF_FALSE;
+	Bool is_eos;
 	u8 *data, *output;
 	u8 *start;
 	u32 pck_size, remain, prev_pck_size;
-	u64 cts = GF_FILTER_NO_TS;
+	u64 cts;
+
+restart:
+	cts = GF_FILTER_NO_TS;
+	is_eos = GF_FALSE;
 
 	//always reparse duration
 	if (!ctx->duration.num)
@@ -575,7 +592,7 @@ GF_Err mp3_dmx_process(GF_Filter *filter)
 	while (remain) {
 		u8 *sync;
 		Bool skip_id3v1=GF_FALSE;
-		u32 bytes_skipped=0, size, nb_samp, bytes_to_drop=0;;
+		u32 bytes_skipped=0, size, nb_samp, bytes_to_drop=0;
 
 		if (!ctx->tag_size && (remain>3)) {
 
@@ -626,7 +643,7 @@ GF_Err mp3_dmx_process(GF_Filter *filter)
 
 
 		//ready to send packet
-		if (size + 1 < remain-bytes_skipped) {
+		if (size + 3 < remain-bytes_skipped) {
 			//make sure we are sync!
 			if (sync[size] !=0xFF) {
 				if ((sync[size]=='T') && (sync[size+1]=='A') && (sync[size+2]=='G')) {
@@ -677,7 +694,10 @@ GF_Err mp3_dmx_process(GF_Filter *filter)
 			memcpy(output, sync, size);
 
 			gf_filter_pck_set_cts(dst_pck, ctx->cts);
-			gf_filter_pck_set_duration(dst_pck, nb_samp);
+			if (ctx->timescale && (ctx->timescale!=ctx->sr))
+				gf_filter_pck_set_duration(dst_pck, (u32) gf_timestamp_rescale(nb_samp, ctx->sr, ctx->timescale) );
+			else
+				gf_filter_pck_set_duration(dst_pck, nb_samp);
 			gf_filter_pck_set_sap(dst_pck, GF_FILTER_SAP_1);
 			gf_filter_pck_set_framing(dst_pck, GF_TRUE, GF_TRUE);
 
@@ -724,10 +744,15 @@ drop_byte:
 
 	if (!pck) {
 		ctx->mp3_buffer_size = 0;
-		return mp3_dmx_process(filter);
+		//avoid recursive call
+		goto restart;
 	} else {
 		if (remain) {
 			memmove(ctx->mp3_buffer, start, remain);
+		}
+		if (!ctx->src_pck) {
+			ctx->src_pck = pck;
+			gf_filter_pck_ref_props(&ctx->src_pck);
 		}
 		ctx->mp3_buffer_size = remain;
 		gf_filter_pid_drop_packet(ctx->ipid);
@@ -896,18 +921,18 @@ GF_FilterRegister MP3DmxRegister = {
 	.configure_pid = mp3_dmx_configure_pid,
 	.process = mp3_dmx_process,
 	.probe_data = mp3_dmx_probe_data,
-	.process_event = mp3_dmx_process_event
+	.process_event = mp3_dmx_process_event,
+	.hint_class_type = GF_FS_CLASS_FRAMING
 };
 
 
-const GF_FilterRegister *mp3_dmx_register(GF_FilterSession *session)
+const GF_FilterRegister *rfmp3_register(GF_FilterSession *session)
 {
 	return &MP3DmxRegister;
 }
-
 #else
-const GF_FilterRegister *mp3_dmx_register(GF_FilterSession *session)
+const GF_FilterRegister *rfmp3_register(GF_FilterSession *session)
 {
 	return NULL;
 }
-#endif // GPAC_DISABLE_AV_PARSERS
+#endif // #if !defined(GPAC_DISABLE_AV_PARSERS) && !defined(GPAC_DISABLE_RFMP3)

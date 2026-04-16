@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2017-2022
+ *			Copyright (c) Telecom ParisTech 2017-2026
  *					All rights reserved
  *
  *  This file is part of GPAC / filters sub-project
@@ -29,18 +29,18 @@
 #ifndef GPAC_DISABLE_3D
 #include <gpac/modules/video_out.h>
 #endif
-#include <gpac/module.h>
 
 //#define CHECK_TASK_LIST_INTEGRITY
 
-#ifndef GPAC_DISABLE_PLAYER
+#ifndef GPAC_DISABLE_FONTS
 struct _gf_ft_mgr *gf_font_manager_new();
 void gf_font_manager_del(struct _gf_ft_mgr *fm);
 #endif
 
-
 static GFINLINE void gf_fs_sema_io(GF_FilterSession *fsess, Bool notify, Bool main)
 {
+	//we don't use sema on emscripten, we always give control back to main caller or pthread
+#ifndef GPAC_CONFIG_EMSCRIPTEN
 	GF_Semaphore *sem = main ? fsess->semaphore_main : fsess->semaphore_other;
 	if (sem) {
 		if (notify) {
@@ -52,13 +52,13 @@ static GFINLINE void gf_fs_sema_io(GF_FilterSession *fsess, Bool notify, Bool ma
 			u32 nb_tasks;
 			//if not main and no tasks in main list, this could be the last task to process.
 			//if main thread is sleeping force a wake to take further actions (only the main thread decides the exit)
-			//this also ensures that tha main thread will process tasks from secondary task lists if no
+			//this also ensures that the main thread will process tasks from secondary task lists if no
 			//dedicated main thread tasks are present (eg no GL filters)
 			if (!main && fsess->in_main_sem_wait && !gf_fq_count(fsess->main_thread_tasks)) {
 				gf_fs_sema_io(fsess, GF_TRUE, GF_TRUE);
 			}
 			nb_tasks = 1;
-			//no active threads, count number of tasks. If no posted tasks we are likely at the end of the session, don't block, rather use a sem_wait 
+			//no active threads, count number of tasks. If no posted tasks we are likely at the end of the session, don't block, rather use a sem_wait
 			if (!fsess->active_threads)
 			 	nb_tasks = gf_fq_count(fsess->main_thread_tasks) + gf_fq_count(fsess->tasks);
 
@@ -86,56 +86,42 @@ static GFINLINE void gf_fs_sema_io(GF_FilterSession *fsess, Bool notify, Bool ma
 			}
 		}
 	}
+#endif // GPAC_CONFIG_EMSCRIPTEN
 }
+
 
 GF_EXPORT
 void gf_fs_add_filter_register(GF_FilterSession *fsess, const GF_FilterRegister *freg)
 {
-	if (!freg || !fsess) return;
+	if (!freg) return;
+	if (!fsess) {
+		if (freg->register_free) freg->register_free(fsess, (GF_FilterRegister *)freg);
+		return;
+	}
 
 	if (!freg->name) {
 		GF_LOG(GF_LOG_ERROR, GF_LOG_FILTER, ("Filter missing name - ignoring\n"));
+		if (freg->register_free) freg->register_free(fsess, (GF_FilterRegister *)freg);
 		return;
 	}
 #if 0
 	if (strchr(freg->name, fsess->sep_args)	) {
 		GF_LOG(GF_LOG_ERROR, GF_LOG_FILTER, ("Filter name cannot contain argument separator %c - ignoring\n", fsess->sep_args));
+		if (freg->register_free) freg->register_free(fsess, (GF_FilterRegister *)freg);
 		return;
 	}
 	if (strchr(freg->name, fsess->sep_name)) {
 		GF_LOG(GF_LOG_ERROR, GF_LOG_FILTER, ("Filter name cannot contain argument value separator %c - ignoring\n", fsess->sep_name));
+		if (freg->register_free) freg->register_free(fsess, (GF_FilterRegister *)freg);
 		return;
 	}
 #endif
 	if (!freg->process) {
 		GF_LOG(GF_LOG_ERROR, GF_LOG_FILTER, ("Filter %s missing process function - ignoring\n", freg->name));
+		if (freg->register_free) freg->register_free(fsess, (GF_FilterRegister *)freg);
 		return;
 	}
-	if (fsess->blacklist) {
-		Bool match = GF_FALSE;
-		const char *blacklist = fsess->blacklist;
-		Bool is_whitelist=GF_FALSE;
-		if (blacklist[0]=='-') {
-			blacklist++;
-			is_whitelist = GF_TRUE;
-		}
-		while (blacklist) {
-			char *fname = strstr(blacklist, freg->name);
-			if (!fname) break;
-			u32 len = (u32) strlen(freg->name);
-			if (!fname[len] || (fname[len] == fsess->sep_list)) {
-				match = GF_TRUE;
-				break;
-			}
-			blacklist = fname+len;
-		}
-		if (is_whitelist) match = !match;
 
-		if (match) {
-			if (freg->register_free) freg->register_free(fsess, (GF_FilterRegister *)freg);
-			return;
-		}
-	}
 	//except for meta filters, don't accept a filter with input caps but no output caps
 	//meta filters do follow the same rule, however when expanding them for help we may have weird cases
 	//where no config is set but inputs are listed to expose mime types or extensions (cf ffdmx)
@@ -157,8 +143,6 @@ void gf_fs_add_filter_register(GF_FilterSession *fsess, const GF_FilterRegister 
 	}
 }
 
-
-
 static Bool fs_default_event_proc(void *ptr, GF_Event *evt)
 {
 	GF_FilterSession *fs = (GF_FilterSession *)ptr;
@@ -176,23 +160,21 @@ static Bool fs_default_event_proc(void *ptr, GF_Event *evt)
 	}
 
 #ifdef GPAC_HAS_QJS
-	if (fs->on_evt_task && jsfs_on_event(fs, evt))
+	if (fs->jstasks && jsfs_on_event(fs, evt))
 		return GF_TRUE;
 #endif
 
 	if (evt->type==GF_EVENT_AUTHORIZATION) {
 #ifdef GPAC_HAS_QJS
-		if (fs->on_auth_task && jsfs_on_auth(fs, evt))
+		if (fs->jstasks && jsfs_on_auth(fs, evt))
 			return GF_TRUE;
 #endif
 
 		if (gf_sys_is_test_mode()) {
 			return GF_FALSE;
 		}
-		assert( evt->type == GF_EVENT_AUTHORIZATION);
-		assert( evt->auth.user);
-		assert( evt->auth.password);
-		assert( evt->auth.site_url);
+		if (!evt->auth.user || !evt->auth.password || !evt->auth.site_url)
+			return GF_FALSE;
 
 		fprintf(stderr, "**** Authorization required for site %s %s ****\n", evt->auth.site_url, evt->auth.secure ? "(secure)" : "- NOT SECURE");
 		fprintf(stderr, "login   : ");
@@ -218,20 +200,18 @@ static Bool fs_default_event_proc(void *ptr, GF_Event *evt)
 static Bool fs_check_locales(void *__self, const char *locales_parent_path, const char *rel_path, char *relocated_path, char *localized_rel_path);
 #endif
 
+#ifdef __EMSCRIPTEN_PTHREADS__
+#include <emscripten/threading.h>
+#endif
 
 GF_EXPORT
-GF_FilterSession *gf_fs_new(s32 nb_threads, GF_FilterSchedulerType sched_type, u32 flags, const char *blacklist)
+GF_FilterSession *gf_fs_new(s32 nb_threads, GF_FilterSchedulerType sched_type, GF_FilterSessionFlags flags, const char *blacklist)
 {
 	const char *opt;
 	Bool gf_sys_has_filter_global_args();
 	Bool gf_sys_has_filter_global_meta_args();
-
-	u32 i, count;
+	u32 i;
 	GF_FilterSession *fsess, *a_sess;
-
-	//safety check: all built-in properties shall have unique 4CCs
-	if ( ! gf_props_4cc_check_props())
-		return NULL;
 
 	GF_SAFEALLOC(fsess, GF_FilterSession);
 	if (!fsess) {
@@ -245,6 +225,17 @@ GF_FilterSession *gf_fs_new(s32 nb_threads, GF_FilterSchedulerType sched_type, u
 		flags |= GF_FS_FLAG_IMPLICIT_MODE;
 
 	fsess->flags = flags;
+
+	if (gf_opts_get_bool("core", "no-mx"))
+		nb_threads=0;
+
+#ifdef __EMSCRIPTEN_PTHREADS__
+	//detect if we run as a worker
+	if (!emscripten_is_main_runtime_thread()) {
+		fsess->is_worker = GF_TRUE;
+		GF_LOG(GF_LOG_INFO, GF_LOG_FILTER, ("Session running in worker mode\n"));
+	}
+#endif
 
 	fsess->filters = gf_list_new();
 	fsess->main_th.fsess = fsess;
@@ -295,12 +286,17 @@ GF_FilterSession *gf_fs_new(s32 nb_threads, GF_FilterSchedulerType sched_type, u
 	fsess->ui_event_proc = fs_default_event_proc;
 	fsess->ui_opaque = fsess;
 
-	if (flags & GF_FS_FLAG_NON_BLOCKING)
+	if (flags & GF_FS_FLAG_NON_BLOCKING) {
 		fsess->non_blocking = 1;
+		GF_LOG(GF_LOG_DEBUG, GF_LOG_FILTER, ("Creating session in non-blocking mode\n"));
+	} else {
+		GF_LOG(GF_LOG_DEBUG, GF_LOG_FILTER, ("Creating session in blocking mode\n"));
+	}
 
 	if (!fsess->semaphore_main)
 		nb_threads=0;
 
+#ifndef GPAC_DISABLE_THREADS
 	if (nb_threads) {
 		fsess->threads = gf_list_new();
 		if (!fsess->threads) {
@@ -311,7 +307,9 @@ GF_FilterSession *gf_fs_new(s32 nb_threads, GF_FilterSchedulerType sched_type, u
 			nb_threads=0;
 		}
 		fsess->use_locks = (sched_type==GF_FS_SCHEDULER_LOCK) ? GF_TRUE : GF_FALSE;
-	} else {
+	} else
+#endif
+	{
 #ifdef GPAC_MEMORY_TRACKING
 		extern int gf_mem_track_enabled;
 		fsess->check_allocs = gf_mem_track_enabled;
@@ -333,11 +331,6 @@ GF_FilterSession *gf_fs_new(s32 nb_threads, GF_FilterSchedulerType sched_type, u
 		fsess->pcks_refprops_reservoir = gf_fq_new(fsess->props_mx);
 	}
 
-
-#ifndef GPAC_DISABLE_REMOTERY
-	sprintf(fsess->main_th.rmt_name, "FSThread0");
-#endif
-
 	if (!fsess->filters || !fsess->tasks) {
 		GF_LOG(GF_LOG_ERROR, GF_LOG_FILTER, ("Failed to alloc media session\n"));
 		fsess->run_status = GF_OUT_OF_MEM;
@@ -350,14 +343,12 @@ GF_FilterSession *gf_fs_new(s32 nb_threads, GF_FilterSchedulerType sched_type, u
 		fsess->ui_mx = gf_mx_new("FilterSessionUIProc");
 	}
 
+#ifndef GPAC_DISABLE_THREADS
 	for (i=0; i<(u32) nb_threads; i++) {
 		char szName[30];
 		GF_SessionThread *sess_thread;
 		GF_SAFEALLOC(sess_thread, GF_SessionThread);
 		if (!sess_thread) continue;
-#ifndef GPAC_DISABLE_REMOTERY
-		sprintf(sess_thread->rmt_name, "FSThread%d", i+1);
-#endif
 		sprintf(szName, "gf_fs_th_%d", i+1);
 		sess_thread->th = gf_th_new(szName);
 		if (!sess_thread->th) {
@@ -367,23 +358,23 @@ GF_FilterSession *gf_fs_new(s32 nb_threads, GF_FilterSchedulerType sched_type, u
 		sess_thread->fsess = fsess;
 		gf_list_add(fsess->threads, sess_thread);
 	}
+#endif
 
 	gf_fs_set_separators(fsess, NULL);
 
 	fsess->registry = gf_list_new();
-	fsess->blacklist = blacklist;
+#ifdef GPAC_HAS_QJS
+	//keep copy of blacklist for JS
+	fsess->blacklist = blacklist ? gf_strdup(blacklist) : NULL;
+#else
+	fsess->blacklist = (char*)blacklist;
+#endif
 	a_sess = (flags & GF_FS_FLAG_LOAD_META) ? fsess : NULL;
 	gf_fs_reg_all(fsess, a_sess);
 
-	//load external modules
-	count = gf_modules_count();
-	for (i=0; i<count; i++) {
-		GF_FilterRegister *freg = (GF_FilterRegister *) gf_modules_load_filter(i, a_sess);
-		if (freg) {
-			gf_fs_add_filter_register(fsess, freg);
-		}
-	}
+#ifndef GPAC_HAS_QJS
 	fsess->blacklist = NULL;
+#endif
 
 	//todo - find a way to handle events without mutex ...
 	fsess->evt_mx = gf_mx_new("Event mutex");
@@ -406,6 +397,8 @@ GF_FilterSession *gf_fs_new(s32 nb_threads, GF_FilterSchedulerType sched_type, u
 	fsess->default_pid_buffer_max_units = gf_opts_get_int("core", "buffer-units");
 	fsess->max_resolve_chain_len = 6;
 	fsess->auto_inc_nums = gf_list_new();
+	if (gf_opts_get_bool("core", "check-props"))
+		fsess->check_props = GF_TRUE;
 
 	if (nb_threads)
 		fsess->links_mx = gf_mx_new("FilterRegistryGraph");
@@ -440,6 +433,8 @@ GF_FilterSession *gf_fs_new(s32 nb_threads, GF_FilterSchedulerType sched_type, u
 		}
 	}
 
+	gf_logs_thread_tag(fsess, GF_LOG_TAG_FILTERSESSION);
+
 #ifdef GF_FS_ENABLE_LOCALES
 	fsess->uri_relocators = gf_list_new();
 	fsess->locales.relocate_uri = fs_check_locales;
@@ -456,9 +451,10 @@ void gf_fs_push_arg(GF_FilterSession *session, const char *szArg, Bool was_found
 	if (session->flags & GF_FS_FLAG_NO_ARG_CHECK)
 		return;
 
-	//ignore any meta argument reported (found or not) that is not already present
+	//ignore any meta argument reported unfound that is not already present
 	//if sub_opt_name, we must create an entry
-	if (!sub_opt_name && (type==GF_ARGTYPE_META_REPORTING)) {
+	//if meta and found, remember the option was valid as it could get pushed by an inheritance chain
+	if (!sub_opt_name && (type==GF_ARGTYPE_META_REPORTING) && !was_found) {
 		create_if_not_found = GF_FALSE;
 	}
 	if (!session->parsed_args) session->parsed_args = gf_list_new();
@@ -509,7 +505,7 @@ void gf_fs_push_arg(GF_FilterSession *session, const char *szArg, Bool was_found
 		}
 		if (was_found)
 			ai->meta_state = 2;
-	} else if (was_found && !ai->meta_state) {
+	} else if (was_found && (!ai->meta_state || !meta_filter) ) {
 		ai->opt_found = 1;
 		//initial declaration from filter setup: meta args are declared as true by default
 		if (type==GF_ARGTYPE_LOCAL) {
@@ -517,13 +513,14 @@ void gf_fs_push_arg(GF_FilterSession *session, const char *szArg, Bool was_found
 			ai->meta_state = 1;
 			//meta option, mark as not found
 			if (meta_filter) ai->meta_state = 3;
+			else ai->meta_filter = NULL;
 		}
 	}
 }
 
 
 GF_EXPORT
-GF_FilterSession *gf_fs_new_defaults(u32 inflags)
+GF_FilterSession *gf_fs_new_defaults(GF_FilterSessionFlags inflags)
 {
 	GF_FilterSession *fsess;
 	GF_FilterSchedulerType sched_type = GF_FS_SCHEDULER_LOCK_FREE;
@@ -556,6 +553,15 @@ GF_FilterSession *gf_fs_new_defaults(u32 inflags)
 
 	if (inflags & GF_FS_FLAG_NO_IMPLICIT)
 		flags |= GF_FS_FLAG_NO_IMPLICIT;
+
+	if (inflags & GF_FS_FLAG_REQUIRE_SOURCE_ID)
+		flags |= GF_FS_FLAG_REQUIRE_SOURCE_ID;
+
+	if (inflags & GF_FS_FLAG_FORCE_DEFER_LINK)
+		flags |= GF_FS_FLAG_FORCE_DEFER_LINK;
+
+	if (inflags & GF_FS_FLAG_PREVENT_PLAY)
+		flags |= GF_FS_FLAG_PREVENT_PLAY;
 
 	if (gf_opts_get_bool("core", "dbg-edges"))
 		flags |= GF_FS_FLAG_PRINT_CONNECTIONS;
@@ -603,7 +609,7 @@ GF_EXPORT
 GF_Err gf_fs_set_separators(GF_FilterSession *session, const char *separator_set)
 {
 	if (!session) return GF_BAD_PARAM;
-	if (separator_set && (strlen(separator_set)<5)) return GF_BAD_PARAM;
+	if (separator_set && (strlen(separator_set)<6)) return GF_BAD_PARAM;
 
 	if (separator_set) {
 		session->sep_args = separator_set[0];
@@ -611,12 +617,14 @@ GF_Err gf_fs_set_separators(GF_FilterSession *session, const char *separator_set
 		session->sep_frag = separator_set[2];
 		session->sep_list = separator_set[3];
 		session->sep_neg = separator_set[4];
+		session->sep_link = separator_set[5];
 	} else {
 		session->sep_args = ':';
 		session->sep_name = '=';
 		session->sep_frag = '#';
 		session->sep_list = ',';
 		session->sep_neg = '!';
+		session->sep_link = '@';
 	}
 	return GF_OK;
 }
@@ -706,7 +714,7 @@ static void gf_task_del(void *p)
 GF_EXPORT
 void gf_fs_del(GF_FilterSession *fsess)
 {
-	assert(fsess);
+	gf_assert(fsess);
 
 	gf_fs_stop(fsess);
 	GF_LOG(GF_LOG_DEBUG, GF_LOG_FILTER, ("Session destroy begin\n"));
@@ -721,15 +729,15 @@ void gf_fs_del(GF_FilterSession *fsess)
 	}
 
 	//temporary until we don't introduce fsess_stop
-	assert(fsess->run_status != GF_OK);
+	gf_assert(fsess->run_status != GF_OK);
 	if (fsess->filters) {
 		u32 i, pass, count=gf_list_count(fsess->filters);
-		//first pass: disconnect all filters, since some may have references to property maps or packets 
+		//first pass: disconnect all filters, since some may have references to property maps or packets
 		for (i=0; i<count; i++) {
 			u32 j;
 			GF_Filter *filter = gf_list_get(fsess->filters, i);
 			filter->process_th_id = 0;
-			filter->scheduled_for_next_task = GF_TRUE;
+			filter->scheduled_for_next_task = GF_FILTER_SCHEDULED;
 
 			if (filter->detached_pid_inst) {
 				while (gf_list_count(filter->detached_pid_inst)) {
@@ -740,21 +748,15 @@ void gf_fs_del(GF_FilterSession *fsess)
 				filter->detached_pid_inst = NULL;
 			}
 
-			if (filter->postponed_packets) {
-				while (gf_list_count(filter->postponed_packets)) {
-					GF_FilterPacket *pck = gf_list_pop_front(filter->postponed_packets);
-					gf_filter_packet_destroy(pck);
-				}
-				gf_list_del(filter->postponed_packets);
-				filter->postponed_packets = NULL;
-			}
+			gf_filter_reset_pending_packets(filter);
+
 			gf_mx_p(filter->tasks_mx);
 			for (j=0; j<filter->num_input_pids; j++) {
 				GF_FilterPidInst *pidi = gf_list_get(filter->input_pids, j);
 				gf_filter_pid_inst_reset(pidi);
 			}
 			gf_mx_v(filter->tasks_mx);
-			filter->scheduled_for_next_task = GF_FALSE;
+			filter->scheduled_for_next_task = GF_FILTER_NOT_SCHEDULED;
 		}
 		//second pass, finalize all
 		for (pass=0; pass<2; pass++) {
@@ -768,7 +770,10 @@ void gf_fs_del(GF_FilterSession *fsess)
 				if (filter->freg->finalize && !filter->finalized) {
 					filter->finalized = GF_TRUE;
 					FSESS_CHECK_THREAD(filter)
+
+					gf_logs_thread_tag(filter, GF_LOG_TAG_FILTER);
 					filter->freg->finalize(filter);
+					gf_logs_thread_tag_del(filter);
 				}
 			}
 			if (!has_scripts) break;
@@ -785,8 +790,11 @@ void gf_fs_del(GF_FilterSession *fsess)
 
 	gf_fs_unload_script(fsess, NULL);
 
+#ifdef GPAC_USE_DOWNLOADER
 	if (fsess->download_manager) gf_dm_del(fsess->download_manager);
-#ifndef GPAC_DISABLE_PLAYER
+#endif
+
+#ifndef GPAC_DISABLE_FONTS
 	if (fsess->font_manager) gf_font_manager_del(fsess->font_manager);
 #endif
 
@@ -804,6 +812,7 @@ void gf_fs_del(GF_FilterSession *fsess)
 	if (fsess->tasks_reservoir)
 		gf_fq_del(fsess->tasks_reservoir, gf_void_del);
 
+#ifndef GPAC_DISABLE_THREADS
 	if (fsess->threads) {
 		if (fsess->main_thread_tasks)
 			gf_fq_del(fsess->main_thread_tasks, gf_task_del);
@@ -815,6 +824,7 @@ void gf_fs_del(GF_FilterSession *fsess)
 		}
 		gf_list_del(fsess->threads);
 	}
+#endif
 
 	if (fsess->prop_maps_reservoir)
 		gf_fq_del(fsess->prop_maps_reservoir, gf_propmap_del);
@@ -880,7 +890,9 @@ void gf_fs_del(GF_FilterSession *fsess)
 	if (fsess->uri_relocators) gf_list_del(fsess->uri_relocators);
 	if (fsess->locales.szAbsRelocatedPath) gf_free(fsess->locales.szAbsRelocatedPath);
 #endif
+	if (fsess->blacklist) gf_free(fsess->blacklist);
 
+	gf_logs_thread_untag(fsess);
 	gf_free(fsess);
 	GF_LOG(GF_LOG_DEBUG, GF_LOG_FILTER, ("Session destroyed\n"));
 }
@@ -898,10 +910,9 @@ const GF_FilterRegister * gf_fs_get_filter_register(GF_FilterSession *fsess, u32
 }
 
 #ifdef CHECK_TASK_LIST_INTEGRITY
-static Bool check_task_list_enum(void *udta, void *item)
+static void check_task_list_enum(void *udta, void *item)
 {
-	assert(udta != item);
-	return GF_FALSE;
+	gf_fatal_assert(udta != item);
 }
 static void check_task_list(GF_FilterQueue *fq, GF_FSTask *task)
 {
@@ -911,19 +922,21 @@ static void check_task_list(GF_FilterQueue *fq, GF_FSTask *task)
 }
 #endif
 
-void gf_fs_post_task_ex(GF_FilterSession *fsess, gf_fs_task_callback task_fun, GF_Filter *filter, GF_FilterPid *pid, const char *log_name, void *udta, Bool is_configure, Bool force_main_thread, Bool force_direct_call, u32 class_type)
+void gf_fs_post_task_ex(GF_FilterSession *fsess, gf_fs_task_callback task_fun, GF_Filter *filter, GF_FilterPid *pid, const char *log_name, void *udta, Bool is_configure, Bool force_main_thread, Bool force_direct_call, GF_TaskClassType class_type, u32 delay_ms)
 {
 	GF_FSTask *task;
 	Bool notified = GF_FALSE;
 
-	assert(fsess);
-	assert(task_fun);
+	gf_assert(fsess);
+	gf_assert(task_fun);
 
 	//only flatten calls if in main thread (we still have some broken filters using threading that could trigger tasks)
 	if ((force_direct_call || fsess->direct_mode)
 		&& (!filter || !filter->in_process)
 		&& fsess->tasks_in_process
 		&& (gf_th_id()==fsess->main_th.th_id)
+		&& (class_type!=TASK_TYPE_EVENT)
+		&& !delay_ms
 	) {
 		GF_FSTask atask;
 		u64 task_time = gf_sys_clock_high_res();
@@ -934,24 +947,26 @@ void gf_fs_post_task_ex(GF_FilterSession *fsess, gf_fs_task_callback task_fun, G
 		atask.log_name = log_name;
 		atask.udta = udta;
 		GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread 0 task#%d %p executing Filter %s::%s (%d tasks pending)\n", fsess->main_th.nb_tasks, &atask, filter ? filter->name : "none", log_name, fsess->tasks_pending));
-		if (filter)
-			filter->scheduled_for_next_task = GF_TRUE;
+		if (filter && !filter->scheduled_for_next_task)
+			filter->scheduled_for_next_task = GF_FILTER_DIRECT_SCHEDULED;
 		task_fun(&atask);
 		filter = atask.filter;
 		if (filter) {
 			filter->time_process += gf_sys_clock_high_res() - task_time;
-			filter->scheduled_for_next_task = GF_FALSE;
+			if (filter->scheduled_for_next_task == GF_FILTER_DIRECT_SCHEDULED)
+				filter->scheduled_for_next_task = GF_FILTER_NOT_SCHEDULED;
 			filter->nb_tasks_done++;
 		}
-		if (!atask.requeue_request)
+		if (!atask.requeue_request) {
 			return;
+		}
 		//asked to requeue the task, post it
 	}
 
 	/*this was a gf_filter_process_task request but direct call could not be done or requeue is requested.
 	process_task_queued was incremented by caller without checking for existing process task
 		- If the task was not treated, dec / inc will give the same state, undo process_task_queued increment
-		- If the task was requeued, dec will undo the increment done when requeing the task in gf_filter_check_pending_tasks
+		- If the task was requeued, dec will undo the increment done when requeuing the task in gf_filter_check_pending_tasks
 
 	In both cases, inc will redo the same logic as in gf_filter_post_process_task_internal, not creating task if gf_filter_process_task is
 	already scheduled for the filter
@@ -959,21 +974,21 @@ void gf_fs_post_task_ex(GF_FilterSession *fsess, gf_fs_task_callback task_fun, G
 	We must use safe_int_dec/safe_int_inc here for multi thread cases - cf issue #1778
 	*/
 	if (force_direct_call) {
-		assert(filter);
+		gf_assert(filter);
 		safe_int_dec(&filter->process_task_queued);
 		if (safe_int_inc(&filter->process_task_queued) > 1) {
 			return;
 		}
 	}
 	task = gf_fq_pop(fsess->tasks_reservoir);
-
 	if (!task) {
-		GF_SAFEALLOC(task, GF_FSTask);
+		task = gf_malloc(sizeof(GF_FSTask));
 		if (!task) {
 			GF_LOG(GF_LOG_ERROR, GF_LOG_SCHEDULER, ("No more memory to post new task\n"));
 			return;
 		}
 	}
+	memset(task, 0, sizeof(GF_FSTask));
 	task->filter = filter;
 	task->pid = pid;
 	task->run_task = task_fun;
@@ -990,7 +1005,7 @@ void gf_fs_post_task_ex(GF_FilterSession *fsess, gf_fs_task_callback task_fun, G
 		gf_mx_p(filter->tasks_mx);
 
 		//no tasks and not scheduled
-		if (! filter->scheduled_for_next_task && !gf_fq_count(filter->tasks)) {
+		if ((filter->scheduled_for_next_task!=GF_FILTER_SCHEDULED) && !gf_fq_count(filter->tasks)) {
 			notified = task->notified = GF_TRUE;
 
 			if (!force_main_thread)
@@ -1003,6 +1018,12 @@ void gf_fs_post_task_ex(GF_FilterSession *fsess, gf_fs_task_callback task_fun, G
 			}
 #endif
 		}
+
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+		if (filter->freg->flags & GF_FS_REG_BLOCK_MAIN)
+			task->blocking = GF_TRUE;
+		else
+#endif
 		if (!force_main_thread)
 			task->blocking = (filter->is_blocking_source) ? GF_TRUE : GF_FALSE;
 		else
@@ -1011,11 +1032,14 @@ void gf_fs_post_task_ex(GF_FilterSession *fsess, gf_fs_task_callback task_fun, G
 		gf_fq_add(filter->tasks, task);
 		gf_mx_v(filter->tasks_mx);
 
-		GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %u Posted task %p Filter %s::%s (%d (%d) pending, %d process tasks) on %s task list\n", gf_th_id(), task, filter->name, task->log_name, fsess->tasks_pending, gf_fq_count(filter->tasks), filter->process_task_queued, task->notified ? (force_main_thread ? "main" : "secondary") : "filter"));
+		GF_LOG(GF_LOG_INFO, GF_LOG_SCHEDULER, ("Thread %u Posted task %p Filter %s::%s (%d (%d) pending, %d process tasks) on %s task list\n", gf_th_id(), task, filter->name, task->log_name, fsess->tasks_pending, gf_fq_count(filter->tasks), filter->process_task_queued, task->notified ? (force_main_thread ? "main" : "secondary") : "filter"));
 	} else {
 		task->notified = notified = GF_TRUE;
 		task->force_main = force_main_thread;
-		GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %u Posted filter-less task %s (%d pending) on secondary task list\n", gf_th_id(), task->log_name, fsess->tasks_pending));
+		GF_LOG(GF_LOG_INFO, GF_LOG_SCHEDULER, ("Thread %u Posted filter-less task %s (%d pending) on secondary task list\n", gf_th_id(), task->log_name, fsess->tasks_pending));
+	}
+	if (delay_ms) {
+		task->schedule_next_time = gf_sys_clock_high_res() + 1000*delay_ms;
 	}
 
 	//WARNING, do not use task->notified since the task may have been posted to the filter task list and may already have been swapped
@@ -1026,10 +1050,10 @@ void gf_fs_post_task_ex(GF_FilterSession *fsess, gf_fs_task_callback task_fun, G
 		check_task_list(fsess->tasks, task);
 		check_task_list(fsess->tasks_reservoir, task);
 #endif
-		assert(task->run_task);
+		gf_assert(task->run_task);
 		if (filter) {
 			GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %u posting filter task, scheduled_for_next_task %d\n", gf_th_id(), filter->scheduled_for_next_task));
-			assert(!filter->scheduled_for_next_task);
+			gf_assert(filter->scheduled_for_next_task!=GF_FILTER_SCHEDULED);
 		}
 
 		//notify/count tasks posted on the main task or regular task lists
@@ -1038,7 +1062,7 @@ void gf_fs_post_task_ex(GF_FilterSession *fsess, gf_fs_task_callback task_fun, G
 			gf_fq_add(fsess->main_thread_tasks, task);
 			gf_fs_sema_io(fsess, GF_TRUE, GF_TRUE);
 		} else {
-			assert(task->run_task);
+			gf_assert(task->run_task);
 			gf_fq_add(fsess->tasks, task);
 			gf_fs_sema_io(fsess, GF_TRUE, GF_FALSE);
 		}
@@ -1047,12 +1071,12 @@ void gf_fs_post_task_ex(GF_FilterSession *fsess, gf_fs_task_callback task_fun, G
 
 void gf_fs_post_task(GF_FilterSession *fsess, gf_fs_task_callback task_fun, GF_Filter *filter, GF_FilterPid *pid, const char *log_name, void *udta)
 {
-	gf_fs_post_task_ex(fsess, task_fun, filter, pid, log_name, udta, GF_FALSE, GF_FALSE, GF_FALSE, TASK_TYPE_NONE);
+	gf_fs_post_task_ex(fsess, task_fun, filter, pid, log_name, udta, GF_FALSE, GF_FALSE, GF_FALSE, TASK_TYPE_NONE, 0);
 }
 
-void gf_fs_post_task_class(GF_FilterSession *fsess, gf_fs_task_callback task_fun, GF_Filter *filter, GF_FilterPid *pid, const char *log_name, void *udta, u32 class_id)
+void gf_fs_post_task_class(GF_FilterSession *fsess, gf_fs_task_callback task_fun, GF_Filter *filter, GF_FilterPid *pid, const char *log_name, void *udta, GF_TaskClassType class_id)
 {
-	gf_fs_post_task_ex(fsess, task_fun, filter, pid, log_name, udta, GF_FALSE, GF_FALSE, GF_FALSE, class_id);
+	gf_fs_post_task_ex(fsess, task_fun, filter, pid, log_name, udta, GF_FALSE, GF_FALSE, GF_FALSE, class_id, 0);
 }
 
 Bool gf_fs_check_filter_register_cap_ex(const GF_FilterRegister *f_reg, u32 incode, GF_PropertyValue *cap_input, u32 outcode, GF_PropertyValue *cap_output, Bool exact_match_only, Bool out_cap_excluded)
@@ -1064,6 +1088,8 @@ Bool gf_fs_check_filter_register_cap_ex(const GF_FilterRegister *f_reg, u32 inco
 	u32 has_exclude_cid_out = 0;
 	for (j=0; j<f_reg->nb_caps; j++) {
 		const GF_FilterCapability *cap = &f_reg->caps[j];
+		if (cap->flags & GF_CAPFLAG_RECONFIG) break;
+
 		if (!(cap->flags & GF_CAPFLAG_IN_BUNDLE)) {
 			//CID not excluded, raw in present and CID explicit match or not included in excluded set
 			if (!exclude_cid_out && has_raw_in && (has_cid_match || (!exact_match_only && has_exclude_cid_out) ) ) {
@@ -1117,7 +1143,7 @@ Bool gf_fs_check_filter_register_cap(const GF_FilterRegister *f_reg, u32 incode,
 	return gf_fs_check_filter_register_cap_ex(f_reg, incode, cap_input, outcode, cap_output, exact_match_only, GF_FALSE);
 }
 
-static GF_Filter *gf_fs_load_encoder(GF_FilterSession *fsess, const char *args)
+GF_Filter *gf_fs_load_encoder(GF_FilterSession *fsess, const char *args, GF_List *filter_blacklist, GF_Err *out_err)
 {
 	GF_Err e;
 	char szCodec[3];
@@ -1133,9 +1159,11 @@ static GF_Filter *gf_fs_load_encoder(GF_FilterSession *fsess, const char *args)
 	szCodec[1] = fsess->sep_name;
 	szCodec[2] = 0;
 
+	if (out_err) *out_err = GF_OK;
 	cid = args ? strstr(args, szCodec) : NULL;
 	if (!cid) {
 		GF_LOG(GF_LOG_ERROR, GF_LOG_FILTER, ("Missing codec identifier in \"enc\" definition: %s\n", args ? args : "no arguments"));
+		if (out_err) *out_err = GF_BAD_PARAM;
 		return NULL;
 	}
 	sep = strchr(cid, fsess->sep_args);
@@ -1146,6 +1174,7 @@ static GF_Filter *gf_fs_load_encoder(GF_FilterSession *fsess, const char *args)
 	if (codecid==GF_CODECID_NONE) {
 		GF_LOG(GF_LOG_ERROR, GF_LOG_FILTER, ("Unrecognized codec identifier in \"enc\" definition: %s\n", cid));
 		if (sep) sep[0] = fsess->sep_args;
+		if (out_err) *out_err = GF_BAD_PARAM;
 		return NULL;
 	}
 #endif
@@ -1168,6 +1197,8 @@ retry:
 		const GF_FilterRegister *f_reg = gf_list_get(fsess->registry, i);
 		if (blacklist && (gf_list_find(blacklist, (void *) f_reg)>=0) )
 			continue;
+		if (filter_blacklist && (gf_list_find(filter_blacklist, (void *) f_reg)>=0) )
+			continue;
 
 		if ( gf_fs_check_filter_register_cap_ex(f_reg, GF_PROP_PID_CODECID, &cap_in, GF_PROP_PID_CODECID, &cap_out, GF_FALSE, ocap_excluded)) {
 			if (!candidate || (candidate->priority>f_reg->priority))
@@ -1177,6 +1208,7 @@ retry:
 	if (!candidate) {
 		GF_LOG(GF_LOG_ERROR, GF_LOG_FILTER, ("Cannot find any filter providing encoding for %s\n", cid));
 		if (blacklist) gf_list_del(blacklist);
+		if (out_err) *out_err = GF_FILTER_NOT_FOUND;
 		return NULL;
 	}
 	filter = gf_filter_new(fsess, candidate, args, NULL, GF_FILTER_ARG_EXPLICIT, &e, NULL, GF_FALSE);
@@ -1186,9 +1218,10 @@ retry:
 			gf_list_add(blacklist, (void *) candidate);
 			goto retry;
 		}
+		if (out_err) *out_err = e;
 		GF_LOG(GF_LOG_ERROR, GF_LOG_FILTER, ("Failed to load filter %s: %s\n", candidate->name, gf_error_to_string(e) ));
 	} else {
-		filter->encoder_stream_type = gf_codecid_type(codecid);
+		filter->encoder_codec_id = codecid;
 	}
 	if (blacklist) gf_list_del(blacklist);
 	return filter;
@@ -1227,6 +1260,7 @@ static Bool locate_js_script(char *path, const char *file_name, const char *file
 		strncpy(path, apath, GF_MAX_PATH-1);
 		path[GF_MAX_PATH-1] = 0;
 		gf_free(apath);
+		GF_LOG(GF_LOG_DEBUG, GF_LOG_FILTER, ("Found %s for file %s\n", path, file_name));
 		return GF_TRUE;
 	}
 
@@ -1236,6 +1270,7 @@ static Bool locate_js_script(char *path, const char *file_name, const char *file
 			strncpy(path, apath, GF_MAX_PATH-1);
 			path[GF_MAX_PATH-1] = 0;
 			gf_free(apath);
+			GF_LOG(GF_LOG_DEBUG, GF_LOG_FILTER, ("Found %s for file %s\n", path, file_name));
 			return GF_TRUE;
 		}
 	}
@@ -1246,6 +1281,7 @@ static Bool locate_js_script(char *path, const char *file_name, const char *file
 		strncpy(path, apath, GF_MAX_PATH-1);
 		path[GF_MAX_PATH-1] = 0;
 		gf_free(apath);
+		GF_LOG(GF_LOG_DEBUG, GF_LOG_FILTER, ("Found %s for file %s\n", path, file_name));
 		return GF_TRUE;
 	}
 	gf_free(apath);
@@ -1296,8 +1332,8 @@ static GF_Filter *gf_fs_load_filter_internal(GF_FilterSession *fsess, const char
 	u32 i, len, count = gf_list_count(fsess->registry);
 	Bool quiet = (err_code && (*err_code == GF_EOS)) ? GF_TRUE : GF_FALSE;
 
-	assert(fsess);
-	assert(name);
+	gf_assert(fsess);
+	gf_assert(name);
 	if (err_code) *err_code = GF_OK;
 
 	//the first string before any option sep MUST be the filter registry name, so we don't use gf_fs_path_escape_colon here
@@ -1311,14 +1347,15 @@ static GF_Filter *gf_fs_load_filter_internal(GF_FilterSession *fsess, const char
 		if (!quiet) {
 			GF_LOG(GF_LOG_ERROR, GF_LOG_FILTER, ("Missing filter name in %s\n", name));
 		}
+		if (err_code) *err_code = GF_FILTER_NOT_FOUND;
 		return NULL;
 	}
 
 	if (!strncmp(name, "enc", len)) {
-		return gf_fs_load_encoder(fsess, args);
+		return gf_fs_load_encoder(fsess, args, NULL, err_code);
 	}
 	if ((strlen(name)>2) && (name[0]=='c') && (name[1]==fsess->sep_name)) {
-		return gf_fs_load_encoder(fsess, name);
+		return gf_fs_load_encoder(fsess, name, NULL, err_code);
 	}
 
 	/*regular filter loading*/
@@ -1387,6 +1424,21 @@ static GF_Filter *gf_fs_load_filter_internal(GF_FilterSession *fsess, const char
 				}
 			}
 		}
+		if (file_exists) {
+			FILE *f = gf_fopen(szPath, "r");
+			char szVal[1000];
+			szVal[0] = szVal[999] = 0;
+			if (f) {
+				gf_fread(szVal, 999, f);
+				gf_fclose(f);
+			} else {
+				file_exists = GF_FALSE;
+			}
+			if (strstr(szVal, "import") && strstr(szVal, "from") ) {}
+			else if (strstr(szVal, "filter.") || strstr(szVal, "session.") ) {}
+			else
+				file_exists = GF_FALSE;
+		}
 
 		if (file_exists) {
 			if (probe_only) {
@@ -1410,43 +1462,482 @@ GF_Filter *gf_fs_load_filter(GF_FilterSession *fsess, const char *name, GF_Err *
 	return gf_fs_load_filter_internal(fsess, name, err_code, NULL);
 }
 
+GF_EXPORT
+GF_Err gf_fs_process_link_directive(char *link, GF_Filter *filter, GF_List *loaded_filters, char *ext_link)
+{
+	char *link_prev_filter_ext = NULL;
+	GF_Filter *link_from;
+	Bool reverse_order = GF_FALSE;
+	s32 link_filter_idx = -1;
+
+	if (!filter) {
+		u32 idx=0, count = gf_list_count(loaded_filters);
+		if (!ext_link || !count) return GF_BAD_PARAM;
+		ext_link[0] = 0;
+		if (link[1] == filter->session->sep_link) {
+			idx = atoi(link+2);
+		} else {
+			idx = atoi(link+1);
+			if (count - 1 < idx) return GF_BAD_PARAM;
+			idx = count-1-idx;
+		}
+		ext_link[0] = filter->session->sep_link;
+		filter = gf_list_get(loaded_filters, idx);
+		link = ext_link;
+	}
+
+	char *ext = strchr(link, filter->session->sep_frag);
+	if (ext) {
+		ext[0] = 0;
+		link_prev_filter_ext = ext+1;
+	}
+	if (strlen(link)>1) {
+		if (link[1] == filter->session->sep_link ) {
+			reverse_order = GF_TRUE;
+			link++;
+		}
+		link_filter_idx = 0;
+		if (strlen(link)>1) {
+			u32 res;
+			if (sscanf(link+1, "%u", &res)==1) link_filter_idx = (s32) res;
+			else {
+				link_filter_idx = 0;
+				GF_LOG(GF_LOG_ERROR, GF_LOG_APP, ("Link filter index must be an unsigned integer (got %s), using 0\n", link+1));
+			}
+			if (link_filter_idx < 0) {
+				GF_LOG(GF_LOG_ERROR, GF_LOG_APP, ("Wrong filter index %d, must be positive\n", link_filter_idx));
+				return GF_BAD_PARAM;
+			}
+		}
+	} else {
+		link_filter_idx = 0;
+	}
+	if (ext) ext[0] = filter->session->sep_frag;
+
+	if (reverse_order)
+		link_from = gf_list_get(loaded_filters, link_filter_idx);
+	else
+		link_from = gf_list_get(loaded_filters, gf_list_count(loaded_filters)-1-link_filter_idx);
+
+	if (!link_from) {
+		GF_LOG(GF_LOG_ERROR, GF_LOG_APP, ("Wrong filter index @%d\n", link_filter_idx));
+		return GF_BAD_PARAM;
+	}
+	gf_filter_set_source(filter, link_from, link_prev_filter_ext);
+	return GF_OK;
+}
+
+GF_EXPORT
+GF_Err gf_fs_parse_filter_graph(GF_FilterSession *fsess, int argc, char *argv[], GF_List **out_loaded_filters, GF_List **out_links_directive)
+{
+	if (!fsess || !argv || (argc<1)) return GF_BAD_PARAM;
+
+	GF_Err e = GF_OK;
+	int i;
+	Bool has_xopt = GF_FALSE;
+	GF_List *loaded_filters = NULL;
+	GF_List *links_directive = NULL;
+
+	Bool prev_filter_is_sink = 0;
+	u32 current_subsession_id = 0;
+	Bool prev_filter_is_not_source = 0;
+	u32 current_source_id = 0;
+
+	if (out_loaded_filters) loaded_filters = *out_loaded_filters;
+	loaded_filters = gf_list_new();
+	if (!loaded_filters) return GF_OUT_OF_MEM;
+
+	if (out_links_directive) links_directive = *out_links_directive;
+	links_directive = gf_list_new();
+	if (!links_directive) {
+		gf_list_del(loaded_filters);
+		return GF_OUT_OF_MEM;
+	}
+
+	for (i=0; i<argc; i++) {
+		GF_Filter *filter=NULL;
+		Bool is_simple=GF_FALSE;
+		Bool f_loaded = GF_FALSE;
+		char *arg = argv[i];
+
+		if (!strcmp(arg, "-src") || !strcmp(arg, "-i")) {
+			filter = gf_fs_load_source(fsess, argv[i+1], NULL, NULL, &e);
+			arg = argv[i+1];
+			i++;
+			f_loaded = GF_TRUE;
+		} else if (!strcmp(arg, "-dst") || !strcmp(arg, "-o")) {
+			filter = gf_fs_load_destination(fsess, argv[i+1], NULL, NULL, &e);
+			arg = argv[i+1];
+			i++;
+			f_loaded = GF_TRUE;
+		}
+		//appart from the above src/dst, other args starting with - are not filters
+		else if (arg[0]=='-') {
+			if (!strcmp(arg, "-xopt")) has_xopt = GF_TRUE;
+			continue;
+		}
+		if (!f_loaded && !has_xopt) {
+			if (arg[0] == fsess->sep_link) {
+				char *next_sep = NULL;
+				if (arg[1]==fsess->sep_link) {
+					next_sep = strchr(arg+2, fsess->sep_link);
+				} else {
+					next_sep = strchr(arg+1, fsess->sep_link);
+				}
+				if (next_sep) {
+					e = gf_fs_process_link_directive(arg, NULL, loaded_filters, next_sep);
+					if (e) goto exit;
+					continue;
+				}
+				gf_list_add(links_directive, arg);
+				continue;
+			}
+
+			if (!strncmp(arg, "src=", 4) ) {
+				filter = gf_fs_load_source(fsess, arg+4, NULL, NULL, &e);
+			} else if (!strncmp(arg, "dst=", 4) ) {
+				filter = gf_fs_load_destination(fsess, arg+4, NULL, NULL, &e);
+			} else {
+				e = GF_EOS;
+				char *need_gfio = strstr(arg, "@gfi://");
+				if (!need_gfio) need_gfio = strstr(arg, "@gfo://");
+				if (need_gfio) {
+					e = GF_NOT_SUPPORTED;
+					goto exit;
+				} else {
+					filter = gf_fs_load_filter(fsess, arg, &e);
+				}
+				is_simple=GF_TRUE;
+				if (!filter && has_xopt)
+					continue;
+			}
+		}
+
+		if (!filter) {
+			if (has_xopt)
+				continue;
+			if (!e) e = GF_FILTER_NOT_FOUND;
+
+			if (e!=GF_FILTER_NOT_FOUND) {
+				GF_LOG(GF_LOG_ERROR, GF_LOG_APP, ("Failed to load filter%s \"%s\": %s\n", is_simple ? "" : " for",  arg, gf_error_to_string(e) ));
+			} else {
+				GF_LOG(GF_LOG_ERROR, GF_LOG_APP, ("Failed to find filter%s \"%s\"\n", is_simple ? "" : " for",  arg));
+			}
+			goto exit;
+		}
+
+		if (!(fsess->flags & GF_FS_FLAG_NO_IMPLICIT))
+			gf_filter_tag_subsession(filter, current_subsession_id, current_source_id);
+
+		while (gf_list_count(links_directive)) {
+			char *link = gf_list_pop_front(links_directive);
+			e = gf_fs_process_link_directive(link, filter, loaded_filters, NULL);
+			if (e) goto exit;
+		}
+		gf_list_add(loaded_filters, filter);
+
+		//implicit mode, check changes of source and sinks
+		if (!(fsess->flags & GF_FS_FLAG_NO_IMPLICIT)) {
+			if (gf_filter_is_source(filter)) {
+				if (prev_filter_is_not_source) {
+					current_source_id++;
+					gf_filter_tag_subsession(filter, current_subsession_id, current_source_id);
+				}
+				prev_filter_is_not_source = 0;
+			} else {
+				prev_filter_is_not_source = 1;
+			}
+
+			if (gf_filter_is_sink(filter)) {
+				prev_filter_is_sink = GF_TRUE;
+			}
+			else if (prev_filter_is_sink && gf_filter_is_source(filter)) {
+				prev_filter_is_sink = GF_FALSE;
+				current_subsession_id++;
+				current_source_id=0;
+				prev_filter_is_not_source = 0;
+				gf_filter_tag_subsession(filter, current_subsession_id, current_source_id);
+			}
+		}
+	}
+
+exit:
+	if (!out_loaded_filters) gf_list_del(loaded_filters);
+	if (!out_links_directive) gf_list_del(links_directive);
+
+	return e;
+}
+
+GF_EXPORT
+GF_Err gf_fs_parse_filter_graph_str(GF_FilterSession *fsess, char *graph_str, GF_List **out_loaded_filters, GF_List **out_links_directive)
+{
+	if (!graph_str) return GF_BAD_PARAM;
+
+	char **argv = NULL;
+	int argc = 0;
+	char *token = graph_str;
+	char *end = NULL;
+
+	while (*token) {
+		// Skip leading whitespace
+		while (*token && isspace(*token)) token++;
+
+		// Handle quoted strings
+		if (*token == '"' || *token == '\'') {
+			char quote = *token++;
+			end = token;
+			while (*end && *end != quote) end++;
+			if (*end) *end++ = '\0';
+		} else {
+			end = token;
+			while (*end && !isspace(*end)) end++;
+			if (*end) *end++ = '\0';
+		}
+
+		if (*token) {
+			argv = gf_realloc(argv, sizeof(char *) * (argc + 1));
+			if (!argv) return GF_OUT_OF_MEM;
+			argv[argc++] = token;
+		}
+		token = end;
+	}
+
+	GF_Err result = gf_fs_parse_filter_graph(fsess, argc, (char **)argv, out_loaded_filters, out_links_directive);
+	gf_free(argv);
+	return result;
+}
+
+static void print_task(u32 *taskn, GF_FSTask *task, Bool for_filter)
+{
+	(*taskn)++;
+	fprintf(stderr, "%sT%d \"%s\"", for_filter ? " " : "", *taskn, task->log_name );
+	if (task->thid) {
+		if (task->thid==1)
+			fprintf(stderr, " exec in main");
+		else
+			fprintf(stderr, " exec in th %d", task->thid-1);
+	}
+	if (for_filter && task->notified)
+		fprintf(stderr, " notified");
+
+	if (task->filter)
+		fprintf(stderr, " filter \"%s\" (%s)", task->filter->name, task->filter->freg->name);
+	if (task->pid) {
+		Bool output = task->pid == task->pid->pid;
+		fprintf(stderr, " %s PID %s", output ? "output" : "input", gf_filter_pid_get_name(task->pid));
+	}
+	if (task->force_main)
+		fprintf(stderr, " force_main");
+	if (task->blocking)
+		fprintf(stderr, " blocking");
+	if (task->schedule_next_time)
+		fprintf(stderr, " scheduled in "LLD" us", task->schedule_next_time - gf_sys_clock_high_res());
+
+	switch (task->class_type) {
+	case TASK_TYPE_EVENT:
+		fprintf(stderr, " FilterEvent");
+		if (task->udta)
+			fprintf(stderr, " type %s", gf_filter_event_name( ((GF_FilterEvent*)task->udta)->base.type) );
+		break;
+	case TASK_TYPE_SETUP: fprintf(stderr, " SetupFailure"); break;
+	case TASK_TYPE_USER: fprintf(stderr, " UserData"); break;
+	case TASK_TYPE_NONE: break;
+	}
+
+	fprintf(stderr, "\n");
+}
+
+static void print_task_list(void *udta, void *item)
+{
+	print_task(udta, item, GF_FALSE);
+}
+
+static void print_task_list_filter(void *udta, void *item)
+{
+	print_task(udta, item, GF_TRUE);
+}
+
+struct __pck_size_info
+{
+	u32 nb_packets;
+	u64 all_size;
+	u64 all_alloc_size;
+};
+
+static void gather_pck_size(void *udta, void *item)
+{
+	struct __pck_size_info *sinfo = (struct __pck_size_info*)udta;
+	GF_FilterPacketInstance *pcki = item;
+	sinfo->nb_packets++;
+	sinfo->all_size += pcki->pck->data_length;
+	sinfo->all_alloc_size += pcki->pck->alloc_size;
+}
+
+GF_EXPORT
+void gf_fs_print_debug_info(GF_FilterSession *fsess, GF_SessionDebugFlag dbg_flags)
+{
+	u32 count, i=0;
+	fsess->dbg_flags = dbg_flags;
+	fprintf(stderr, "Session debug info (UTC "LLU")\n", gf_net_get_utc());
+
+	if (dbg_flags & GF_FS_DEBUG_GRAPH)
+		gf_fs_print_connections(fsess);
+
+	if (dbg_flags & GF_FS_DEBUG_STATS)
+		gf_fs_print_stats(fsess);
+
+	if (dbg_flags & GF_FS_DEBUG_TASKS) {
+		fprintf(stderr, "Main thread tasks:\n");
+		gf_fq_enum(fsess->main_thread_tasks, print_task_list, &i);
+		if (fsess->tasks!=fsess->main_thread_tasks) {
+			fprintf(stderr, "Other tasks:\n");
+			i=0;
+			gf_fq_enum(fsess->tasks, print_task_list, &i);
+		}
+	}
+
+	if (dbg_flags & GF_FS_DEBUG_FILTERS) {
+		fprintf(stderr, "Filters status:\n");
+		gf_mx_p(fsess->filters_mx);
+		count = gf_list_count(fsess->filters);
+		for (i=0; i<count; i++) {
+			u32 j=0;
+			GF_Filter *f = gf_list_get(fsess->filters, i);
+			fprintf(stderr, "F%d \"%s\" (%s)", i+1, f->name, f->freg->name);
+			if (f->id) fprintf(stderr, " ID %s", f->id);
+			if (f->is_pid_adaptation_filter) fprintf(stderr, " adaptation");
+			else if (f->dynamic_filter) fprintf(stderr, " dynamic");
+			fprintf(stderr, " - %d PIDs playing", f->nb_pids_playing);
+			if (f->would_block) fprintf(stderr, " %d blocked", f->would_block);
+
+			if (f->removed) { fprintf(stderr, " - removed\n"); continue; }
+			if (f->disabled) { fprintf(stderr, " - disabled\n"); continue; }
+			if (f->finalized) { fprintf(stderr, " - finalized\n"); continue; }
+			if (f->eos_probe_state==1) fprintf(stderr, " in eos");
+
+			if (gf_fq_count(f->tasks)) {
+				fprintf(stderr, " tasks:\n");
+				gf_fq_enum(f->tasks, print_task_list_filter, &j);
+			} else {
+				fprintf(stderr, " no tasks\n");
+			}
+
+			struct __pck_size_info pcki;
+			memset(&pcki, 0, sizeof(struct __pck_size_info));
+			pcki.nb_packets = gf_list_count(f->postponed_packets);
+			u32 nb_in_eos = 0, nb_out_eos = 0;
+			for (j=0; j<f->num_input_pids; j++) {
+				GF_FilterPidInst *pidi = gf_list_get(f->input_pids, j);
+				gf_fq_enum(pidi->packets, gather_pck_size, &pcki);
+				if (pidi->is_end_of_stream) nb_in_eos++;
+			}
+			for (j=0; j<f->num_output_pids; j++) {
+				GF_FilterPid *pid = gf_list_get(f->output_pids, j);
+				if (pid->has_seen_eos) nb_out_eos++;
+			}
+			if (pcki.nb_packets)
+				fprintf(stderr, " %d packets to process on %d input PIDs "LLU" KBytes\n", pcki.nb_packets, f->num_input_pids, pcki.all_size/1000);
+			if (f->ref_bytes)
+				fprintf(stderr, " "LLU" KBytes of detached packets in destinations\n", f->ref_bytes/1000);
+			if (nb_in_eos)
+				fprintf(stderr, " %u in PIDs in EOS", nb_in_eos);
+			if (nb_out_eos)
+				fprintf(stderr, " %u out PIDs have seen EOS", nb_out_eos);
+			if (nb_in_eos || nb_out_eos)
+				fprintf(stderr, "\n");
+		}
+		gf_mx_v(fsess->filters_mx);
+	}
+	fprintf(stderr, "\n");
+}
+
 //in mono thread mode, we cannot always sleep for the requested timeout in case there are more tasks to be processed
 //this defines the number of pending tasks above which we limit sleep
 #define MONOTH_MIN_TASKS	2
 //this defines the sleep time for this case
 #define MONOTH_MIN_SLEEP	5
 
+#if defined(GPAC_CONFIG_EMSCRIPTEN) && !defined(GPAC_DISABLE_THREADS)
+#include <emscripten/threading.h>
+GF_Err gf_th_async_call(GF_Thread *t, u32 (*Run)(void *param), void *param);
+static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread);
+
+Bool em_check_yield_th_proc(u32 thid, GF_SessionThread *sess_thread, u64 enter_time)
+{
+	if (thid
+		&& (sess_thread->fsess->run_status == GF_OK)
+	) {
+		sess_thread->run_time += gf_sys_clock_high_res() - enter_time;
+		safe_int_dec(&sess_thread->fsess->active_threads);
+		gf_th_async_call(sess_thread->th, (gf_thread_run) gf_fs_thread_proc, sess_thread);
+		return GF_TRUE;
+	}
+	return GF_FALSE;
+}
+#endif
+
+#ifndef GPAC_DISABLE_THREADS
+const char *gf_th_log_name(GF_Thread *t);
+#else
+#define gf_th_log_name(_t) "Main Process"
+#endif
+
 static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 {
 	GF_FilterSession *fsess = sess_thread->fsess;
-	u32 i, th_count = fsess->threads ? gf_list_count(fsess->threads) : 0;
+#ifndef GPAC_DISABLE_THREADS
+	u32 i;
+	u32 th_count = fsess->threads ? gf_list_count(fsess->threads) : 0;
 	u32 thid =  1 + gf_list_find(fsess->threads, sess_thread);
+#else
+	u32 th_count = 0;
+	u32 thid = 0;
+#endif
 	u64 enter_time = gf_sys_clock_high_res();
 	Bool use_main_sema = thid ? GF_FALSE : GF_TRUE;
 #ifndef GPAC_DISABLE_LOG
-	u32 sys_thid = gf_th_id();
+	const char *sys_thid = gf_th_log_name(sess_thread->th);
 #endif
 	u64 next_task_schedule_time = 0;
 	Bool do_regulate = (fsess->flags & GF_FS_FLAG_NO_REGULATION) ? GF_FALSE : GF_TRUE;
 	u32 consecutive_filter_tasks=0;
 	Bool force_secondary_tasks = GF_FALSE;
 	Bool skip_next_sema_wait = GF_FALSE;
-
 	GF_Filter *current_filter = NULL;
-	sess_thread->th_id = gf_th_id();
 
-#ifndef GPAC_DISABLE_REMOTERY
-	sess_thread->rmt_tasks=40;
-	gf_rmt_set_thread_name(sess_thread->rmt_name);
+#if defined(GPAC_CONFIG_EMSCRIPTEN) && !defined(GPAC_DISABLE_THREADS)
+	Bool flush_main_blocking = (!thid && !fsess->is_worker) ? GF_TRUE : GF_FALSE;
+	if (flush_main_blocking) do_regulate = GF_FALSE;
 #endif
 
-	gf_rmt_begin(fs_thread, 0);
+	//main thread
+	if (!thid) {
+		if (!sess_thread->run_time) {
+			sess_thread->run_time = enter_time;
+		}
+		if (fsess->non_blocking) {
+			GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Main thread proc enter\n"));
+		}
+	} else {
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+		GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %s proc enter\n", sys_thid));
+#endif
+		gf_logs_thread_tag(sess_thread, GF_LOG_TAG_FILTERSESSION_THREAD);
+	}
+
+	//first time we enter the thread proc
+	if (!sess_thread->th_id) {
+		sess_thread->th_id = gf_th_id();
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+		if (fsess->non_blocking && thid) {
+			sess_thread->run_time = 0;
+			safe_int_dec(&fsess->pending_threads);
+		}
+#endif
+
+	}
 
 	safe_int_inc(&fsess->active_threads);
-
-	if (!thid && fsess->non_blocking) {
-		GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Main thread proc enter\n"));
-	}
 
 	while (1) {
 		Bool notified;
@@ -1458,24 +1949,23 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 		Bool skip_filter_task_check = GF_FALSE;
 #endif
 
-#ifndef GPAC_DISABLE_REMOTERY
-		sess_thread->rmt_tasks--;
-		if (!sess_thread->rmt_tasks) {
-			gf_rmt_end();
-			gf_rmt_begin(fs_thread, 0);
-			sess_thread->rmt_tasks=40;
+		if ((fsess->dbg_flags & GF_FS_DEBUG_CONTINUOUS) && !thid) {
+			gf_fs_print_debug_info(fsess, fsess->dbg_flags ? fsess->dbg_flags : GF_FS_DEBUG_ALL);
+		}
+
+#if defined(GPAC_CONFIG_EMSCRIPTEN) && !defined(GPAC_DISABLE_THREADS)
+		if (flush_main_blocking) {
+			emscripten_main_thread_process_queued_calls();
 		}
 #endif
 
 		safe_int_dec(&fsess->active_threads);
 
 		if (!skip_next_sema_wait && (current_filter==NULL)) {
-			gf_rmt_begin(sema_wait, GF_RMT_AGGREGATE);
-			GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %u Waiting scheduler %s semaphore\n", sys_thid, use_main_sema ? "main" : "secondary"));
+			GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %s Waiting scheduler %s semaphore\n", sys_thid, use_main_sema ? "main" : "secondary"));
 			//wait for something to be done
 			gf_fs_sema_io(fsess, GF_FALSE, use_main_sema);
 			consecutive_filter_tasks = 0;
-			gf_rmt_end();
 		}
 		safe_int_inc(&fsess->active_threads);
 		skip_next_sema_wait = GF_FALSE;
@@ -1498,6 +1988,14 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 					}
 				}
 				force_secondary_tasks = GF_FALSE;
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+				//no tasks on main thread, exit setting in_main_sem_wait to trigger a NOT_READY on fs_run
+				//this will give control back to JS
+				if (fsess->non_blocking && !task) {
+					fsess->in_main_sem_wait = GF_TRUE;
+					break;
+				}
+#endif
 			} else {
 				task = gf_fq_pop(fsess->tasks);
 				if (task && (task->force_main || (task->filter && task->filter->nb_main_thread_forced) ) ) {
@@ -1507,14 +2005,14 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 					continue;
 				}
 			}
-			assert(!task || task->run_task );
-			assert(!task || task->notified );
+			gf_assert(!task || task->run_task );
+			gf_assert(!task || task->notified );
 		} else {
 			//keep task in filter tasks list until done
 			task = gf_fq_head(current_filter->tasks);
 			if (task) {
-				assert( task->run_task );
-				assert( ! task->notified );
+				gf_assert( task->run_task );
+				gf_assert( ! task->notified );
 
 				//task was requested for main thread
 				if ((task->force_main || current_filter->nb_main_thread_forced) && thid) {
@@ -1525,6 +2023,9 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 					//post to main
 					gf_fq_add(fsess->main_thread_tasks, task);
 					gf_fs_sema_io(fsess, GF_TRUE, GF_TRUE);
+#ifndef GPAC_DISABLE_LOG
+					gf_log_pop_extra(current_filter->logs);
+#endif
 					//disable current filter
 					current_filter = NULL;
 					continue;
@@ -1543,6 +2044,7 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 				//check all threads
 				Bool all_done = GF_TRUE;
 
+#ifndef GPAC_DISABLE_THREADS
 				for (i=0; i<th_count; i++) {
 					GF_SessionThread *st = gf_list_get(fsess->threads, i);
 					if (!st->has_seen_eot) {
@@ -1550,14 +2052,18 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 						force_nb_notif++;
 					}
 				}
+#endif
 				if (all_done)
 					break;
 			}
 			if (current_filter) {
-				current_filter->scheduled_for_next_task = GF_FALSE;
+				current_filter->scheduled_for_next_task = GF_FILTER_NOT_SCHEDULED;
 				current_filter->process_th_id = 0;
-				assert(current_filter->in_process);
+				gf_assert(current_filter->in_process);
 				current_filter->in_process = GF_FALSE;
+#ifndef GPAC_DISABLE_LOG
+				gf_log_pop_extra(current_filter->logs);
+#endif
 			}
 			current_filter = NULL;
 			sess_thread->active_time += gf_sys_clock_high_res() - active_start;
@@ -1588,13 +2094,20 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 				gf_sema_notify(fsess->semaphore_other, th_count);
 			}
 
-			GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %u: no task available\n", sys_thid));
-
 			//no main thread, return
 			if (!thid && fsess->non_blocking) {
 				GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Main thread proc exit\n"));
+				safe_int_dec(&fsess->active_threads);
 				return 0;
 			}
+
+			GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %s: no task available\n", sys_thid));
+
+#if defined(GPAC_CONFIG_EMSCRIPTEN) && !defined(GPAC_DISABLE_THREADS)
+			if (em_check_yield_th_proc(thid, sess_thread, enter_time)) {
+				return 0;
+			}
+#endif
 
 			if (do_regulate) {
 				gf_sleep(0);
@@ -1606,12 +2119,19 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 		check_task_list(fsess->main_thread_tasks, task);
 		check_task_list(fsess->tasks, task);
 #endif
-		if (current_filter) {
-			assert(current_filter==task->filter);
-		}
+		gf_assert(!current_filter || (current_filter==task->filter));
+
+#ifndef GPAC_DISABLE_LOG
+		//moving to new filter, register log
+		if (!current_filter && task->filter) gf_log_push_extra(task->filter->logs);
+#endif
 		current_filter = task->filter;
 
-		if (current_filter && current_filter->restrict_th_idx && (thid != current_filter->restrict_th_idx)) {
+		//unless task was explicitly forced to main (pid init mostly), reschedule if filter is not on desired thread
+		if (current_filter && !task->force_main
+			&& current_filter->restrict_th_idx
+			&& (thid != current_filter->restrict_th_idx)
+		) {
 			//reschedule task to secondary list
 			if (!task->notified) {
 				task->notified = GF_TRUE;
@@ -1619,11 +2139,12 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 			}
 			gf_fq_add(fsess->tasks, task);
 			gf_fs_sema_io(fsess, GF_TRUE, GF_FALSE);
+#ifndef GPAC_DISABLE_LOG
+			gf_log_pop_extra(current_filter->logs);
+#endif
 			current_filter = NULL;
 			continue;
 		}
-
-		assert(!current_filter || !current_filter->restrict_th_idx || (thid == current_filter->restrict_th_idx));
 
 		//this is a crude way of scheduling the next task, we should
 		//1- have a way to make sure we will not repost after a time-consuming task
@@ -1647,7 +2168,7 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 #endif
 					next = gf_fq_head(fsess->tasks);
 					next_task_schedule_time = task->schedule_next_time;
-					assert(task->run_task);
+					gf_assert(task->run_task);
 #ifdef CHECK_TASK_LIST_INTEGRITY
 					check_task_list(fsess->main_thread_tasks, task);
 					check_task_list(fsess->tasks, task);
@@ -1657,7 +2178,7 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 					gf_fq_add(fsess->tasks, task);
 					if (next) {
 						if (next->schedule_next_time <= (u64) now) {
-							GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %u: task %s reposted, next task time ready for execution\n", sys_thid, task_log_name));
+							GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %s: task %s reposted, next task time ready for execution\n", sys_thid, task_log_name));
 
 							skip_next_sema_wait = GF_TRUE;
 							continue;
@@ -1666,7 +2187,7 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 						ndiff -= now;
 						ndiff /= 1000;
 						if (ndiff<diff) {
-							GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %u: task %s scheduled after next task %s:%s (in %d ms vs %d ms)\n", sys_thid, task_log_name, next->log_name, next->filter ? next->filter->name : "", (s32) diff, (s32) ndiff));
+							GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %s: task %s scheduled after next task %s:%s (in %d ms vs %d ms)\n", sys_thid, task_log_name, next->log_name, next->filter ? next->filter->name : "", (s32) diff, (s32) ndiff));
 							diff = ndiff;
 						}
 					}
@@ -1682,10 +2203,10 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 							if ( gf_fq_count(fsess->tasks) > MONOTH_MIN_TASKS)
 								diff = MONOTH_MIN_SLEEP;
 						}
-						GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %u: task %s reposted, %s task scheduled after this task, sleeping for %d ms (task diff %d - next diff %d)\n", sys_thid, task_log_name, next ? "next" : "no", diff, tdiff, ndiff));
+						GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %s: task %s reposted, %s task scheduled after this task, sleeping for %d ms (task diff %d - next diff %d)\n", sys_thid, task_log_name, next ? "next" : "no", diff, tdiff, ndiff));
 						gf_sleep((u32) diff);
 					} else {
-						GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %u: task %s reposted, next task scheduled after this task, rerun\n", sys_thid, task_log_name));
+						GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %s: task %s reposted, next task scheduled after this task, rerun\n", sys_thid, task_log_name));
 					}
 					skip_next_sema_wait = GF_TRUE;
 					continue;
@@ -1694,7 +2215,7 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 				if (!task->filter->finalized) {
 #ifdef CHECK_TASK_LIST_INTEGRITY
 					next = gf_fq_head(current_filter->tasks);
-					assert(next == task);
+					gf_assert(next == task);
 					check_task_list(fsess->main_thread_tasks, task);
 					check_task_list(fsess->tasks_reservoir, task);
 #endif
@@ -1703,16 +2224,21 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 					next = gf_fq_get(current_filter->tasks, 1);
 					if (next && next->schedule_next_time < task->schedule_next_time) {
 						if (task->notified) {
-							assert(fsess->tasks_pending);
+							gf_assert(fsess->tasks_pending);
 							safe_int_dec(&fsess->tasks_pending);
 							task->notified = GF_FALSE;
 						}
-						GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %u: task %s:%s reposted to filter task until task exec time is reached (%d us)\n", sys_thid, current_filter->name, task->log_name, (s32) (task->schedule_next_time - next->schedule_next_time) ));
+						GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %s: task %s:%s reposted to filter task until task exec time is reached (%d us)\n", sys_thid, current_filter->name, task->log_name, (s32) (task->schedule_next_time - next->schedule_next_time) ));
 						//remove task
 						gf_fq_pop(current_filter->tasks);
 						//and queue it after the next one
 						gf_fq_add(current_filter->tasks, task);
 						//and continue with the same filter
+#if defined(GPAC_CONFIG_EMSCRIPTEN) && !defined(GPAC_DISABLE_THREADS)
+						if (em_check_yield_th_proc(thid, sess_thread, enter_time)) {
+							return 0;
+						}
+#endif
 						continue;
 					}
 					//little optim here: if this is the main thread and we have other tasks pending
@@ -1736,7 +2262,7 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 							}
 
 							if (next_time_secondary<next_time_main) {
-								GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %u: forcing secondary task list on main - current task schedule time "LLU" (diff to now %d) vs next time secondary "LLU" (%s::%s)\n", sys_thid, task->schedule_next_time, (s32) diff, next_time_secondary, next->filter ? next->filter->freg->name : "", next->log_name));
+								GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %s: forcing secondary task list on main - current task schedule time "LLU" (diff to now %d) vs next time secondary "LLU" (%s::%s)\n", sys_thid, task->schedule_next_time, (s32) diff, next_time_secondary, next->filter ? next->filter->freg->name : "", next->log_name));
 								diff = 0;
 								force_secondary_tasks = GF_TRUE;
 								break;
@@ -1757,10 +2283,10 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 						tdiff -= now;
 						if (tdiff < 0) tdiff=0;
 						if (tdiff<diff) {
-							GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %u: next task has earlier exec time than current task %s:%s, adjusting sleep (old %d - new %d)\n", sys_thid, current_filter->name, task->log_name, (s32) diff, (s32) tdiff));
+							GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %s: next task has earlier exec time than current task %s:%s, adjusting sleep (old %d - new %d)\n", sys_thid, current_filter->name, task->log_name, (s32) diff, (s32) tdiff));
 							diff = tdiff;
 						} else {
-							GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %u: next task has earlier exec time#2 than current task %s:%s, adjusting sleep (old %d - new %d)\n", sys_thid, current_filter->name, task->log_name, (s32) diff, (s32) tdiff));
+							GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %s: next task has earlier exec time#2 than current task %s:%s, adjusting sleep (old %d - new %d)\n", sys_thid, current_filter->name, task->log_name, (s32) diff, (s32) tdiff));
 
 						}
 					}
@@ -1772,7 +2298,7 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 							if ( gf_fq_count(fsess->tasks) > MONOTH_MIN_TASKS)
 								diff = MONOTH_MIN_SLEEP;
 						}
-						GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %u: task %s:%s postponed for %d ms (scheduled time "LLU" us, next task schedule "LLU" us)\n", sys_thid, current_filter->name, task->log_name, (s32) diff, task->schedule_next_time, next_task_schedule_time));
+						GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %s: task %s:%s postponed for %d ms (scheduled time "LLU" us, next task schedule "LLU" us)\n", sys_thid, current_filter->name, task->log_name, (s32) diff, task->schedule_next_time, next_task_schedule_time));
 
 						gf_sleep((u32) diff);
 						active_start = gf_sys_clock_high_res();
@@ -1780,22 +2306,27 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 					diff = (s64)task->schedule_next_time;
 					diff -= (s64) gf_sys_clock_high_res();
 					if (diff > 100 ) {
+						u32 pending_tasks;
 						Bool use_main = (current_filter->freg->flags & GF_FS_REG_MAIN_THREAD) ? GF_TRUE : GF_FALSE;
-						GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %u: releasing current filter %s, exec time due in "LLD" us\n", sys_thid, current_filter->name, diff));
+						GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %s: releasing current filter %s, exec time for %s due in "LLD" us\n", sys_thid, current_filter->name, task->log_name, diff));
 						current_filter->process_th_id = 0;
 						current_filter->in_process = GF_FALSE;
 						//don't touch the current filter tasks, just repost the task to the main/secondary list
-						assert(gf_fq_count(current_filter->tasks));
+						gf_assert(gf_fq_count(current_filter->tasks));
+#ifndef GPAC_DISABLE_LOG
+						gf_log_pop_extra(current_filter->logs);
+#endif
 						current_filter = NULL;
 
 #ifdef CHECK_TASK_LIST_INTEGRITY
 						check_task_list(fsess->main_thread_tasks, task);
 						check_task_list(fsess->tasks, task);
 						check_task_list(fsess->tasks_reservoir, task);
-						assert(task->run_task);
+						gf_assert(task->run_task);
 #endif
 
 						if (use_main) {
+							pending_tasks = gf_fq_count(fsess->main_thread_tasks);
 							gf_fq_add(fsess->main_thread_tasks, task);
 							//we are the main thread and reposting to the main task list, don't notify/wait for the sema, just retry
 							//we are sure to get a task from main list at next iteration
@@ -1805,6 +2336,7 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 								gf_fs_sema_io(fsess, GF_TRUE, GF_TRUE);
 							}
 						} else {
+							pending_tasks = gf_fq_count(fsess->main_thread_tasks);
 							gf_fq_add(fsess->tasks, task);
 							//we are not the main thread and we are reposting to the secondary task list, don't notify/wait for the sema, just retry
 							//we are not sure to get a task from secondary list at next iteration, but the end of thread check will make
@@ -1819,36 +2351,44 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 						//because the first main task was not yet due for execution
 						//it is likely that the execution of the next task will not wake up the main thread
 						//but we must reevaluate the previous main task timing, so we force a notification of the main sema
-						if (force_secondary_tasks)
+						if (force_secondary_tasks) {
 							gf_fs_sema_io(fsess, GF_TRUE, GF_TRUE);
+						} else if (!thid && fsess->non_blocking && !pending_tasks) {
+							GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Main thread proc exit\n"));
+							safe_int_dec(&fsess->active_threads);
+							return 0;
+						}
 
+#if defined(GPAC_CONFIG_EMSCRIPTEN) && !defined(GPAC_DISABLE_THREADS)
+						if (em_check_yield_th_proc(thid, sess_thread, enter_time)) {
+							return 0;
+						}
+#endif
 						continue;
 					}
 					force_secondary_tasks=GF_FALSE;
 				}
 			}
-			GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %u: task %s:%s schedule time "LLU" us reached (diff %d ms)\n", sys_thid, current_filter ? current_filter->name : "", task->log_name, task->schedule_next_time, (s32) diff));
+			GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %s: task %s:%s schedule time "LLU" us reached (diff %d ms)\n", sys_thid, current_filter ? current_filter->name : "", task->log_name, task->schedule_next_time, (s32) diff));
 
 		}
 		next_task_schedule_time = 0;
 
 		if (current_filter) {
-			current_filter->scheduled_for_next_task = GF_TRUE;
-			assert(!current_filter->in_process);
+			current_filter->scheduled_for_next_task = GF_FILTER_SCHEDULED;
+			gf_assert(!current_filter->in_process);
 			current_filter->in_process = GF_TRUE;
 			current_filter->process_th_id = gf_th_id();
 		}
 
 		sess_thread->nb_tasks++;
 		sess_thread->has_seen_eot = GF_FALSE;
-		if (task->filter) {
-			assert(gf_fq_count(task->filter->tasks));
-		}
+		gf_assert(!task->filter || gf_fq_count(task->filter->tasks));
 
-		GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %u task#%d %p executing Filter %s::%s (%d tasks pending, %d(%d) process task queued)\n", sys_thid, sess_thread->nb_tasks, task, task->filter ? task->filter->name : "none", task->log_name, fsess->tasks_pending, task->filter ? task->filter->process_task_queued : 0, task->filter ? gf_fq_count(task->filter->tasks) : 0));
+		GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %s task#%d %p executing Filter %s::%s (%d tasks pending, %d(%d) process task queued)\n", sys_thid, sess_thread->nb_tasks, task, task->filter ? task->filter->name : "none", task->log_name, fsess->tasks_pending, task->filter ? task->filter->process_task_queued : 0, task->filter ? gf_fq_count(task->filter->tasks) : 0));
 
 		safe_int_inc(& fsess->tasks_in_process );
-		assert( task->run_task );
+		gf_assert( task->run_task );
 		task_time = gf_sys_clock_high_res();
 		//remember the last time we scheduled this filter
 		if (task->filter)
@@ -1856,7 +2396,9 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 
 		task->can_swap = 0;
 		task->requeue_request = GF_FALSE;
+		task->thid = 1+thid;
 		task->run_task(task);
+		task->thid = 0;
 		requeue = task->requeue_request;
 
 		task_time = gf_sys_clock_high_res() - task_time;
@@ -1876,6 +2418,15 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 			current_filter->time_process += task_time;
 			consecutive_filter_tasks++;
 
+#if defined(GPAC_CONFIG_EMSCRIPTEN)
+			//for mono-thread case non blocking: if filter is marked as async blocking, abort and release
+			//control to caller
+			if  (!thid && fsess->non_blocking && (current_filter->freg->flags & GF_FS_REG_ASYNC_BLOCK)) {
+				consecutive_filter_tasks=11;
+				fsess->in_main_sem_wait = GF_TRUE;
+			}
+#endif
+
 			gf_mx_p(current_filter->tasks_mx);
 			if (gf_fq_count(current_filter->tasks)==1) {
 				//if task is set to immediate reschedule, don't consider this is the last task
@@ -1889,12 +2440,12 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 			}
 			//if last task
 			if ( last_task
-				//if requeue request and stream reset pending (we must exit the filter task loop for the reset task to pe processed)
+				//if requeue request and stream reset pending (we must exit the filter task loop for the reset task to be processed)
 				|| (requeue && current_filter->stream_reset_pending)
-				//or requeue request and pid swap pending (we must exit the filter task loop for the swap task to pe processed)
+				//or requeue request and pid swap pending (we must exit the filter task loop for the swap task to be processed)
 				|| (requeue && (current_filter->swap_pidinst_src ||  current_filter->swap_pidinst_dst) )
 				//or requeue request and pid detach / cap negotiate pending
-				|| (requeue && (current_filter->out_pid_connection_pending || current_filter->detached_pid_inst || current_filter->caps_negociate) )
+				|| (requeue && (current_filter->out_pid_connection_pending || current_filter->detached_pid_inst || current_filter->caps_negotiate) )
 
 				//or requeue request and we have been running on that filter for more than 10 times, abort
 				|| (requeue && (consecutive_filter_tasks>10))
@@ -1918,7 +2469,7 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 						//requeue task
 						gf_fq_add(current_filter->tasks, task);
 
-						//ans swap task for later requeing
+						//ans swap task for later requeuing
 						if (next_task) task = next_task;
 					}
 					//otherwise (can't swap) keep task first in the list
@@ -1931,7 +2482,7 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 #endif
 				} else {
 					//no requeue, filter no longer scheduled and drop task
-					current_filter->scheduled_for_next_task = GF_FALSE;
+					current_filter->scheduled_for_next_task = GF_FILTER_NOT_SCHEDULED;
 
 					//drop task from filter task list
 					gf_fq_pop(current_filter->tasks);
@@ -1945,6 +2496,10 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 #ifdef CHECK_TASK_LIST_INTEGRITY
 				if (requeue && !skip_filter_task_check) check_task_list(current_filter->tasks, task);
 #endif
+
+#ifndef GPAC_DISABLE_LOG
+				gf_log_pop_extra(current_filter->logs);
+#endif
 				current_filter = NULL;
 			} else {
 				//drop task from filter task list
@@ -1954,8 +2509,11 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 				if (!requeue && !gf_fq_count(current_filter->tasks)) {
 					current_filter->process_th_id = 0;
 					current_filter->in_process = GF_FALSE;
-					current_filter->scheduled_for_next_task = GF_FALSE;
+					current_filter->scheduled_for_next_task = GF_FILTER_NOT_SCHEDULED;
 					gf_mx_v(current_filter->tasks_mx);
+#ifndef GPAC_DISABLE_LOG
+					gf_log_pop_extra(current_filter->logs);
+#endif
 					current_filter = NULL;
 				} else {
 #ifdef CHECK_TASK_LIST_INTEGRITY
@@ -1978,11 +2536,11 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 		if (requeue) {
 			//if requeue on a filter active, use filter queue to avoid another thread grabing the task (we would have concurrent access to the filter)
 			if (current_filter) {
-				GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %u re-posted task Filter %s::%s in filter tasks (%d pending)\n", sys_thid, task->filter->name, task->log_name, fsess->tasks_pending));
+				GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %s re-posted task Filter %s::%s in filter tasks (%d pending)\n", sys_thid, task->filter->name, task->log_name, fsess->tasks_pending));
 				task->notified = GF_FALSE;
 				//keep this thread running on the current filter no signaling of semaphore
 			} else {
-				GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %u re-posted task Filter %s::%s in %s tasks (%d pending)\n", sys_thid, task->filter ? task->filter->name : "none", task->log_name, (task->filter && (task->filter->freg->flags & GF_FS_REG_MAIN_THREAD)) ? "main" : "secondary", fsess->tasks_pending));
+				GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %s re-posted task Filter %s::%s in %s tasks (%d pending)\n", sys_thid, task->filter ? task->filter->name : "none", task->log_name, (task->filter && (task->filter->freg->flags & GF_FS_REG_MAIN_THREAD)) ? "main" : "secondary", fsess->tasks_pending));
 
 				task->notified = GF_TRUE;
 				safe_int_inc(&fsess->tasks_pending);
@@ -1998,11 +2556,13 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 				if (task->filter && (task->filter->freg->flags & GF_FS_REG_MAIN_THREAD)) {
 					gf_fq_add(fsess->main_thread_tasks, task);
 
-					//FIXME, we sometimes miss a sema notfiy resulting in secondary tasks being locked
+#ifndef GPAC_DISABLE_THREADS
+					//FIXME, we sometimes miss a sema notify resulting in secondary tasks being locked
 					//until we find the cause, notify secondary sema if non-main-thread tasks are scheduled and we are the only task in main
 					if (use_main_sema && (thid==0) && fsess->threads && (gf_fq_count(fsess->main_thread_tasks)==1) && gf_fq_count(fsess->tasks)) {
 						gf_fs_sema_io(fsess, GF_TRUE, GF_FALSE);
 					}
+#endif
 				} else {
 					gf_fq_add(fsess->tasks, task);
 				}
@@ -2026,19 +2586,16 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 				gf_mx_v(fsess->filters_mx);
 			}
 #endif
-			GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %u task#%d %p pushed to reservoir\n", sys_thid, sess_thread->nb_tasks, task));
+			GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Thread %s task#%d %p pushed to reservoir\n", sys_thid, sess_thread->nb_tasks, task));
 
-			if (fsess->tasks_reservoir) {
-				memset(task, 0, sizeof(GF_FSTask));
-				gf_fq_add(fsess->tasks_reservoir, task);
-			} else {
+			if (gf_fq_res_add(fsess->tasks_reservoir, task)) {
 				gf_free(task);
 			}
 		}
 
 		//decrement task counter
 		if (notified) {
-			assert(fsess->tasks_pending);
+			gf_assert(fsess->tasks_pending);
 			safe_int_dec(&fsess->tasks_pending);
 		}
 		if (current_filter) {
@@ -2060,23 +2617,31 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 
 
 		//no main thread, return
-		if (!thid && fsess->non_blocking && !current_filter && !fsess->pid_connect_tasks_pending) {
-			gf_rmt_end();
+		if (!thid && fsess->non_blocking && !fsess->remove_tasks && !current_filter && !fsess->pid_connect_tasks_pending) {
 			GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Main thread proc exit\n"));
+			safe_int_dec(&fsess->active_threads);
 			return 0;
 		}
 	}
 
-	gf_rmt_end();
-
+	safe_int_dec(&fsess->active_threads);
 	//no main thread, return
 	if (!thid && fsess->non_blocking) {
 		GF_LOG(GF_LOG_DEBUG, GF_LOG_SCHEDULER, ("Main thread proc exit\n"));
 		return 0;
 	}
-	sess_thread->run_time = gf_sys_clock_high_res() - enter_time;
+
+#if defined(GPAC_CONFIG_EMSCRIPTEN) && !defined(GPAC_DISABLE_THREADS)
+	if (thid) {
+		sess_thread->run_time += gf_sys_clock_high_res() - enter_time;
+	} else
+#endif
+		sess_thread->run_time = gf_sys_clock_high_res() - enter_time;
 
 	safe_int_inc(&fsess->nb_threads_stopped);
+
+	if (thid)
+		gf_logs_thread_tag_del(sess_thread);
 
 	if (!fsess->run_status)
 		fsess->run_status = GF_EOS;
@@ -2096,12 +2661,20 @@ static u32 gf_fs_thread_proc(GF_SessionThread *sess_thread)
 GF_EXPORT
 GF_Err gf_fs_run(GF_FilterSession *fsess)
 {
-	u32 i, nb_threads;
-	assert(fsess);
+	if (!fsess) return GF_BAD_PARAM;
 
 	//non blocking mode and threads created, only run main thread proc
 	if (fsess->non_blocking && (fsess->non_blocking==2) ) {
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+		if (fsess->pending_threads) return GF_NOT_READY;
+#endif
 		gf_fs_thread_proc(&fsess->main_th);
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+		if (fsess->in_main_sem_wait) {
+			fsess->in_main_sem_wait = GF_FALSE;
+			return GF_NOT_READY;
+		}
+#endif
 		return fsess->run_status;
 	}
 
@@ -2110,14 +2683,29 @@ GF_Err gf_fs_run(GF_FilterSession *fsess)
 	fsess->main_th.has_seen_eot = GF_FALSE;
 	fsess->nb_threads_stopped = 0;
 
+#ifndef GPAC_DISABLE_THREADS
+	u32 i, nb_threads;
 	nb_threads = gf_list_count(fsess->threads);
 	for (i=0;i<nb_threads; i++) {
 		GF_SessionThread *sess_th = gf_list_get(fsess->threads, i);
-		gf_th_run(sess_th->th, (gf_thread_run) gf_fs_thread_proc, sess_th);
+		if ( gf_th_run(sess_th->th, (gf_thread_run) gf_fs_thread_proc, sess_th) == GF_OK ) {
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+			if (fsess->non_blocking) {
+				safe_int_inc(&fsess->pending_threads);
+			}
+#endif
+		}
 	}
+#endif
 
-	//run main thread
-	gf_fs_thread_proc(&fsess->main_th);
+
+	//run main thread - for emscripten, we only call if no pending threads
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+	if (!fsess->pending_threads)
+#endif
+	{
+		gf_fs_thread_proc(&fsess->main_th);
+	}
 
 	//non blocking mode init, don't wait for other threads
 	if (fsess->non_blocking) {
@@ -2125,10 +2713,12 @@ GF_Err gf_fs_run(GF_FilterSession *fsess)
 		return fsess->run_status;
 	}
 
+#ifndef GPAC_DISABLE_THREADS
 	//blocking mode, wait for all threads to be done
 	while (nb_threads+1 != fsess->nb_threads_stopped) {
 		gf_sleep(1);
 	}
+#endif
 
 	return fsess->run_status;
 }
@@ -2138,7 +2728,10 @@ static void filter_abort_task(GF_FSTask *task)
 	GF_FilterEvent evt;
 	GF_FEVT_INIT(evt, GF_FEVT_STOP, task->pid);
 
+	gf_logs_thread_tag(task->pid->filter, GF_LOG_TAG_FILTER);
 	task->pid->filter->freg->process_event(task->pid->filter, &evt);
+	gf_logs_thread_untag(task->pid->filter);
+
 	gf_filter_pid_set_eos(task->pid);
 	task->pid->filter->disabled = GF_FILTER_DISABLED;
 	safe_int_dec(&task->pid->filter->abort_pending);
@@ -2167,12 +2760,14 @@ GF_Err gf_fs_abort(GF_FilterSession *fsess, GF_FSFlushType flush_type)
 	//disable all sources
 	for (i=0; i<count; i++) {
 		GF_Filter *filter = gf_list_get(fsess->filters, i);
+		if (!filter) continue;
 		//force end of session on all sources, and on all filters connected to these sources, and dispatch end of stream on all outputs pids of these filters
 		//if we don't propagate on connected filters, we take the risk of not deactivating demuxers working from file
 		//(eg ignoring input packets)
 		//
 		//we shortcut the thread execution state here by directly calling set_eos, we need to lock/unlock our filters carefully
 		//to avoid deadlocks or crashes
+		gf_mx_v(fsess->filters_mx);
 		gf_mx_p(filter->tasks_mx);
 
 		if (!filter->num_input_pids) {
@@ -2189,7 +2784,7 @@ GF_Err gf_fs_abort(GF_FilterSession *fsess, GF_FSFlushType flush_type)
 				//if the PID has a codecid set (demuxed pid, e.g. ffavin or other grabbers), do not force STOP on its destinations
 				p = gf_filter_pid_get_property(pid, GF_PROP_PID_CODECID);
 				if (p) continue;
-				
+
 				for (k=0; k<pid->num_destinations; k++) {
 					Bool force_disable = GF_TRUE;
 					GF_FilterPidInst *pidi = gf_list_get(pid->destinations, k);
@@ -2215,7 +2810,10 @@ GF_Err gf_fs_abort(GF_FilterSession *fsess, GF_FSFlushType flush_type)
 								GF_FilterEvent evt;
 								GF_FEVT_INIT(evt, GF_FEVT_STOP, opid);
 
+								gf_logs_thread_tag(opid->filter, GF_LOG_TAG_FILTER);
 								opid->filter->freg->process_event(opid->filter, &evt);
+								gf_logs_thread_untag(opid->filter);
+
 								gf_filter_pid_set_eos(opid);
 							}
 						} else {
@@ -2261,6 +2859,7 @@ GF_Err gf_fs_abort(GF_FilterSession *fsess, GF_FSFlushType flush_type)
 		}
 
 		gf_mx_v(filter->tasks_mx);
+		gf_mx_p(fsess->filters_mx);
 	}
 	gf_mx_v(fsess->filters_mx);
 	return GF_OK;
@@ -2269,8 +2868,12 @@ GF_Err gf_fs_abort(GF_FilterSession *fsess, GF_FSFlushType flush_type)
 GF_EXPORT
 GF_Err gf_fs_stop(GF_FilterSession *fsess)
 {
-	u32 i, count = fsess->threads ? gf_list_count(fsess->threads) : 0;
-
+	u32 i;
+#ifndef GPAC_DISABLE_THREADS
+	u32 count = fsess->threads ? gf_list_count(fsess->threads) : 0;
+#else
+	u32 count=0;
+#endif
 	GF_LOG(GF_LOG_DEBUG, GF_LOG_FILTER, ("Session stop\n"));
 	if (count+1 == fsess->nb_threads_stopped) {
 		return GF_OK;
@@ -2280,6 +2883,12 @@ GF_Err gf_fs_stop(GF_FilterSession *fsess)
 		fsess->in_final_flush = GF_TRUE;
 		fsess->run_status = GF_EOS;
 	}
+
+	//update runtime for main thread in non-blocking mode
+	if (fsess->non_blocking) {
+		fsess->main_th.run_time = gf_sys_clock_high_res() - fsess->main_th.run_time;
+	}
+
 
 	for (i=0; i < count; i++) {
 		gf_fs_sema_io(fsess, GF_TRUE, GF_FALSE);
@@ -2347,8 +2956,13 @@ static GFINLINE void print_filter_name(GF_Filter *f, Bool skip_id, Bool skip_arg
 GF_EXPORT
 void gf_fs_print_stats(GF_FilterSession *fsess)
 {
-	u64 run_time=0, active_time=0, nb_tasks=0, nb_filters=0;
+#ifndef GPAC_DISABLE_THREADS
+	u64 run_time=0, active_time=0, nb_tasks=0;
+#endif
 	u32 i, count;
+#ifndef GPAC_DISABLE_LOG
+	u32 nb_filters=0;
+#endif
 
 	GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("\n"));
 	gf_mx_p(fsess->filters_mx);
@@ -2357,15 +2971,18 @@ void gf_fs_print_stats(GF_FilterSession *fsess)
 	for (i=0; i<count; i++) {
 		GF_Filter *f = gf_list_get(fsess->filters, i);
 		if (f->multi_sink_target) continue;
+#ifndef GPAC_DISABLE_LOG
 		nb_filters++;
+#endif
 	}
 
 	GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("Filter stats - %d filters\n", nb_filters));
 	for (i=0; i<count; i++) {
 		u32 k, ipids, opids;
 		GF_Filter *f = gf_list_get(fsess->filters, i);
-		if (f->multi_sink_target) continue;
+		if (!f || f->multi_sink_target) continue;
 
+		gf_mx_v(fsess->filters_mx);
 		gf_mx_p(f->tasks_mx);
 
 		ipids = f->num_input_pids;
@@ -2400,7 +3017,10 @@ void gf_fs_print_stats(GF_FilterSession *fsess)
 		for (k=0; k<ipids; k++) {
 			GF_FilterPidInst *pid = gf_list_get(f->input_pids, k);
 			if (!pid->pid) continue;
-			if (pid->requires_full_data_block && (pid->nb_reagg_pck != pid->pid->nb_pck_sent) ) {
+			const GF_PropertyValue *p = gf_filter_pid_get_property(pid->pid, GF_PROP_PID_FAKE);
+			if (p && p->value.boolean) {
+				GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("\t\t* input PID %s: Fake\n", pid->pid->name));
+			} else if (pid->requires_full_data_block && (pid->nb_reagg_pck != pid->pid->nb_pck_sent) ) {
 				GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("\t\t* input PID %s: %d frames (%d packets) received\n", pid->pid->name, pid->nb_reagg_pck, pid->pid->nb_pck_sent));
 			} else {
 				GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("\t\t* input PID %s: %d packets received\n", pid->pid->name, pid->pid->nb_pck_sent));
@@ -2409,7 +3029,12 @@ void gf_fs_print_stats(GF_FilterSession *fsess)
 #ifndef GPAC_DISABLE_LOG
 		for (k=0; k<opids; k++) {
 			GF_FilterPid *pid = gf_list_get(f->output_pids, k);
-			GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("\t\t* output PID %s: %d packets sent\n", pid->name, pid->nb_pck_sent));
+			const GF_PropertyValue *p = gf_filter_pid_get_property(pid, GF_PROP_PID_FAKE);
+			if (p && p->value.boolean) {
+				GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("\t\t* output PID %s: Fake\n", pid->name));
+			} else {
+				GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("\t\t* output PID %s: %d packets sent\n", pid->name, pid->nb_pck_sent));
+			}
 		}
 		if (f->nb_errors) {
 			GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("\t\t%d errors while processing\n", f->nb_errors));
@@ -2417,14 +3042,20 @@ void gf_fs_print_stats(GF_FilterSession *fsess)
 #endif
 
 		gf_mx_v(f->tasks_mx);
+		gf_mx_p(fsess->filters_mx);
 	}
 	gf_mx_v(fsess->filters_mx);
 
+#ifndef GPAC_DISABLE_THREADS
 	count=gf_list_count(fsess->threads);
-	GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("Session stats - threads %d\n", 1+count));
+	GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("Session stats - threads %d\n\tThread 1: ", 1+count));
+#else
+	GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("Session stats: "));
+#endif
 
-	GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("\tThread %u: run_time "LLU" us active_time "LLU" us nb_tasks "LLU"\n", 1, fsess->main_th.run_time, fsess->main_th.active_time, fsess->main_th.nb_tasks));
+	GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("run_time "LLU" us active_time "LLU" us nb_tasks "LLU"\n", fsess->main_th.run_time, fsess->main_th.active_time, fsess->main_th.nb_tasks));
 
+#ifndef GPAC_DISABLE_THREADS
 	run_time+=fsess->main_th.run_time;
 	active_time+=fsess->main_th.active_time;
 	nb_tasks+=fsess->main_th.nb_tasks;
@@ -2439,6 +3070,7 @@ void gf_fs_print_stats(GF_FilterSession *fsess)
 		nb_tasks+=s->nb_tasks;
 	}
 	GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("\nTotal: run_time "LLU" us active_time "LLU" us nb_tasks "LLU"\n", run_time, active_time, nb_tasks));
+#endif
 }
 
 static void gf_fs_print_filter_outputs(GF_Filter *f, GF_List *filters_done, u32 indent, GF_FilterPid *pid, GF_Filter *alias_for, u32 src_num_tiled_pids, Bool skip_print, s32 nb_recursion, u32 max_length)
@@ -2450,7 +3082,6 @@ static void gf_fs_print_filter_outputs(GF_Filter *f, GF_List *filters_done, u32 
 			GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("-"));
 			i++;
 		}
-
 		if (src_num_tiled_pids>1) {
 			GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("(tilePID[%d]) ", src_num_tiled_pids));
 		}
@@ -2512,6 +3143,8 @@ static void gf_fs_print_filter_outputs(GF_Filter *f, GF_List *filters_done, u32 
 		}
 		GF_LOG(GF_LOG_INFO, GF_LOG_APP, (")\n"));
 	}
+	if (f->num_output_pids<=1)
+		src_num_tiled_pids = 0;
 
 	GF_List *dests = gf_list_new();
 	for (i=0; i<f->num_output_pids; i++) {
@@ -2548,10 +3181,16 @@ static void gf_fs_print_filter_outputs(GF_Filter *f, GF_List *filters_done, u32 
 				for (j=0; j<f->num_output_pids; j++) {
 					GF_FilterPid *apid = gf_list_get(f->output_pids, j);
 					p = gf_filter_pid_get_property(apid, GF_PROP_PID_CODECID);
+					//if this is a tile pid, check if it is connected to our destination
 					if (p &&
 						((p->value.uint==GF_CODECID_HEVC_TILES) || (p->value.uint==GF_CODECID_VVC_SUBPIC))
 					) {
-						num_tile_pids++;
+						u32 k;
+						for (k=0; k<apid->num_destinations; k++) {
+							GF_FilterPidInst *pidi = gf_list_get(apid->destinations, k);
+							if (pidi->filter != dest) continue;
+							num_tile_pids++;
+						}
 					}
 				}
 				plen = 5;
@@ -2629,6 +3268,7 @@ static void gf_fs_print_not_connected_filters(GF_FilterSession *fsess, GF_List *
 		//only dump not connected ones
 		if (f->num_input_pids || f->num_output_pids || f->multi_sink_target || f->nb_tasks_done) continue;
 		if (f->disabled==GF_FILTER_DISABLED_HIDE) continue;
+		if (f->filter_skipped) continue;
 
 		if (ignore_sinks) {
 			Bool has_outputs;
@@ -2689,6 +3329,7 @@ void gf_fs_print_connections(GF_FilterSession *fsess)
 	for (i=0; i<count; i++) {
 		GF_Filter *f = gf_list_get(fsess->filters, i);
 		if (f->multi_sink_target) continue;
+		if (f->filter_skipped) continue;
 		if (gf_list_find(filters_done, f)>=0) continue;
 		if (f->disabled==GF_FILTER_DISABLED_HIDE) continue;
 		if (!has_undefined) {
@@ -2708,6 +3349,7 @@ void gf_fs_print_unused_args(GF_FilterSession *fsess, const char *ignore_args)
 	u32 idx = 0;
 	const char *argname;
 	u32 argtype;
+	Bool first=GF_TRUE;
 
 	while (1) {
 		Bool found = GF_FALSE;
@@ -2732,7 +3374,11 @@ void gf_fs_print_unused_args(GF_FilterSession *fsess, const char *ignore_args)
 		}
 		if (found) continue;
 
-		GF_LOG(GF_LOG_ERROR, GF_LOG_APP, ("Arg %s set but not used\n", argname));
+		if (first) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_APP, ("\nWarning: the following arguments have been set but not used:\n"));
+			first=GF_FALSE;
+		}
+		GF_LOG(GF_LOG_ERROR, GF_LOG_APP, ("%s\n", argname));
 	}
 }
 
@@ -2782,6 +3428,12 @@ void gf_fs_send_update(GF_FilterSession *fsess, const char *fid, GF_Filter *filt
 		sep = strchr(name, fsess->sep_name);
 		if (sep) sep[0] = 0;
 	}
+#ifndef GPAC_DISABLE_LOG
+	if (!strcmp(name, "LT")) {
+		filter_parse_logs(filter, val);
+		return;
+	}
+#endif
 
 	//find arg and check if it is only a sync update - if so do it now
 	i=0;
@@ -2819,14 +3471,29 @@ void gf_fs_send_update(GF_FilterSession *fsess, const char *fid, GF_Filter *filt
 	gf_fs_post_task(fsess, gf_filter_update_arg_task, filter, NULL, "update_arg", upd);
 }
 
-static GF_FilterProbeScore probe_meta_check_builtin_format(GF_FilterSession *fsess, GF_FilterRegister *freg, const char *url, const char *mime, char *fargs)
+static GF_FilterProbeScore probe_meta_check_builtin_format(GF_FilterSession *fsess, GF_FilterRegister *freg, const char *url, const char *_mime, char *fargs)
 {
-	char szExt[100];
-	const char *ext = gf_file_ext_start(url);
+	char szExt[100], s_ext[20], szMime[100];
+	const char *mime = NULL;
+	const char *ext = NULL;
+	const char *_ext = gf_file_ext_start(url);
 	u32 len=0, i, j, count = gf_list_count(fsess->registry);
-	if (ext) {
-		ext++;
-		len = (u32) strlen(ext);
+
+	//lowercase ext
+	if (_ext) {
+		_ext++;
+		strncpy(s_ext, _ext, 19);
+		s_ext[19]=0;
+		strlwr(s_ext);
+		len = (u32) strlen(s_ext);
+		ext = s_ext;
+	}
+	//lowercase mime in case it is provided through external means
+	if (_mime) {
+		strncpy(szMime, _mime, 99);
+		szMime[99] = 0;
+		strlwr(szMime);
+		mime = szMime;
 	}
 	//check in filter args if we have a format set, in which case replace URL ext by the given format
 	if (fargs) {
@@ -2849,6 +3516,7 @@ static GF_FilterProbeScore probe_meta_check_builtin_format(GF_FilterSession *fse
 			if (len>99) len=99;
 			strncpy(szExt, ext_arg, len);
 			szExt[len] = 0;
+			strlwr(szExt);
 			ext = szExt;
 		}
 	}
@@ -2927,10 +3595,14 @@ static GF_Filter *locate_alias_sink(GF_Filter *filter, const char *url, const ch
 			GF_Filter *f;
 			GF_FilterPidInst *pidi = gf_list_get(pid->destinations, j);
 			if (!pidi->filter) continue;
-			if (pidi->filter->act_as_sink && pidi->filter->freg->use_alias
-				&& pidi->filter->freg->use_alias(pidi->filter, url, mime_type)
-			) {
-				return pidi->filter;
+			if (pidi->filter->act_as_sink && pidi->filter->freg->use_alias) {
+
+				gf_logs_thread_tag(pidi->filter, GF_LOG_TAG_FILTER);
+				if (pidi->filter->freg->use_alias(pidi->filter, url, mime_type)) {
+					gf_logs_thread_untag(pidi->filter);
+					return pidi->filter;
+				}
+				gf_logs_thread_untag(pidi->filter);
 			}
 			//recursovely walk towards the sink
 			f = locate_alias_sink(pidi->filter, url, mime_type);
@@ -2939,8 +3611,6 @@ static GF_Filter *locate_alias_sink(GF_Filter *filter, const char *url, const ch
 	}
 	return NULL;
 }
-
-Bool filter_solve_gdocs(const char *url, char szPath[GF_MAX_PATH]);
 
 GF_Filter *gf_fs_load_source_dest_internal(GF_FilterSession *fsess, const char *url, const char *user_args, const char *parent_url, GF_Err *err, GF_Filter *filter, GF_Filter *dst_filter, Bool for_source, Bool no_args_inherit, Bool *probe_only, const GF_FilterRegister **probe_reg)
 {
@@ -2981,6 +3651,7 @@ GF_Filter *gf_fs_load_source_dest_internal(GF_FilterSession *fsess, const char *
 			if (sep) sep[0] = 0;
 			mime_type = szMime;
 		}
+		strlwr(szMime);
 		sprintf(szForceExt, "%cext=", fsess->sep_args);
 		char *ext = strstr(url, szForceExt);
 		if (ext) {
@@ -2989,7 +3660,10 @@ GF_Filter *gf_fs_load_source_dest_internal(GF_FilterSession *fsess, const char *
 			szForceExt[19]=0;
 			ext = strchr(szForceExt, fsess->sep_args);
 			if (ext) ext[0] = 0;
+		} else {
+			szForceExt[0] = 0;
 		}
+		strlwr(szForceExt);
 	}
 	sURL = NULL;
 	if (filter) {
@@ -2998,8 +3672,8 @@ GF_Filter *gf_fs_load_source_dest_internal(GF_FilterSession *fsess, const char *
 		char szSolvedPath[GF_MAX_PATH];
 		Bool is_local;
 
-		if (!strncmp(url, "$GDOCS", 6)) {
-			if (filter_solve_gdocs(url, szSolvedPath))
+		if (!strncmp(url, "$GDOCS", 6) || !strncmp(url, "$GCFG", 5)) {
+			if (gf_sys_solve_path(url, szSolvedPath))
 				url = szSolvedPath;
 		}
 		/*used by GUIs scripts to skip URL concatenation*/
@@ -3126,8 +3800,9 @@ restart:
 			continue;
 
 		s = freg->probe_url(sURL, mime_type);
-		if (szForceExt[0] && (s==GF_FPROBE_NOT_SUPPORTED))
-			s = freg->probe_url(szForceExt, mime_type);
+		if (!for_source && (s==GF_FPROBE_MAYBE_NOT_SUPPORTED)) {
+			s = szForceExt[0] ? freg->probe_url(szForceExt, mime_type) : GF_FPROBE_NOT_SUPPORTED;
+		}
 		/* destination meta filter: change GF_FPROBE_SUPPORTED to GF_FPROBE_MAYBE_SUPPORTED for internal mux formats
 		in order to avoid always giving the hand to the meta filter*/
 		if (!for_source && (s == GF_FPROBE_SUPPORTED) && (freg->flags & GF_FS_REG_META)) {
@@ -3170,7 +3845,7 @@ restart:
 
 	user_args_len = user_args ? (u32) strlen(user_args) : 0;
 	args = gf_malloc(sizeof(char)*5);
-	
+
 	sprintf(args, "%s%c", for_source ? "src" : "dst", fsess->sep_name);
 	//path is using ':' and has options specified, inject :gpac before first option
 	if (sep && needs_escape) {
@@ -3210,24 +3885,27 @@ restart:
 		for (i=0; i<fcount; i++) {
 			GF_Filter *f = gf_list_get(fsess->filters, i);
 			if (f->freg != candidate_freg) continue;
+			gf_logs_thread_tag(f, GF_LOG_TAG_FILTER);
 			if (f->freg->use_alias(f, sURL, mime_type)) {
+				gf_logs_thread_untag(f);
 				alias_for_filter = f;
 				break;
 			}
+			gf_logs_thread_untag(f);
 		}
 	}
 
 	if (!filter) {
 		filter = gf_filter_new(fsess, candidate_freg, args, NULL, arg_type, err, alias_for_filter, GF_FALSE);
 	} else {
-        //destroy underlying JS object - gf_filter_new_finalize always reassign it to JS_UNDEFINED
+		//destroy underlying JS object - gf_filter_new_finalize always reassign it to JS_UNDEFINED
 #ifdef GPAC_HAS_QJS
-        jsfs_on_filter_destroyed(filter);
+		jsfs_on_filter_destroyed(filter);
 #endif
 		if (filter->session->on_filter_create_destroy)
 			filter->session->on_filter_create_destroy(filter->session->rt_udta, filter, GF_TRUE);
-			
-        filter->freg = candidate_freg;
+
+		filter->freg = candidate_freg;
 		e = gf_filter_new_finalize(filter, args, arg_type);
 		if (err) *err = e;
 	}
@@ -3347,13 +4025,13 @@ Bool gf_filter_send_gf_event(GF_Filter *filter, GF_Event *evt)
 
 static void gf_fs_print_jsf_connection(GF_FilterSession *session, char *filter_name, GF_Filter *js_filter, void (*print_fn)(FILE *output, GF_SysPrintArgFlags flags, const char *fmt, ...) )
 {
-	GF_CapsBundleStore capstore;
 	const char *js_name = NULL;
 	GF_Err e=GF_OK;
 	u32 i, j, count, nb_js_caps;
 	GF_List *sources, *sinks;
 	GF_FilterRegister loaded_freg;
 	Bool has_output, has_input;
+	GF_FilterRegDesc local_reg;
 
 	if (!js_filter) {
 		if (!filter_name) return;
@@ -3378,7 +4056,8 @@ static void gf_fs_print_jsf_connection(GF_FilterSession *session, char *filter_n
 	has_output = gf_filter_has_out_caps(js_filter->forced_caps, js_filter->nb_forced_caps);
 	has_input = gf_filter_has_in_caps(js_filter->forced_caps, js_filter->nb_forced_caps);
 
-	memset(&capstore, 0, sizeof(GF_CapsBundleStore));
+	memset(&local_reg, 0, sizeof(GF_FilterRegDesc));
+	GF_SAFEALLOC(local_reg.bundle_cache, GF_BundleCache);
 	sources = gf_list_new();
 	sinks = gf_list_new();
 	//edges for JS are for the unloaded JSF (eg accept anything, output anything).
@@ -3393,21 +4072,21 @@ static void gf_fs_print_jsf_connection(GF_FilterSession *session, char *filter_n
 
 		//check which cap of this filter matches our destination
 		nb_src_caps = gf_filter_caps_bundle_count(a_reg->freg->caps, a_reg->freg->nb_caps);
+		GF_SAFEALLOC(a_reg->bundle_cache, GF_BundleCache);
 		for (k=0; k<nb_src_caps; k++) {
 			for (l=0; l<nb_js_caps; l++) {
-				s32 bundle_idx;
 				u32 loaded_filter_only_flags = 0;
 				u32 path_weight;
 				if (has_input && !src_match) {
-					path_weight = gf_filter_caps_to_caps_match(a_reg->freg, k, (const GF_FilterRegister *) &loaded_freg, NULL, &bundle_idx, l, &loaded_filter_only_flags, &capstore);
-					if (path_weight && (bundle_idx == l))
+					path_weight = gf_filter_caps_to_caps_match(a_reg->freg, k, (const GF_FilterRegister *) &loaded_freg, NULL, l, &loaded_filter_only_flags, NULL, a_reg->bundle_cache, local_reg.bundle_cache);
+					if (path_weight)
 						src_match = GF_TRUE;
 				}
 				if (has_output && !sink_match) {
 					loaded_filter_only_flags = 0;
-					path_weight = gf_filter_caps_to_caps_match(&loaded_freg, l, a_reg->freg, NULL, &bundle_idx, k, &loaded_filter_only_flags, &capstore);
+					path_weight = gf_filter_caps_to_caps_match(&loaded_freg, l, a_reg->freg, NULL, k, &loaded_filter_only_flags, NULL, local_reg.bundle_cache, a_reg->bundle_cache);
 
-					if (path_weight && (bundle_idx == k))
+					if (path_weight)
 						sink_match = GF_TRUE;
 				}
 			}
@@ -3416,7 +4095,10 @@ static void gf_fs_print_jsf_connection(GF_FilterSession *session, char *filter_n
 		}
 		if (src_match) gf_list_add(sources, (void *) a_reg->freg);
 		if (sink_match) gf_list_add(sinks, (void *) a_reg->freg);
+
+		bundle_cache_free(a_reg);
 	}
+	bundle_cache_free(&local_reg);
 
 	for (i=0; i<2; i++) {
 		GF_List *from = i ? sinks : sources;
@@ -3427,7 +4109,7 @@ static void gf_fs_print_jsf_connection(GF_FilterSession *session, char *filter_n
 			if (print_fn)
 				print_fn(stderr, 1, "%s: no %s\n", js_name, type);
 			else {
-				GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("%s: no %s\n", type));
+				GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("%s: no %s\n", js_name, type));
 			}
 			continue;
 		}
@@ -3452,9 +4134,7 @@ static void gf_fs_print_jsf_connection(GF_FilterSession *session, char *filter_n
 		}
 	}
 
-	if (capstore.bundles_cap_found) gf_free(capstore.bundles_cap_found);
-	if (capstore.bundles_in_ok) gf_free(capstore.bundles_in_ok);
-	if (capstore.bundles_in_scores) gf_free(capstore.bundles_in_scores);
+	reset_bundle_cache(session);
 	gf_list_del(sources);
 	gf_list_del(sinks);
 }
@@ -3484,9 +4164,9 @@ void gf_fs_print_all_connections(GF_FilterSession *session, char *filter_name, v
 
 		found = GF_TRUE;
 		if (print_fn)
-			print_fn(stderr, 1, "%s sources:%s", src->freg->name, src->nb_edges ? "" : " none");
+			print_fn(stderr, 1, "%s sources:%s", src->freg->name, src->nb_edges ? "" : " none\n");
 		else {
-			GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("%s sources:%s", src->freg->name, src->nb_edges ? "" : " none"));
+			GF_LOG(GF_LOG_INFO, GF_LOG_APP, ("%s sources:%s", src->freg->name, src->nb_edges ? "" : " none\n"));
 		}
 		if (!src->nb_edges)
 			continue;
@@ -3506,7 +4186,7 @@ void gf_fs_print_all_connections(GF_FilterSession *session, char *filter_name, v
 						GF_LOG(GF_LOG_INFO, GF_LOG_APP, (" ( ", src->edges[j].src_reg->freg->name));
 					}
 					for (k=0; k<src->nb_edges; k++) {
-						if (src->edges[j].src_reg != src->edges[k].src_reg) continue;;
+						if (src->edges[j].src_reg != src->edges[k].src_reg) continue;
 
 						if (print_fn)
 							print_fn(stderr, 0, "%d->%d ", src->edges[k].src_cap_idx, src->edges[k].dst_cap_idx);
@@ -3605,6 +4285,7 @@ void gf_fs_print_all_connections(GF_FilterSession *session, char *filter_name, v
 	gf_log_set_tool_level(GF_LOG_FILTER, llev);
 }
 
+
 GF_EXPORT
 void gf_filter_print_all_connections(GF_Filter *filter, void (*print_fn)(FILE *output, GF_SysPrintArgFlags flags, const char *fmt, ...) )
 {
@@ -3650,6 +4331,7 @@ u8 gf_filter_get_sep(GF_Filter *filter, GF_FilterSessionSepType sep_type)
 	}
 }
 
+#ifndef GPAC_DISABLE_NETWORK
 static Bool gf_fsess_get_user_pass(void *usr_cbk, Bool secure, const char *site_url, char *usr_name, char *password, gf_dm_on_usr_pass async_pass, void *async_udta)
 {
 	GF_Event evt;
@@ -3663,15 +4345,30 @@ static Bool gf_fsess_get_user_pass(void *usr_cbk, Bool secure, const char *site_
 	evt.auth.async_usr_data = async_udta;
 	return gf_fs_forward_gf_event(fsess, &evt, GF_FALSE, GF_FALSE);
 }
+#endif
 
-static GF_DownloadManager *gf_fs_get_download_manager(GF_FilterSession *fs)
+GF_DownloadManager *gf_fs_get_download_manager(GF_FilterSession *fs)
 {
+#ifdef GPAC_USE_DOWNLOADER
 	if (!fs->download_manager) {
+
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+		if (!fs->non_blocking) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_HTTP, ("Fetch cannot be used in blocking mode as it requires returning to main/worker JS event loop\n"));
+			return NULL;
+		}
+#endif
+
 		fs->download_manager = gf_dm_new(fs);
 
+#ifndef GPAC_DISABLE_NETWORK
 		gf_dm_set_auth_callback(fs->download_manager, gf_fsess_get_user_pass, fs);
+#endif
 	}
 	return fs->download_manager;
+#else
+	return NULL;
+#endif
 }
 
 GF_EXPORT
@@ -3684,7 +4381,7 @@ GF_DownloadManager *gf_filter_get_download_manager(GF_Filter *filter)
 GF_EXPORT
 struct _gf_ft_mgr *gf_fs_get_font_manager(GF_FilterSession *fsess)
 {
-#ifdef GPAC_DISABLE_PLAYER
+#ifdef GPAC_DISABLE_FONTS
 	return NULL;
 #else
 	if (!fsess->font_manager) {
@@ -3703,7 +4400,7 @@ struct _gf_ft_mgr *gf_filter_get_font_manager(GF_Filter *filter)
 
 void gf_fs_cleanup_filters(GF_FilterSession *fsess)
 {
-	assert(fsess->pid_connect_tasks_pending);
+	gf_assert(fsess->pid_connect_tasks_pending);
 	safe_int_dec(&fsess->pid_connect_tasks_pending);
 }
 
@@ -3714,7 +4411,7 @@ GF_Err gf_fs_get_last_connect_error(GF_FilterSession *fs)
 	if (!fs) return GF_BAD_PARAM;
 	e = fs->last_connect_error;
 	fs->last_connect_error = GF_OK;
-	return e;
+	return e<0 ? e : GF_OK;
 }
 
 GF_EXPORT
@@ -3733,9 +4430,7 @@ typedef struct
 	void *callback;
 	Bool (*task_execute) (GF_FilterSession *fsess, void *callback, u32 *reschedule_ms);
 	Bool (*task_execute_filter) (GF_Filter *filter, void *callback, u32 *reschedule_ms);
-#ifndef GPAC_DISABLE_REMOTERY
-	rmtU32 rmt_hash;
-#endif
+
 } GF_UserTask;
 
 static void gf_fs_user_task(GF_FSTask *task)
@@ -3744,9 +4439,6 @@ static void gf_fs_user_task(GF_FSTask *task)
 	GF_UserTask *utask = (GF_UserTask *)task->udta;
 	task->schedule_next_time = 0;
 
-#ifndef GPAC_DISABLE_REMOTERY
-	gf_rmt_begin_hash(task->log_name, GF_RMT_AGGREGATE, &utask->rmt_hash);
-#endif
 	if (utask->task_execute) {
 		task->requeue_request = utask->task_execute(utask->fsess, utask->callback, &reschedule_ms);
 	} else if (task->filter) {
@@ -3754,7 +4446,6 @@ static void gf_fs_user_task(GF_FSTask *task)
 	} else {
 		task->requeue_request = 0;
 	}
-	gf_rmt_end();
 	//if no requeue request or if we are in final flush, don't re-execute
 	if (!task->requeue_request || utask->fsess->in_final_flush) {
 		gf_free(utask);
@@ -3763,13 +4454,13 @@ static void gf_fs_user_task(GF_FSTask *task)
 		gf_free((char *) task->log_name);
 		task->requeue_request = GF_FALSE;
 	} else {
-		assert(task->requeue_request);
+		gf_assert(task->requeue_request);
 		task->schedule_next_time = gf_sys_clock_high_res() + 1000*reschedule_ms;
 	}
 }
 
 
-static GF_Err gf_fs_post_user_task_internal(GF_FilterSession *fsess, Bool (*task_execute) (GF_FilterSession *fsess, void *callback, u32 *reschedule_ms), void *udta_callback, const char *log_name, Bool force_main)
+static GF_Err gf_fs_post_user_task_internal(GF_FilterSession *fsess, Bool (*task_execute) (GF_FilterSession *fsess, void *callback, u32 *reschedule_ms), void *udta_callback, const char *log_name, Bool force_main, u32 delay_ms)
 {
 	GF_UserTask *utask;
 	char *_log_name;
@@ -3781,20 +4472,26 @@ static GF_Err gf_fs_post_user_task_internal(GF_FilterSession *fsess, Bool (*task
 	utask->task_execute = task_execute;
 	//dup mem for user task
 	_log_name = gf_strdup(log_name ? log_name : "user_task");
-	gf_fs_post_task_ex(fsess, gf_fs_user_task, NULL, NULL, _log_name, utask, GF_FALSE, force_main, GF_FALSE, TASK_TYPE_USER);
+	gf_fs_post_task_ex(fsess, gf_fs_user_task, NULL, NULL, _log_name, utask, GF_FALSE, force_main, GF_FALSE, TASK_TYPE_USER, delay_ms);
 	return GF_OK;
 }
 
 GF_EXPORT
 GF_Err gf_fs_post_user_task(GF_FilterSession *fsess, Bool (*task_execute) (GF_FilterSession *fsess, void *callback, u32 *reschedule_ms), void *udta_callback, const char *log_name)
 {
-	return gf_fs_post_user_task_internal(fsess, task_execute, udta_callback, log_name, fsess->force_main_thread_tasks);
+	return gf_fs_post_user_task_internal(fsess, task_execute, udta_callback, log_name, fsess->force_main_thread_tasks, 0);
+}
+
+GF_EXPORT
+GF_Err gf_fs_post_user_task_delay(GF_FilterSession *fsess, Bool (*task_execute) (GF_FilterSession *fsess, void *callback, u32 *reschedule_ms), void *udta_callback, const char *log_name, u32 delay_ms)
+{
+	return gf_fs_post_user_task_internal(fsess, task_execute, udta_callback, log_name, fsess->force_main_thread_tasks, delay_ms);
 }
 
 GF_EXPORT
 GF_Err gf_fs_post_user_task_main(GF_FilterSession *fsess, Bool (*task_execute) (GF_FilterSession *fsess, void *callback, u32 *reschedule_ms), void *udta_callback, const char *log_name)
 {
-	return gf_fs_post_user_task_internal(fsess, task_execute, udta_callback, log_name, GF_TRUE);
+	return gf_fs_post_user_task_internal(fsess, task_execute, udta_callback, log_name, GF_TRUE, 0);
 }
 
 GF_EXPORT
@@ -3893,7 +4590,7 @@ GF_Err gf_filter_get_stats(GF_Filter *f, GF_FilterStats *stats)
 	stats->filter = f;
 	stats->filter_alias = f->multi_sink_target;
 	if (f->multi_sink_target) return GF_OK;
-	
+
 	stats->percent = f->status_percent>10000 ? -1 : (s32) f->status_percent;
 	stats->status = f->status_str;
 	stats->nb_pck_processed = f->nb_pck_processed;
@@ -3959,6 +4656,9 @@ GF_Err gf_filter_get_stats(GF_Filter *f, GF_FilterStats *stats)
 		if ((f->num_input_pids!=1) && f->num_output_pids)
 			continue;
 
+		if (!pidi->pid)
+			continue;
+
 		if (!stats->codecid)
 			stats->codecid = pidi->pid->codecid;
 		if (!stats->stream_type)
@@ -4011,7 +4711,7 @@ GF_EXPORT
 GF_Filter *gf_fs_new_filter(GF_FilterSession *fsess, const char *name, u32 flags, GF_Err *e)
 {
 	GF_Filter *f;
-	char szRegName[25];
+	char *sep, szRegName[25];
 	GF_FilterRegister *reg;
 
 	GF_SAFEALLOC(reg, GF_FilterRegister);
@@ -4028,16 +4728,18 @@ GF_Filter *gf_fs_new_filter(GF_FilterSession *fsess, const char *name, u32 flags
 #endif
 	reg->version = "custom";
 	sprintf(szRegName, "custom%p", reg);
+	sep = strchr(name, fsess->sep_args);
+	if (sep) sep[0] = 0;
 	reg->name = gf_strdup(name ? name : szRegName);
 	reg->flags = GF_FS_REG_CUSTOM | GF_FS_REG_EXPLICIT_ONLY;
 
 	if (flags & GF_FS_REG_MAIN_THREAD)
 		reg->flags |= GF_FS_REG_MAIN_THREAD;
 
-	f = gf_filter_new(fsess, reg, NULL, NULL, 0, e, NULL, GF_FALSE);
-	if (!f) return NULL;
-	if (name)
+	f = gf_filter_new(fsess, reg, sep ? sep+1 : NULL, NULL, 0, e, NULL, GF_FALSE);
+	if (f && name)
 		gf_filter_set_name(f, name);
+	if (sep) sep[0] = fsess->sep_args;
 	return f;
 }
 
@@ -4175,33 +4877,43 @@ Bool gf_filter_unclaim_opengl_provider(GF_Filter *filter, void *vout)
 GF_EXPORT
 u32 gf_fs_get_http_max_rate(GF_FilterSession *fs)
 {
+#ifdef GPAC_USE_DOWNLOADER
 	if (!fs->download_manager) {
 		gf_fs_get_download_manager(fs);
 		if (!fs->download_manager) return 0;
 	}
 	return gf_dm_get_data_rate(fs->download_manager);
+#else
+	return 0;
+#endif
 }
 
 GF_EXPORT
 GF_Err gf_fs_set_http_max_rate(GF_FilterSession *fs, u32 rate)
 {
+#ifdef GPAC_USE_DOWNLOADER
 	if (!fs) return GF_OK;
 	if (!fs->download_manager) {
 		gf_fs_get_download_manager(fs);
 		if (!fs->download_manager) return GF_OUT_OF_MEM;
 	}
 	gf_dm_set_data_rate(fs->download_manager, rate);
+#endif
 	return GF_OK;
 }
 
 GF_EXPORT
 u32 gf_fs_get_http_rate(GF_FilterSession *fs)
 {
+#ifdef GPAC_USE_DOWNLOADER
 	if (!fs->download_manager) {
 		gf_fs_get_download_manager(fs);
 		if (!fs->download_manager) return 0;
 	}
 	return gf_dm_get_global_rate(fs->download_manager);
+#else
+	return 0;
+#endif
 }
 
 GF_EXPORT
@@ -4226,7 +4938,11 @@ Bool gf_fs_fire_event(GF_FilterSession *fs, GF_Filter *f, GF_FilterEvent *evt, B
 		if (evt->base.type==GF_FEVT_USER) {
 			if (f->freg->process_event && f->event_target) {
 				gf_mx_p(f->tasks_mx);
+
+				gf_logs_thread_tag(f, GF_LOG_TAG_FILTER);
 				f->freg->process_event(f, evt);
+				gf_logs_thread_untag(f);
+
 				gf_mx_v(f->tasks_mx);
 				ret = GF_TRUE;
 			}
@@ -4252,7 +4968,10 @@ Bool gf_fs_fire_event(GF_FilterSession *fs, GF_Filter *f, GF_FilterEvent *evt, B
 			if (!f->event_target) continue;
 
 			gf_mx_p(f->tasks_mx);
+			gf_logs_thread_tag(f, GF_LOG_TAG_FILTER);
 			canceled = f->freg->process_event(f, evt);
+			gf_logs_thread_untag(f);
+
 			gf_mx_v(f->tasks_mx);
 			ret = GF_TRUE;
 			if (canceled) break;
@@ -4406,3 +5125,58 @@ Bool gf_filter_relocate_url(GF_Filter *filter, const char *service_url, const ch
 	return gf_fs_relocate_url(filter->session, service_url, parent_url, out_relocated_url, out_localized_url);
 }
 
+GF_EXPORT
+void gf_fs_send_deferred_play(GF_FilterSession *fsess)
+{
+	if (!fsess || !(fsess->flags & GF_FS_FLAG_PREVENT_PLAY)) return;
+	fsess->flags &= ~GF_FS_FLAG_PREVENT_PLAY;
+
+	gf_mx_p(fsess->filters_mx);
+	u32 i, count=gf_list_count(fsess->filters);
+	for (i=0;i<count;i++) {
+		GF_Filter *f = gf_list_get(fsess->filters, i);
+		u32 j;
+		if (f->has_out_caps) continue;;
+		for (j=0;j<f->num_input_pids; j++) {
+			GF_PropertyValue p;
+			GF_FilterEvent evt;
+			GF_FilterPid *pid = gf_list_get(f->input_pids, j);
+			Double start = 0;
+			Double speed = 1;
+
+			if (gf_filter_get_arg(f, "start", &p)) start = p.value.number;
+			if (gf_filter_get_arg(f, "speed", &p)) speed = p.value.number;
+
+			gf_filter_pid_init_play_event(pid, &evt, start, speed, f->name);
+			gf_filter_pid_send_event(pid, &evt);
+		}
+	}
+	gf_mx_v(fsess->filters_mx);
+}
+
+GF_EXPORT
+Bool gf_fs_check_filter(GF_FilterSession *fs, GF_Filter *filter)
+{
+	if (!fs) return GF_FALSE;
+	s32 res=-1;
+	gf_mx_p(fs->filters_mx);
+	res = gf_list_find(fs->filters, filter);
+	gf_mx_v(fs->filters_mx);
+	if (res<0) return GF_FALSE;
+	if (filter->removed) return GF_FALSE;
+	return GF_TRUE;
+}
+
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+void gf_fs_force_non_blocking(GF_FilterSession *fs)
+{
+	if (fs) fs->non_blocking = GF_TRUE;
+}
+Bool gf_filter_on_main_thread(GF_Filter *filter)
+{
+	if (!filter) return GF_TRUE;
+	if (gf_th_id() != filter->session->main_th.th_id) return GF_FALSE;
+	if (filter->session->is_worker) return GF_FALSE;
+	return GF_TRUE;
+}
+#endif

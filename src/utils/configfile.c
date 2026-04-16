@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / common tools sub-project
@@ -53,12 +53,12 @@ static void DelSection(IniSection *ptr)
 {
 	if (!ptr) return;
 	if (ptr->keys) {
-		while (gf_list_count(ptr->keys)) {
-			IniKey *k = (IniKey *) gf_list_get(ptr->keys, 0);
+		u32 i, count=gf_list_count(ptr->keys);
+		for (i=0;i<count;i++) {
+			IniKey *k = (IniKey *) gf_list_get(ptr->keys, i);
 			if (k->value) gf_free(k->value);
 			if (k->name) gf_free(k->name);
 			gf_free(k);
-			gf_list_rem(ptr->keys, 0);
 		}
 		gf_list_del(ptr->keys);
 	}
@@ -74,10 +74,10 @@ static void gf_cfg_clear(GF_Config * iniFile)
 {
 	if (!iniFile) return;
 	if (iniFile->sections) {
-		while (gf_list_count(iniFile->sections)) {
-			IniSection *p = (IniSection *) gf_list_get(iniFile->sections, 0);
+		u32 i, count=gf_list_count(iniFile->sections);
+		for (i=0; i<count; i++) {
+			IniSection *p = (IniSection *) gf_list_get(iniFile->sections, i);
 			DelSection(p);
-			gf_list_rem(iniFile->sections, 0);
 		}
 		gf_list_del(iniFile->sections);
 	}
@@ -110,10 +110,10 @@ GF_Err gf_cfg_parse_config_file(GF_Config * tmp, const char * filePath, const ch
 		}
 	}
 
-	if (filePath && ((filePath[strlen(filePath)-1] == '/') || (filePath[strlen(filePath)-1] == '\\')) ) {
+	if (filePath && strlen(filePath) && ((filePath[strlen(filePath)-1] == '/') || (filePath[strlen(filePath)-1] == '\\')) ) {
 		strcpy(fileName, filePath);
 		strcat(fileName, file_name);
-	} else if (filePath) {
+	} else if (filePath && strlen(filePath)) {
 		sprintf(fileName, "%s%c%s", filePath, GF_PATH_SEPARATOR, file_name);
 	} else {
 		strcpy(fileName, file_name);
@@ -206,7 +206,8 @@ GF_Err gf_cfg_parse_config_file(GF_Config * tmp, const char * filePath, const ch
 			if (ret) {
 				ret[0] = 0;
 				k->name = gf_strdup(line);
-				while (k->name[strlen(k->name) - 1] == ' ') k->name[strlen(k->name) - 1] = 0;
+				while (k->name[0] && (k->name[strlen(k->name) - 1] == ' '))
+					k->name[strlen(k->name) - 1] = 0;
 				ret[0] = '=';
 				ret += 1;
 				while (ret[0] == ' ') ret++;
@@ -436,10 +437,12 @@ get_key:
 	/* need a new key */
 	key = (IniKey *) gf_malloc(sizeof(IniKey));
 	key->name = gf_strdup(keyName);
-	key->value = gf_strdup("");
+	key->value = gf_strdup(keyValue);
 	if (has_changed)
 		iniFile->hasChanged = GF_TRUE;
 	gf_list_add(sec->keys, key);
+	key->do_restrict = is_restrict;
+	return GF_OK;
 
 set_value:
 	if (!keyValue) {
@@ -591,5 +594,3 @@ GF_Err gf_cfg_set_filename(GF_Config *iniFile, const char * fileName)
 	iniFile->fileName = gf_strdup(fileName);
 	return iniFile->fileName ? GF_OK : GF_OUT_OF_MEM;
 }
-
-

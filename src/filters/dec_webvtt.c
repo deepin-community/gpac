@@ -2,7 +2,7 @@
  *					GPAC Multimedia Framework
  *
  *			Authors: Cyril Concolato - Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2013-2022
+ *			Copyright (c) Telecom ParisTech 2013-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / WebVTT decoder filter
@@ -27,7 +27,7 @@
 #include <gpac/filters.h>
 #include <gpac/constants.h>
 
-#if !defined(GPAC_DISABLE_VTT) && !defined(GPAC_DISABLE_SVG) && defined(GPAC_HAS_QJS)
+#if !defined(GPAC_DISABLE_VTT) && !defined(GPAC_DISABLE_SVG) && defined(GPAC_HAS_QJS) && !defined(GPAC_DISABLE_COMPOSITOR)
 
 #include <gpac/internal/isomedia_dev.h>
 #include <gpac/internal/media_dev.h>
@@ -183,7 +183,7 @@ static GF_Err vttd_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_r
 	}
 	//TODO: we need to cleanup cap checking upon reconfigure
 	if (ctx->ipid && !gf_filter_pid_check_caps(pid)) return GF_NOT_SUPPORTED;
-	assert(!ctx->ipid || (ctx->ipid == pid));
+	gf_assert(!ctx->ipid || (ctx->ipid == pid));
 
 	p = gf_filter_pid_get_property(pid, GF_PROP_PID_DELAY);
 	ctx->delay = p ? p->value.longsint : 0;
@@ -587,14 +587,15 @@ GF_FilterRegister VTTDecRegister = {
 	.process = vttd_process,
 	.configure_pid = vttd_configure_pid,
 	.process_event = vttd_process_event,
-	.update_arg = vtt_update_arg
+	.update_arg = vtt_update_arg,
+	.hint_class_type = GF_FS_CLASS_DECODER
 };
 
 #endif
 
 const GF_FilterRegister *vttdec_register(GF_FilterSession *session)
 {
-#if !defined(GPAC_DISABLE_VTT) && !defined(GPAC_DISABLE_SVG) && defined(GPAC_HAS_QJS)
+#if !defined(GPAC_DISABLE_VTT) && !defined(GPAC_DISABLE_SVG) && defined(GPAC_HAS_QJS) && !defined(GPAC_DISABLE_COMPOSITOR)
 	return &VTTDecRegister;
 #else
 	return NULL;

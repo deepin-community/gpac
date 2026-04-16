@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2017-2022
+ *			Copyright (c) Telecom ParisTech 2017-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / NVidia Hardware decoder filter
@@ -28,11 +28,11 @@
 #include <gpac/constants.h>
 #include <gpac/filters.h>
 
-#if defined(GPAC_CONFIG_DARWIN) && defined(__arm64__)
+#if defined(GPAC_CONFIG_DARWIN) && defined(__arm64__) && !defined(GPAC_DISABLE_NVDEC)
 #define GPAC_DISABLE_NVDEC
 #endif
 
-#if (!defined(GPAC_STATIC_BUILD) && (defined(WIN32) || defined(GPAC_CONFIG_LINUX) || defined(GPAC_CONFIG_DARWIN)) && !defined(GPAC_DISABLE_NVDEC))
+#if (!defined(GPAC_STATIC_BIN) && (defined(WIN32) || defined(GPAC_CONFIG_LINUX) || defined(GPAC_CONFIG_DARWIN)) && !defined(GPAC_DISABLE_NVDEC))
 
 #include "dec_nvdec_sdk.h"
 
@@ -51,25 +51,29 @@ GLDECL_EXTERN(glBufferData);
 
 typedef struct _nv_dec_inst NVDecInstance;
 
-typedef enum
-{
+GF_OPT_ENUM (NVDecUnloadMode,
+	DEC_UNLOAD_NO = 0,
+	DEC_UNLOAD_DESTROY,
+	DEC_UNLOAD_REUSE,
+);
+
+GF_OPT_ENUM (NVDecFrameMode,
 	NVDEC_COPY = 0,
 	NVDEC_SINGLE,
-	NVDEC_GL
-} NVDecFrameMode ;
+	NVDEC_GL,
+);
 
-typedef enum
-{
+GF_OPT_ENUM (NVDecVideoMode,
 	NVDEC_CUVID = 0,
 	NVDEC_CUDA,
-	NVDEC_DXVA
-} NVDecVideoMode;
+	NVDEC_DXVA,
+);
 
 typedef struct _nv_dec_ctx
 {
-	u32 unload;
-	NVDecFrameMode fmode;
+	NVDecUnloadMode unload;
 	NVDecVideoMode vmode;
+	NVDecFrameMode fmode;
 	u32 num_surfaces;
 
 	GF_FilterPid *ipid, *opid;
@@ -158,7 +162,7 @@ static GF_Err nvdec_init_decoder(NVDecCtx *ctx)
 	CUresult res;
 	CUVIDDECODECREATEINFO cuvid_info;
 
-	assert(ctx->dec_inst);
+	gf_assert(ctx->dec_inst);
 
 	memset(&cuvid_info, 0, sizeof(CUVIDDECODECREATEINFO));
 	cuvid_info.CodecType = ctx->codec_type;
@@ -191,7 +195,7 @@ static GF_Err nvdec_init_decoder(NVDecCtx *ctx)
 		return GF_IO_ERR;
 	}
 	global_nb_loaded_decoders++;
-	assert(global_nb_loaded_decoders);
+	gf_assert(global_nb_loaded_decoders);
 	ctx->dec_inst->id = global_nb_loaded_decoders;
 	ctx->dec_inst->th_id = gf_th_id();
 	GF_LOG(GF_LOG_INFO, GF_LOG_CODEC, ("[NVDec] decoder instance %d created (%dx%d) - %d total decoders loaded\n", ctx->dec_inst->id, ctx->width, ctx->height, global_nb_loaded_decoders) );
@@ -378,8 +382,8 @@ static int CUDAAPI HandleVideoSequence(void *pUserData, CUVIDEOFORMAT *pFormat)
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_PIXFMT, &PROP_UINT(ctx->pix_fmt));
 
 
-	assert(ctx->out_size);
-	assert(ctx->stride);
+	gf_assert(ctx->out_size);
+	gf_assert(ctx->stride);
 	ctx->dec_inst->stride = ctx->stride;
 
 	if (! ctx->dec_inst->cu_decoder) {
@@ -600,10 +604,10 @@ static GF_Err nvdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_
 		}
 		ctx->ipid = NULL;
 
-		if (ctx->unload == 2) {
+		if (ctx->unload == DEC_UNLOAD_REUSE) {
 			global_nb_loaded_nvdec--;
 			if (ctx->dec_inst) {
-				assert(global_unactive_decoders);
+				gf_assert(global_unactive_decoders);
 				gf_mx_p(global_inst_mutex);
 				ctx->dec_inst->ctx = NULL;
 				gf_list_add(global_unactive_decoders, ctx->dec_inst);
@@ -658,6 +662,8 @@ static GF_Err nvdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_
 	if (!ctx->opid) {
 		ctx->opid = gf_filter_pid_new(filter);
 		nvdec_copy_props(ctx);
+		ctx->pix_fmt = GF_PIXEL_NV12;
+		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_PIXFMT, &PROP_UINT(ctx->pix_fmt));
 	}
 
 	gf_filter_pid_set_framing_mode(ctx->ipid, GF_TRUE);
@@ -740,7 +746,7 @@ static GF_Err nvdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_
 	else
 		ctx->prefer_dec_mode = cudaVideoCreate_PreferCUVID;
 
-	if (ctx->unload == 2) {
+	if (ctx->unload == DEC_UNLOAD_REUSE) {
 		global_nb_loaded_nvdec++;
 		if (!global_inst_mutex ) global_inst_mutex  = gf_mx_new("NVDecGlobal");
 		gf_mx_p(global_inst_mutex);
@@ -763,20 +769,14 @@ static Bool nvdec_process_event(GF_Filter *filter, const GF_FilterEvent *evt)
 			gf_list_add(ctx->frames_res, f);
 		}
 	}
-	return GF_FALSE;
-}
-
-
-#if 0
-	case GF_CODEC_ABORT:
+	else if (evt->base.type == GF_FEVT_STOP) {
 		while (gf_list_count(ctx->frames)) {
-			NVDecFrame *f = (NVDecFrame *) gf_list_pop_back(ctx->frames);
-			memset(f, 0, sizeof(NVDecFrame));
+			NVDecFrame *f = gf_list_pop_back(ctx->frames);
 			gf_list_add(ctx->frames_res, f);
 		}
-		if (ctx->unload == 2) {
+		if (ctx->unload == DEC_UNLOAD_REUSE) {
 			if (ctx->dec_inst) {
-				assert(global_unactive_decoders);
+				gf_assert(global_unactive_decoders);
 				gf_mx_p(global_inst_mutex);
 				if (ctx->decode_error) {
 					GF_LOG(GF_LOG_INFO, GF_LOG_CODEC, ("[NVDec] deactivating decoder %dx%d and destroying instance\n", ctx->width, ctx->height ) );
@@ -791,7 +791,46 @@ static Bool nvdec_process_event(GF_Filter *filter, const GF_FilterEvent *evt)
 			}
 			ctx->needs_resetup = 1;
 			ctx->dec_create_error = CUDA_SUCCESS;
-		} else if (ctx->unload == 1) {
+		} else {
+			if (ctx->dec_inst) {
+				nvdec_destroy_decoder(ctx->dec_inst);
+				if (ctx->dec_inst->cu_parser) cuvidDestroyVideoParser(ctx->dec_inst->cu_parser);
+				gf_free(ctx->dec_inst);
+				ctx->dec_inst = NULL;
+			}
+			ctx->needs_resetup = 1;
+			ctx->dec_create_error = CUDA_SUCCESS;
+		}
+	}
+	return GF_FALSE;
+}
+
+
+#if 0
+	case GF_CODEC_ABORT:
+		while (gf_list_count(ctx->frames)) {
+			NVDecFrame *f = (NVDecFrame *) gf_list_pop_back(ctx->frames);
+			memset(f, 0, sizeof(NVDecFrame));
+			gf_list_add(ctx->frames_res, f);
+		}
+		if (ctx->unload == DEC_UNLOAD_REUSE) {
+			if (ctx->dec_inst) {
+				gf_assert(global_unactive_decoders);
+				gf_mx_p(global_inst_mutex);
+				if (ctx->decode_error) {
+					GF_LOG(GF_LOG_INFO, GF_LOG_CODEC, ("[NVDec] deactivating decoder %dx%d and destroying instance\n", ctx->width, ctx->height ) );
+					nvdec_destroy_decoder(ctx->dec_inst);
+				} else {
+					GF_LOG(GF_LOG_INFO, GF_LOG_CODEC, ("[NVDec] deactivating decoder %dx%d\n", ctx->width, ctx->height ) );
+				}
+				ctx->dec_inst->ctx = NULL;
+				gf_list_add(global_unactive_decoders, ctx->dec_inst);
+				ctx->dec_inst = NULL;
+				gf_mx_v(global_inst_mutex);
+			}
+			ctx->needs_resetup = 1;
+			ctx->dec_create_error = CUDA_SUCCESS;
+		} else if (ctx->unload == DEC_UNLOAD_DESTROY) {
 			if (ctx->dec_inst) {
 				nvdec_destroy_decoder(ctx->dec_inst);
 			}
@@ -904,6 +943,7 @@ static GF_Err nvdec_process(GF_Filter *filter)
 	}
 
 	if (data && ctx->nal_size_length) {
+		u32 nb_nalsize_zero=0;
 		GF_BitStream *bs = gf_bs_new(ctx->nal_buffer, ctx->nal_buffer_alloc, GF_BITSTREAM_WRITE_DYN);
 		if (!bs) return GF_OUT_OF_MEM;
 
@@ -920,6 +960,12 @@ static GF_Err nvdec_process(GF_Filter *filter)
 				nal_size = (nal_size << 8) + ((u8)data[i]);
 			}
 			data += ctx->nal_size_length;
+			if (!nal_size) {
+				if (nb_nalsize_zero) break;
+				nb_nalsize_zero++;
+			} else {
+				nb_nalsize_zero=0;
+			}
 
 			if (pck_size < nal_size + ctx->nal_size_length) break;
 
@@ -1015,7 +1061,7 @@ static GF_Err nvdec_flush_frame(NVDecCtx *ctx, NVDecFrame *f)
 		return nvdec_send_hw_frame(ctx, f);
 	}
 
-	assert(ctx->out_size);
+	gf_assert(ctx->out_size);
 	dst_pck = gf_filter_pck_new_alloc(ctx->opid, ctx->out_size, &output);
 	if (!dst_pck) return GF_OUT_OF_MEM;
 
@@ -1200,7 +1246,7 @@ GF_Err nvframe_get_gl_texture(GF_FilterFrameInterface *frame, u32 plane_idx, u32
 		GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[NVDec] failed to map GL texture data %s\n", cudaGetErrorEnum(res) ) );
 		return GF_IO_ERR;
 	}
-	assert(tx_pitch != 0);
+	gf_assert(tx_pitch != 0);
 
 	memset(&params, 0, sizeof(params));
 	params.progressive_frame = f->frame_info.progressive_frame;
@@ -1212,7 +1258,7 @@ GF_Err nvframe_get_gl_texture(GF_FilterFrameInterface *frame, u32 plane_idx, u32
 		GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[NVDec] failed to map decoded picture data %s\n", cudaGetErrorEnum(res) ) );
 		return GF_IO_ERR;
 	}
-	assert(vid_pitch != 0);
+	gf_assert(vid_pitch != 0);
 
 	memset(&mcpi, 0, sizeof(CUDA_MEMCPY2D));
 	mcpi.srcMemoryType = CU_MEMORYTYPE_DEVICE;
@@ -1430,7 +1476,16 @@ static void init_cuda_sdk()
 #else
 		CUresult res;
 		int device_count;
-	    res = cuInit(0, __CUDA_API_VERSION);
+			const char *cuda_path = gf_opts_get_key("core", "cuda_lib");
+		if (!cuda_path) cuda_path = gf_opts_get_key("temp", "cuda_lib");
+		const char *cuvid_path = gf_opts_get_key("core", "cuvid_lib");
+		if (!cuvid_path) cuvid_path = gf_opts_get_key("temp", "cuvid_lib");
+
+	    res = cuInit(0, __CUDA_API_VERSION, cuda_path, cuvid_path);
+		if ((cuda_path||cuvid_path) && (res != CUDA_SUCCESS)) {
+			GF_LOG(GF_LOG_WARNING, GF_LOG_CODEC, ("[NVDec] loading cuda/cuvid with custom path failed, retrying with system path\n") );
+		    res = cuInit(0, __CUDA_API_VERSION, NULL, NULL);
+		}
 		cuvid_load_state = 1;
 		if (res == CUDA_ERROR_SHARED_OBJECT_INIT_FAILED) {
 			GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[NVDec] cuda lib not found on system\n") );
@@ -1489,6 +1544,7 @@ static void nvdec_finalize(GF_Filter *filter)
 		nvdec_destroy_decoder(ctx->dec_inst);
 		if (ctx->dec_inst->cu_parser) cuvidDestroyVideoParser(ctx->dec_inst->cu_parser);
 		gf_free(ctx->dec_inst);
+		ctx->dec_inst = NULL;
 	}
 
 	while (gf_list_count(ctx->frames)) {
@@ -1552,7 +1608,11 @@ GF_FilterRegister NVDecRegister = {
 	GF_FS_SET_DESCRIPTION("NVidia decoder")
 	GF_FS_SET_HELP("This filter decodes MPEG-2, MPEG-4 Part 2, AVC|H264 and HEVC streams through NVidia decoder. It allows GPU frame dispatch or direct frame copy."
 	"\n"
-	"If the SDK is not available, the configuration key `nvdec@disabled` will be written in configuration file to avoid future load attempts.")
+	"If the SDK is not available, the configuration key `nvdec@disabled` will be written in configuration file to avoid future load attempts.\n"
+	"\n"
+	"The absolute path to cuda lib can be set using the `cuda_lib` option in `core` or `temp` section of the config file, e.g. `-cfg=temp:cuda_lib=PATH_TO_CUDA`\n"
+	"The absolute path to cuvid lib can be set using the `cuvid_lib` option in `core` or `temp` section of the config file, e.g. `-cfg=temp:cuvid_lib=PATH_TO_CUDA`\n"
+	)
 	.private_size = sizeof(NVDecCtx),
 	SETCAPS(NVDecCaps),
 	.flags = GF_FS_REG_CONFIGURE_MAIN_THREAD,
@@ -1561,7 +1621,8 @@ GF_FilterRegister NVDecRegister = {
 	.args = NVDecArgs,
 	.configure_pid = nvdec_configure_pid,
 	.process = nvdec_process,
-	.process_event = nvdec_process_event
+	.process_event = nvdec_process_event,
+	.hint_class_type = GF_FS_CLASS_DECODER
 };
 
 static void nvdec_register_free(GF_FilterSession *session, GF_FilterRegister *freg)
@@ -1580,6 +1641,10 @@ const GF_FilterRegister *nvdec_register(GF_FilterSession *session)
 	//failed to load SDK in previous attempt, do not retry
 	if (!gf_opts_get_bool("temp", "gendoc") && gf_opts_get_key("filter@nvdec", "disabled"))
 		return NULL;
+
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+	return NULL;
+#endif
 
 	//check if nvdec is not globally blacklisted - if so, do not try to load CUDA SDK which may be time consuming on some devices
 	const char *blacklist = gf_opts_get_key("core", "blacklist");
@@ -1606,4 +1671,4 @@ const GF_FilterRegister *nvdec_register(GF_FilterSession *session)
 {
 	return NULL;
 }
-#endif // (!defined(GPAC_STATIC_BUILD) && (defined(WIN32) || defined(GPAC_CONFIG_LINUX) || defined(GPAC_CONFIG_DARWIN)) && !defined(GPAC_DISABLE_NVDEC))
+#endif // (!defined(GPAC_STATIC_BIN) && (defined(WIN32) || defined(GPAC_CONFIG_LINUX) || defined(GPAC_CONFIG_DARWIN)) && !defined(GPAC_DISABLE_NVDEC))

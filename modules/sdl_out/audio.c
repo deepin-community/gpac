@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2018
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / SDL audio and video module
@@ -255,7 +255,7 @@ void *SDL_NewAudio()
 
 	dr = (GF_AudioOutput*)gf_malloc(sizeof(GF_AudioOutput));
 	memset(dr, 0, sizeof(GF_AudioOutput));
-	GF_REGISTER_MODULE_INTERFACE(dr, GF_AUDIO_OUTPUT_INTERFACE, "SDL Audio Output", "gpac distribution");
+	GF_REGISTER_MODULE_INTERFACE(dr, GF_AUDIO_OUTPUT_INTERFACE, "sdla", "gpac distribution");
 
 	dr->opaque = ctx;
 
@@ -272,8 +272,15 @@ void *SDL_NewAudio()
 	dr->QueryOutputSampleRate = SDLAud_QueryOutputSampleRate;
 	/*always threaded*/
 	dr->SelfThreaded = GF_TRUE;
+	dr->description = "Audio output using SDL";
 	ctx->audioBuff = NULL;
 	ctx->volume = SDL_MIX_MAXVOLUME;
+
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+	void gpac_force_step_mode(Bool for_display);
+	gpac_force_step_mode(GF_FALSE);
+#endif
+
 	return dr;
 }
 

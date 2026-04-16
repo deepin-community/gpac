@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / QCP stream to file filter
@@ -26,6 +26,8 @@
 #include <gpac/filters.h>
 #include <gpac/constants.h>
 #include <gpac/bitstream.h>
+
+#ifndef GPAC_DISABLE_WRITEQCP
 
 #include <gpac/internal/media_dev.h>
 
@@ -251,7 +253,7 @@ static void qcpmx_send_header(GF_QCPMxCtx *ctx, u32 data_size, u32 frame_count)
 	gf_bs_del(bs);
 
 	if (!ctx->first) {
-		assert(ctx->needs_final_pach);
+		gf_assert(ctx->needs_final_pach);
 		gf_filter_pck_set_framing(dst_pck, GF_FALSE, GF_FALSE);
 		gf_filter_pck_set_seek_flag(dst_pck, GF_TRUE);
 		gf_filter_pck_set_byte_offset(dst_pck, 0);
@@ -381,11 +383,19 @@ GF_FilterRegister QCPMxRegister = {
 	.args = QCPMxArgs,
 	SETCAPS(QCPMxCaps),
 	.configure_pid = qcpmx_configure_pid,
-	.process = qcpmx_process
+	.process = qcpmx_process,
+	.hint_class_type = GF_FS_CLASS_FRAMING
 };
 
 
-const GF_FilterRegister *qcpmx_register(GF_FilterSession *session)
+const GF_FilterRegister *writeqcp_register(GF_FilterSession *session)
 {
 	return &QCPMxRegister;
 }
+#else
+const GF_FilterRegister *writeqcp_register(GF_FilterSession *session)
+{
+	return NULL;
+}
+#endif //#ifndef GPAC_DISABLE_WRITEQCP
+

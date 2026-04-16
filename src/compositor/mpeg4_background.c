@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -27,9 +27,7 @@
 
 #include "nodes_stacks.h"
 
-#ifndef GPAC_DISABLE_VRML
-
-#ifndef GPAC_DISABLE_3D
+#if !defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_3D) && !defined(GPAC_DISABLE_COMPOSITOR)
 
 #include "texturing.h"
 #include "visual_manager.h"
@@ -294,8 +292,8 @@ static void TraverseBackground(GF_Node *node, void *rs, Bool is_destroy)
 	/*first traverse, bound if needed*/
 	if (gf_list_find(tr_state->backgrounds, node) < 0) {
 		gf_list_add(tr_state->backgrounds, node);
-		assert(gf_list_find(st->reg_stacks, tr_state->backgrounds)==-1);
-		gf_list_add(st->reg_stacks, tr_state->backgrounds);
+		if (gf_list_find(st->reg_stacks, tr_state->backgrounds)<0)
+			gf_list_add(st->reg_stacks, tr_state->backgrounds);
 		/*only bound if we're on top*/
 		if (gf_list_get(tr_state->backgrounds, 0) == bck) {
 			if (!bck->isBound) Bindable_SetIsBound(node, 1);
@@ -354,7 +352,7 @@ static void TraverseBackground(GF_Node *node, void *rs, Bool is_destroy)
 	res.x = res.y = res.z = 0;
 	res.q = FIX_ONE;
 	gf_mx_apply_vec_4x4(&tr_state->camera->unprojection, &res);
-	assert(res.q);
+	if (!res.q) return;
 	res.x = gf_divfix(res.x, res.q);
 	res.y = gf_divfix(res.y, res.q);
 	res.z = gf_divfix(res.z, res.q);
@@ -583,6 +581,4 @@ void compositor_background_modified(GF_Node *node)
 	gf_sc_invalidate(st->compositor, NULL);
 }
 
-#endif /*GPAC_DISABLE_3D*/
-
-#endif	/*GPAC_DISABLE_VRML*/
+#endif //!defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_3D) && !defined(GPAC_DISABLE_COMPOSITOR)

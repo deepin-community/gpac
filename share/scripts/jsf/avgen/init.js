@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2020
+ *			Copyright (c) Telecom ParisTech 2020-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / AVGenerator filter
@@ -24,11 +24,14 @@
  */
 
 import * as evg from 'evg'
+import { Bitstream as BS } from 'gpaccore'
 import { Sys as sys } from 'gpaccore'
+import { File as File } from 'gpaccore'
 
 filter.pids = [];
 
 filter.set_name("avgen");
+filter.set_class_hint(GF_FS_CLASS_MM_IO);
 filter.set_desc("AV Counter Generator");
 filter.set_version("1.0");
 filter.set_author("GPAC Team");
@@ -38,7 +41,7 @@ filter.set_help(
 +"\n"
 +"When [-adjust]() is set, the first video frame is adjusted such that a full circle happens at each exact second according to the system UTC clock.\n"
 +"By default, video UTC and date are computed at each frame generation from current clock and not from frame number.\n"
-+"This will result in broken timing when playing at speeds other than 1.0.\n"
++"This will result in broken UTC timing text when playing at speeds other than 1.0.\n"
 +"This can be changed using [-lock]().\n"
 +"\n"
 +"Audio beep is generated every second, with octave (2xfreq) of even beep used every 10 seconds.\n"
@@ -66,6 +69,7 @@ filter.set_help(
 );
 
 filter.set_arg({ name: "type", desc: "output selection\n- a: audio only\n- v: video only\n- av: audio and video", type: GF_PROP_UINT, def: "av", minmax_enum: "a|v|av"} );
+filter.set_arg({ name: "evte", desc: "output event stream\n- 0: disable\n- 1+: period (sec) of dummy events", type: GF_PROP_UINT, def: "0"} );
 filter.set_arg({ name: "freq", desc: "frequency of beep", type: GF_PROP_UINT, def: "440"} );
 filter.set_arg({ name: "freq2", desc: "frequency of odd beep", type: GF_PROP_UINT, def: "659"} );
 filter.set_arg({ name: "sr", desc: "output samplerate", type: GF_PROP_UINT, def: "44100"} );
@@ -82,11 +86,16 @@ filter.set_arg({ name: "ntp", desc: "send NTP along with packets", type: GF_PROP
 filter.set_arg({ name: "copy", desc: "copy the framebuffer into each video packet instead of using packet references", type: GF_PROP_BOOL, def: "false"} );
 filter.set_arg({ name: "dur", desc: "run for the given time in second", type: GF_PROP_FRACTION, def: "0/0"} );
 filter.set_arg({ name: "adjust", desc: "adjust start time to synchronize counter and UTC", type: GF_PROP_BOOL, def: "true"} );
-filter.set_arg({ name: "pack", desc: "packing mode for stereo views\n - no: no packing\n - ss: side by side packing, forces [-views]() to 2\n - tb: top-bottom packing, forces [-views]() to 2", type: GF_PROP_UINT, def: "no", minmax_enum: "no|ss|tb"} );
+filter.set_arg({ name: "pack", desc: "packing mode for stereo views\n- no: no packing\n- ss: side by side packing, forces [-views]() to 2\n- tb: top-bottom packing, forces [-views]() to 2", type: GF_PROP_UINT, def: "no", minmax_enum: "no|ss|tb"} );
 filter.set_arg({ name: "disparity", desc: "disparity in pixels between left-most and right-most views", type: GF_PROP_UINT, def: "20"} );
 filter.set_arg({ name: "views", desc: "number of views", type: GF_PROP_UINT, def: "1"} );
 filter.set_arg({ name: "rates", desc: "number of target bitrates to assign, one per size", type: GF_PROP_STRING_LIST} );
 filter.set_arg({ name: "logt", desc: "log frame time to console", type: GF_PROP_BOOL} );
+filter.set_arg({ name: "banner", desc: "banner text to display", type: GF_PROP_STRING, def: "many thanks to QuickJS, FreeType, OpenSSL, SDL, FFmpeg, OpenHEVC, libjpeg, libpng, faad2, libmad, a52dec, xvid, OGG ..."} );
+
+let evte_cts = 0;
+let evte_pid = null;
+let evte_playing = false;
 
 let audio_osize=0;
 let audio_cts=0;
@@ -107,31 +116,59 @@ let video_frame=0;
 let brush = new evg.SolidBrush();
 let video_playing=false;
 let start_date = 0;
-let banner = 'many thanks to QuickJS, FreeType, OpenSSL, SDL, FFmpeg, OpenHEVC, libjpeg, libpng, faad2, libmad, a52dec, xvid, OGG ...';
 let frame_offset = 0;
 let nb_frame_init = 0;
 let utc_init = 0;
 let ntp_init = 0;
 
 /*create a text*/
-let text = new evg.Text();
-text.font = 'SANS';
-text.fontsize = 20;
-text.baseline = GF_TEXT_BASELINE_HANGING;
-text.align=GF_TEXT_ALIGN_CENTER;
-text.lineSpacing=0;
+let text = null;
 
 filter.frame_pending = 0;
 
 filter.initialize = function() {
 
 	if (filter.type != 1) {
-		this.set_cap({id: "StreamType", value: "Audio", output: true} );	
+		this.set_cap({id: "StreamType", value: "Audio", output: true} );
 	}
 	if (filter.type != 0) {
 		this.set_cap({id: "StreamType", value: "Video", output: true} );
 	}
+	if (filter.evte) {
+		this.set_cap({id: "StreamType", value: "Metadata", output: true} );
+	}
 	this.set_cap({id: "CodecID", value: "raw", output: true} );
+
+	let gpac_help = sys.get_opt("temp", "gpac-help");
+	let gpac_doc = (sys.get_opt("temp", "gendoc") == "yes") ? true : false;
+	if (gpac_help || gpac_doc) return;
+
+	text = new evg.Text();
+	text.font = 'SANS';
+	text.fontsize = 20;
+	text.baseline = GF_TEXT_BASELINE_HANGING;
+	text.align=GF_TEXT_ALIGN_CENTER;
+	text.lineSpacing=0;
+
+	let pid_id_offset = 1;
+
+	//setup event
+	if (filter.evte) {
+		evte_pid = this.new_pid();
+		evte_pid.set_prop('StreamType', 'Metadata');
+		evte_pid.set_prop('CodecID', 'evte');
+		evte_pid.set_prop('Cached', true);
+		evte_pid.set_prop('Timescale', filter.fps.n);
+		evte_pid.name = "event";
+		evte_pid.set_prop('ID', pid_id_offset++);
+
+		//we send 8 bytes empty events
+		let bps = Math.max(Math.floor(8*8 / filter.evte), 1);
+		evte_pid.set_prop('Bitrate', bps);
+
+		//send first at cts=0
+		evte_cts -= filter.evte * filter.fps.n;
+	}
 
 	//setup audio
 	if (filter.type != 1) {
@@ -144,7 +181,7 @@ filter.initialize = function() {
 		audio_pid.set_prop('AudioFormat', 'flt');
 		audio_pid.set_prop('Cached', true);
 		audio_pid.name = "audio";
-		audio_pid.set_prop('ID', 1);
+		audio_pid.set_prop('ID', pid_id_offset);
 		if (!filter.freq)
 			filter.freq = 440;
 
@@ -221,7 +258,7 @@ filter.initialize = function() {
 				} else {
 					vpid.name = name;
 				}
-				vpid.set_prop('ID', 1 + (vid+1)*filter.views + view);
+				vpid.set_prop('ID', pid_id_offset + (vid+1)*filter.views + view);
 				vsrc.video_pids.push(vpid);
 			}
 
@@ -280,7 +317,7 @@ function put_image(vsrc, tx, is_testcard, is_first)
 	let scale;
 	if (is_testcard) {
 		scale = disp_w/2 / tx.width;
-	} else {		
+	} else {
 		scale = disp_w/6 / tx.width;
 	}
 	let rw = scale * tx.width;
@@ -355,7 +392,14 @@ function put_image(vsrc, tx, is_testcard, is_first)
 	else fps = Math.floor(100*fps) / 100;
 
 	vprop += '' + fps + ' FPS';
-	text.set_text(['GPAC AV Generator', 'v'+sys.version_full, ' ',  'UTC Locked: ' + (filter.lock ? 'yes' : 'no'), ' ', vprop]);
+	try {
+		text.set_text(['GPAC AV Generator', 'v'+sys.version_full, ' ',  'UTC Locked: ' + (filter.lock ? 'yes' : 'no'), ' ', vprop]);
+	} catch (e) {
+		print(GF_LOG_INFO, "----")
+		print(GF_LOG_INFO, e)
+		print(GF_LOG_INFO, "----")
+		print(GF_LOG_WARNING, "Fonts disabled");
+	}
 
 	mmx.identity = true;
 	mmx.translate(t_x+10, oy-rh/5);
@@ -375,26 +419,84 @@ filter.process_event = function(pid, evt)
 {
 	if (evt.type == GF_FEVT_STOP) {
 		if (pid === audio_pid) audio_playing = false;
+		else if (pid === evte_pid) evte_playing = false;
 		else video_playing = false;
-	} 
+	}
 	else if (evt.type == GF_FEVT_PLAY) {
 		if (pid === audio_pid) audio_playing = true;
+		else if (pid === evte_pid) evte_playing = true;
 		else video_playing = true;
 		filter.reschedule();
-	} 
+	}
 }
 
 filter.process = function()
 {
-	if (!audio_playing && !video_playing) return GF_EOS;
+	if (!audio_playing && !video_playing && !evte_playing) return GF_EOS;
 
-	//start by processing video, adjusting start time
-	if (video_playing) 
+	//start by processing event, then video (adjusting start time)
+	if (evte_playing)
+		process_eventmsg();
+
+	if (video_playing)
 		process_video();
 
 	if (audio_playing)
 		process_audio();
 	return GF_OK;
+}
+
+function get_emeb_box()
+{
+	let pck = evte_pid.new_packet(8);
+	pck.cts = evte_cts;
+	pck.dur = filter.evte * filter.fps.n;
+	pck.sap = GF_FILTER_SAP_1;
+
+	let bs = new BS(pck.data, true);
+	bs.put_u32(8);      //size
+	bs.put_4cc("emeb"); //type
+
+	return pck;
+}
+
+function process_eventmsg()
+{
+	if (!evte_pid || evte_pid.would_block)
+		return;
+	//perform regulation iof audio or video are being generated
+	if (audio_playing || video_playing) {
+		let nb_sec;
+		if (filter.type == 0) {
+			nb_sec = audio_cts * filter.dur.d / filter.sr;
+		} else {
+			nb_sec = video_cts * filter.fps.d / filter.fps.n;
+		}
+
+		//send event for the period
+		if (nb_sec * filter.fps.n < evte_cts + filter.evte * filter.fps.n) return;
+	}
+	evte_cts += filter.evte * filter.fps.n;
+
+	let pck = get_emeb_box();
+	pck.send();
+
+	let done = false;
+	//evte only, check duration
+	if (!audio_playing && !video_playing) {
+		if (filter.dur.d && (evte_cts * filter.dur.d >= filter.dur.n * filter.fps.n)) {
+			print("done playing, cts " + evte_cts);
+			done = true;
+		}
+	} else {
+		if ((!audio_playing || !video_playing) && evte_cts > 0) {
+			done=true;
+		}
+	}
+	if (done) {
+		evte_playing = false
+		evte_pid.eos = true;
+	}
 }
 
 function process_audio()
@@ -408,7 +510,7 @@ function process_audio()
 	for (let i=0; i<filter.flen; i++) {
 		let idx;
 		let samp = 0;
-		let cur_pos = audio_pos - nb_secs*filter.sr; 
+		let cur_pos = audio_pos - nb_secs*filter.sr;
 		if (cur_pos < 0) {}
 		else if (cur_pos > audio_beep_len) {
 			if (audio_in_beep) {
@@ -452,8 +554,8 @@ function process_audio()
 	pck.cts = audio_cts;
 	pck.dur = filter.flen;
 	pck.sap = GF_FILTER_SAP_1;
-	
-	//when prop value is set to true for 'SenderNTP', automatically set 
+
+	//when prop value is set to true for 'SenderNTP', automatically set
 	if (!videos.length && filter.ntp)
 		pck.set_prop('SenderNTP', true);
 	pck.send();
@@ -480,14 +582,14 @@ function process_video()
 	let utc, ntp;
 	//remember start date for lock, and compute initial offset in cycles so that we reach tull cycle at each second
 	if (!start_date) {
-		start_date = date.getTime(); 
+		start_date = date.getTime();
 		let ms_init = date.getMilliseconds();
 		if (filter.adjust) {
 			frame_offset = filter.fps.n * ms_init / 1000;
 
 			//in audio samples
 			audio_pos = Math.floor(ms_init * filter.sr / 1000);
-	
+
 			//move to nb frames
 			nb_frame_init = Math.floor(frame_offset / filter.fps.d);
 			frame_offset = filter.fps.d * nb_frame_init;
@@ -542,7 +644,7 @@ function process_video()
 			if (!vsrc.init_banner_done) {
 				vsrc.init_banner_done = true;
 			}
-		
+
 			let forward_idx = 0;
 			let a_src = vsrc;
 			while (a_src) {
@@ -590,6 +692,18 @@ function process_video()
 			}
 		}
 	}
+}
+
+function ntpFractionToInt(fraction) {
+    if (typeof fraction !== 'bigint') {
+        // Coerce to BigInt so that very large values are handled safely
+        fraction = BigInt(Math.floor(Number(fraction)));
+    }
+
+    const DENUM   = 2**32-1;
+
+    // Perform the division in double precision.
+    return Number(fraction) / Number(DENUM);
 }
 
 function draw_view(vsrc, view_idx, col, col_idx, cycle_time, h, m, s, nbf, video_frame, date, utc, ntp)
@@ -656,24 +770,24 @@ function draw_view(vsrc, view_idx, col, col_idx, cycle_time, h, m, s, nbf, video
 
 	if (col_idx) {
 		brush.set_color('white');
-	} else {		
+	} else {
 		brush.set_color('grey');
 	}
 	path.ellipse(0, 0, 2*r, 2*r);
 	vsrc.canvas.path = path;
 	vsrc.canvas.fill(brush);
-	
+
 	if (cycle_time) {
 		path.reset();
 		let start = Math.PI/2 - cycle_time * 2 * Math.PI;
 		path.arc(r/2, start, Math.PI/2, 2);
 	} else {
-		col_idx = !col_idx;		
+		col_idx = !col_idx;
 	}
 
 	if (col_idx) {
 		brush.set_color('grey');
-	} else {		
+	} else {
 		brush.set_color('white');
 	}
 	vsrc.canvas.path = path;
@@ -685,7 +799,7 @@ function draw_view(vsrc, view_idx, col, col_idx, cycle_time, h, m, s, nbf, video
 	let t = 'Time: ';
 	if (h<10) t = t+'0'+h;
 	else t = t+''+h;
-	
+
 	if (m<10) t = t+':0'+m;
 	else t = t + ':' + m;
 
@@ -720,7 +834,7 @@ function draw_view(vsrc, view_idx, col, col_idx, cycle_time, h, m, s, nbf, video
 	if (view_idx && !filter.pack)
 		return;
 
-	text.set_text([' Date: ' + date.toUTCString(), ' Local: ' + date], ' UTC (ms): ' + utc, ' NTP (s.f):  ' + ntp.n + '.' + ntp.d.toString(16) );
+	text.set_text([' Date: ' + date.toUTCString(), ' Local: ' + date], ' UTC (ms): ' + utc, ' NTP (s.f):  ' + ntp.n + '.' + ntpFractionToInt(ntp.d) );
 
 	mx.identity = true;
 	if (filter.pack==1)
@@ -733,7 +847,7 @@ function draw_view(vsrc, view_idx, col, col_idx, cycle_time, h, m, s, nbf, video
 	brush.set_color('white');
 	vsrc.canvas.fill(brush);
 
-	if (!filter.dyn && vsrc.init_banner_done) 
+	if (!filter.dyn && vsrc.init_banner_done)
 		return;
 
 	if (filter.pack==1)
@@ -756,10 +870,10 @@ function draw_view(vsrc, view_idx, col, col_idx, cycle_time, h, m, s, nbf, video
 		mx.scale(1, 0.5);
 
 	if (!filter.dyn) {
-		text.set_text([sys.copyright, banner]);
-		mx.translate(0, text.fontsize/2);
+		text.set_text([sys.copyright, filter.banner]);
+		mx.translate(sys.copyright.length*text.fontsize/2.5, text.fontsize/2);
 	} else {
-		text.set_text([sys.copyright + ' - ' + banner]);
+		text.set_text([sys.copyright + ' - ' + filter.banner]);
 	}
 	mx.translate(t_x + pos_x, t_y -disp_h/2 + text.fontsize);
 
@@ -777,4 +891,3 @@ function draw_view(vsrc, view_idx, col, col_idx, cycle_time, h, m, s, nbf, video
 
 	vsrc.canvas.clipper = null;
 }
-

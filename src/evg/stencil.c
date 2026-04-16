@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2025
  *					All rights reserved
  *
  *  This file is part of GPAC / software 2D rasterizer module
@@ -24,6 +24,8 @@
  */
 
 #include "rast_soft.h"
+
+#ifndef GPAC_DISABLE_EVG
 
 static GF_EVGStencil *evg_solid_brush();
 static GF_EVGStencil *evg_texture_brush();
@@ -65,6 +67,7 @@ static void gradient_update(EVG_BaseGradient *_this)
 	if (_this->pos[0]>=0) {
 		if(_this->pos[0]>0) {
 			end = FIX2INT(gf_mulfix(_this->pos[0], maxPos));
+			end = MIN(end, EVGGRADIENTMAXINTPOS);
 			for (i=0; i<= end; i++) {
 				_this->precomputed_argb[i] = _this->col[0];
 			}
@@ -76,6 +79,7 @@ static void gradient_update(EVG_BaseGradient *_this)
 				start = FIX2INT(gf_mulfix(pos, maxPos));
 				pos = MIN(_this->pos[c+1], FIX_ONE);
 				end = FIX2INT(gf_mulfix(pos, maxPos));
+				end = MIN(end, EVGGRADIENTMAXINTPOS);
 				diff = end-start;
 
 				if (diff) {
@@ -322,8 +326,8 @@ GF_Color gf_evg_stencil_get_brush_color(GF_EVGStencil * st)
 //we map texture coords, pt1 is {0,0} pt2 is {1,0} pt3 is {0,1}
 //y flip is done by switching the points in evg_raster_render_path_3d
 #define PERSP_APPLY \
-	Float ix = ((Float) pbc2) / persp_denum;\
-	Float iy = ((Float) pbc3) / persp_denum;\
+	Fixed ix = FLT2FIX(pbc2 / persp_denum);\
+	Fixed iy = FLT2FIX(pbc3 / persp_denum);\
 	pbc2 += pbc2_inc;\
 	pbc3 += pbc3_inc;\
 	persp_denum += pers_denum_inc;
@@ -341,7 +345,7 @@ static void lg_fill_run(GF_EVGStencil *p, EVGRasterCtx *rctx, s32 _x, s32 _y, u3
 	u64 *data_wide = rctx->surf->not_8bits ? rctx->stencil_pix_run : NULL;
 	EVG_LinearGradient *_this = (EVG_LinearGradient *) p;
 
-	assert(data);
+	gf_assert(data);
 
 	if (rctx->surf->is_3d_matrix) {
 		PERSP_VARS_DECL
@@ -438,8 +442,8 @@ static void rg_fill_run(GF_EVGStencil *p, EVGRasterCtx *rctx, s32 _x, s32 _y, u3
 	u64 *data_wide = rctx->surf->not_8bits ? rctx->stencil_pix_run : NULL;
 	EVG_RadialGradient *_this = (EVG_RadialGradient *) p;
 
-	assert(data);
-	
+	gf_assert(data);
+
 	if (rctx->surf->is_3d_matrix) {
 		PERSP_VARS_DECL
 
@@ -992,7 +996,7 @@ static void tex_fill_run_straight(GF_EVGStencil *p, EVGRasterCtx *rctx, s32 _x, 
 	if (_this->is_yuv && !yuv_type) conv_type = 1;
 	else if (!_this->is_yuv && yuv_type) conv_type = 2;
 
-	
+
 	while (count) {
 		x0 = FIX2INT(x);
 		if (x0 > m_width) {
@@ -1780,6 +1784,14 @@ u32 get_pix_bgr_24(EVG_Texture *_this, u32 x, u32 y, EVGRasterCtx *ctx)
 	u8 *pix = _this->pixels + y * _this->stride + _this->Bpp*x;
 	return GF_COL_ARGB(0xFF, *(pix+2) & 0xFF, * (pix+1) & 0xFF, *pix & 0xFF);
 }
+u32 get_pix_332(EVG_Texture *_this, u32 x, u32 y, EVGRasterCtx *ctx)
+{
+	u8 *pix = _this->pixels + y * _this->stride + _this->Bpp*x;
+	u32 r = pix[0]>>5;
+	u32 g = (pix[0]>>2)&0x7;
+	u32 b = pix[0]&0x3;
+	return GF_COL_ARGB(0xFF, (r << 5), (g << 5), (b << 6));
+}
 u32 get_pix_444(EVG_Texture *_this, u32 x, u32 y, EVGRasterCtx *ctx)
 {
 	u8 *pix = _this->pixels + y * _this->stride + _this->Bpp*x;
@@ -1860,7 +1872,7 @@ u32 get_pix_yuv420p(EVG_Texture *_this, u32 x, u32 y, EVGRasterCtx *ctx)
 #define GET_LE_10BIT_AS_16(_ptr) ( (((u16)(_ptr)[1])<<8 | (u16)(_ptr)[0] ) << 6 )
 
 //#define GET_LE_10BIT_LEFT_AS_8(_ptr) ( (((u16)(_ptr)[1])<<8 | (u16)(_ptr)[0] ) >> 8 )
-#define GET_LE_10BIT_LEFT_AS_8(_ptr) (_ptr[1] )
+#define GET_LE_10BIT_LEFT_AS_8(_ptr) ((_ptr)[1] )
 #define GET_LE_10BIT_LEFT_AS_16(_ptr) ( (((u16)(_ptr)[1])<<8 | (u16)(_ptr)[0] ) & 0xFFC0 )
 
 #define GET_BE_10BIT_AS_8(_ptr) ( (*(u16 *)(_ptr)) >> 2 )
@@ -2293,6 +2305,9 @@ static void texture_set_callbacks(EVG_Texture *_this)
 	case GF_PIXEL_RGB_444:
 		_this->tx_get_pixel = get_pix_444;
 		return;
+	case GF_PIXEL_RGB_332:
+		_this->tx_get_pixel = get_pix_332;
+		return;
 	case GF_PIXEL_RGB_555:
 		_this->tx_get_pixel = get_pix_555;
 		return;
@@ -2514,6 +2529,9 @@ static GF_Err gf_evg_stencil_set_texture_internal(GF_EVGStencil * st, u32 width,
 	case GF_PIXEL_BGR:
 		_this->Bpp = 3;
 		break;
+	case GF_PIXEL_RGB_332:
+		_this->Bpp = 1;
+		break;
 	case GF_PIXEL_RGB_555:
 	case GF_PIXEL_RGB_565:
 	case GF_PIXEL_RGB_444:
@@ -2590,7 +2608,7 @@ static GF_Err gf_evg_stencil_set_texture_internal(GF_EVGStencil * st, u32 width,
 	}
 	if (!stride)
 		stride = _this->Bpp * width;
-		
+
 	_this->pixel_format = pixelFormat;
 	_this->width = width;
 	_this->height = height;
@@ -2614,6 +2632,18 @@ GF_Err gf_evg_stencil_set_texture(GF_EVGStencil *stencil, u8 *pixels, u32 width,
 {
 	return gf_evg_stencil_set_texture_internal(stencil, width, height, pixelFormat, pixels, stride, NULL, NULL, 0, NULL, 0);
 }
+
+GF_EXPORT
+Bool gf_evg_texture_format_ok(GF_PixelFormat pixelFormat)
+{
+	EVG_Texture _tx;
+	memset(&_tx, 0, sizeof(EVG_Texture));
+	_tx.type = GF_STENCIL_TEXTURE;
+	GF_Err e = gf_evg_stencil_set_texture_internal((GF_EVGStencil *) &_tx, 2, 2, pixelFormat, (const u8 *) &_tx, 0, NULL, NULL, 0, NULL, 0);
+	if (e==GF_OK) return GF_TRUE;
+	return GF_FALSE;
+}
+
 
 GF_EXPORT
 GF_Err gf_evg_stencil_set_palette(GF_EVGStencil *stencil, const u8 *palette, u32 pix_fmt, u32 nb_cols)
@@ -3520,7 +3550,6 @@ static void mix_dyna_run_b_wide(EVGRasterCtx *rctx, u32 count)
 
 GF_Err gf_evg_setup_multi_texture(GF_EVGSurface *surf, GF_EVGMultiTextureMode operand, GF_EVGStencil *sten2, GF_EVGStencil *sten3, Float *params)
 {
-	u32 i;
 	Float param1 = params ? params[0] : 0;
 	surf->sten2 = surf->sten3 = NULL;
 	surf->odd_fill = 0;
@@ -3642,6 +3671,8 @@ GF_Err gf_evg_setup_multi_texture(GF_EVGSurface *surf, GF_EVGMultiTextureMode op
 		if (!surf->raster_ctx.stencil_pix_run3) return GF_OUT_OF_MEM;
 	}
 
+#ifndef GPAC_DISABLE_THREADS
+	u32 i;
 	for (i=0; i<surf->nb_threads; i++) {
 		EVGRasterCtx *rctx = &surf->th_raster_ctx[i];
 		if (surf->sten2 && !rctx->stencil_pix_run2) {
@@ -3653,5 +3684,8 @@ GF_Err gf_evg_setup_multi_texture(GF_EVGSurface *surf, GF_EVGMultiTextureMode op
 			if (!rctx->stencil_pix_run3) return GF_OUT_OF_MEM;
 		}
 	}
+#endif
 	return GF_OK;
 }
+
+#endif //GPAC_DISABLE_EVG

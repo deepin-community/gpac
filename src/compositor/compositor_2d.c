@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -26,6 +26,8 @@
 
 
 #include "visual_manager.h"
+#ifndef GPAC_DISABLE_COMPOSITOR
+
 #include "nodes_stacks.h"
 #include "texturing.h"
 
@@ -302,7 +304,7 @@ static GF_Err c2d_get_video_access_normal(GF_VisualManager *visual)
 {
 	GF_Err e;
 	GF_Compositor *compositor = visual->compositor;
-
+	if (!compositor->video_out->LockBackBuffer) return GF_NOT_SUPPORTED;
 	compositor->hw_locked = GF_FALSE;
 
 	e = compositor->video_out->LockBackBuffer(compositor->video_out, &compositor->hw_surface, GF_TRUE);
@@ -726,7 +728,7 @@ static Bool compositor_2d_draw_bitmap_ex(GF_VisualManager *visual, GF_TextureHan
 	}
 	video_src.global_alpha = alpha;
 
-	//overlay queing
+	//overlay queuing
 	if (overlay_type==2) {
 		GF_IRect o_rc;
 		GF_OverlayStack *ol, *first;
@@ -843,11 +845,14 @@ static Bool compositor_2d_draw_bitmap_ex(GF_VisualManager *visual, GF_TextureHan
 			txh->flags |= GF_SR_TEXTURE_DISABLE_BLIT;
 			return GF_FALSE;
 		}
+		if (!visual->compositor->video_out->LockBackBuffer)
+			e = GF_NOT_SUPPORTED;
+		else
+			e = visual->compositor->video_out->LockBackBuffer(visual->compositor->video_out, &backbuffer, GF_TRUE);
 
-		e = visual->compositor->video_out->LockBackBuffer(visual->compositor->video_out, &backbuffer, GF_TRUE);
 		if (!e) {
 			u32 push_time = gf_sys_clock();
-#ifndef GPAC_DISABLE_PLAYER
+#ifndef GPAC_DISABLE_COMPOSITOR
 			e = gf_stretch_bits(&backbuffer, &video_src, &dst_wnd, &src_wnd, alpha, GF_FALSE, tr_state->col_key, ctx->col_mat);
 #else
 			e = GF_NOT_SUPPORTED;
@@ -895,7 +900,7 @@ Bool compositor_2d_draw_bitmap(GF_VisualManager *visual, GF_TraverseState *tr_st
 	/*check if texture is ready - if not pretend we drew it*/
 	if (!ctx->aspect.fill_texture->data) return GF_TRUE;
 	if (ctx->transform.m[0]<0) return GF_FALSE;
-	/*check if the <0 value is due to a flip in he scene description or
+	/*check if the <0 value is due to a flip in the scene description or
 	due to bifs<->svg... context switching*/
 	if (ctx->transform.m[4]<0) {
 		if (!(ctx->flags & CTX_FLIPED_COORDS)) return GF_FALSE;
@@ -1357,7 +1362,7 @@ Bool visual_2d_overlaps_overlay(GF_VisualManager *visual, DrawableContext *ctx, 
 			ol = ol->next;
 			continue;
 		}
-		/*check previsously drawn areas*/
+		/*check previously drawn areas*/
 		for (i=0; i<ol->ra.count; i++) {
 			/*we have drawn something here, don't draw*/
 			if (gf_irect_inside(&ol->ra.list[i].rect, &clip))
@@ -1459,3 +1464,5 @@ void compositor_2d_init_callbacks(GF_Compositor *compositor)
 {
 	compositor->visual->DrawBitmap = compositor_2d_draw_bitmap;
 }
+
+#endif //GPAC_DISABLE_COMPOSITOR

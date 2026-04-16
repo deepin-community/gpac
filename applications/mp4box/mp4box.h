@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2021
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / mp4box application
@@ -72,15 +72,16 @@ GF_Err convert_file_info(char *inName, TrackIdentifier *track_id);
 #endif
 
 Bool mp4box_check_isom_fileopt(char *opt);
+Bool mp4box_check_non_extk_fileopt(char *opt);
 
-GF_Err parse_high_dynamc_range_xml_desc(GF_ISOFile* movie, u32 track, char* file_name);
 
 #ifndef GPAC_DISABLE_ISOM_WRITE
+GF_Err apply_high_dynamc_range_xml_desc(GF_ISOFile* movie, u32 track, char* file_name);
 
 #ifndef GPAC_DISABLE_MEDIA_IMPORT
 GF_Err import_file(GF_ISOFile *dest, char *inName, u32 import_flags, GF_Fraction force_fps, u32 frames_per_sample, GF_FilterSession *fsess, char **mux_args_if_first_pass, char **mux_sid_if_first_pass, u32 tk_idx);
 #else
-GF_Err import_file(GF_ISOFile *dest, char *inName, u32 import_flags, GF_Fraction force_fps, u32 frames_per_sample, GF_FilterSession *fsess, Bool second_pass) {
+static GF_Err import_file(GF_ISOFile *dest, char *inName, u32 import_flags, GF_Fraction force_fps, u32 frames_per_sample, GF_FilterSession *fsess, char **mux_args_if_first_pass, char **mux_sid_if_first_pass, u32 tk_idx) {
 	return GF_NOT_SUPPORTED;
 }
 #endif
@@ -99,7 +100,7 @@ GF_ISOFile *package_file(char *file_name, char *fcc, Bool make_wgt);
 #endif
 
 GF_Err dump_isom_cover_art(GF_ISOFile *file, char *inName, Bool is_final_name);
-GF_Err dump_isom_chapters(GF_ISOFile *file, char *inName, Bool is_final_name, Bool dump_ogg);
+GF_Err dump_isom_chapters(GF_ISOFile *file, char *inName, Bool is_final_name, u32 dump_ogg);
 GF_Err dump_isom_udta(GF_ISOFile *file, char *inName, Bool is_final_name, u32 dump_udta_type, u32 dump_udta_track);
 
 GF_Err set_file_udta(GF_ISOFile *dest, u32 tracknum, u32 udta_type, char *src, Bool is_box_array, Bool is_string);
@@ -118,7 +119,7 @@ u32 PrintBuiltInNodes(char *arg_val, u32 dump_type);
 u32 PrintBuiltInBoxes(char *arg_val, u32 do_cov);
 
 #ifndef GPAC_DISABLE_ISOM_DUMP
-GF_Err dump_isom_xml(GF_ISOFile *file, char *inName, Bool is_final_name, Bool do_track_dump, Bool merge_vtt_cues, Bool skip_init, Bool skip_samples);
+GF_Err dump_isom_xml(GF_ISOFile *file, char *inName, Bool is_final_name, Bool do_track_dump, Bool merge_vtt_cues, const char *init_seg, Bool skip_samples);
 #endif
 
 
@@ -129,7 +130,7 @@ void dump_isom_rtp(GF_ISOFile *file, char *inName, Bool is_final_name);
 void dump_isom_sdp(GF_ISOFile *file, char *inName, Bool is_final_name);
 #endif
 
-void dump_isom_timestamps(GF_ISOFile *file, char *inName, Bool is_final_name, Bool skip_offset);
+void dump_isom_timestamps(GF_ISOFile *file, char *inName, Bool is_final_name, u32 skip_offset);
 GF_Err dump_isom_nal(GF_ISOFile *file, GF_ISOTrackID trackID, char *inName, Bool is_final_name, u32 dump_flags);
 void dump_isom_saps(GF_ISOFile *file, GF_ISOTrackID trackID, u32 dump_saps_mode, char *inName, Bool is_final_name);
 

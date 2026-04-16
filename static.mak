@@ -34,7 +34,9 @@ EXTRALIBS+=$(LINKLIBS)
 ifeq ($(GPAC_USE_TINYGL),yes)
 COMPOSITOR_CFLAGS+=-I"$(SRC_PATH)/../TinyGL/include"
 else
+ifneq ($(CONFIG_EMSCRIPTEN),yes)
 COMPOSITOR_CFLAGS+=-DGPAC_HAS_GLU
+endif
 endif
 
 
@@ -50,8 +52,9 @@ endif
 
 
 ifeq ($(STATIC_BUILD),yes)
+LINKFLAGS+=$(ngtcp2_ldflags) $(nghttp3_ldflags)
 LINKFLAGS+=$(zlib_ldflags) $(opensvc_ldflags) $(ssl_ldflags) $(jpeg_ldflags) $(openjpeg_ldflags) $(png_ldflags) $(mad_ldflags) $(a52_ldflags) $(xvid_ldflags) $(faad_ldflags)
-LINKFLAGS+=$(ffmpeg_ldflags) $(ogg_ldflags) $(vorbis_ldflags) $(theora_ldflags) $(nghttp2_ldflags) $(vtb_ldflags)
+LINKFLAGS+=$(ffmpeg_ldflags) $(ogg_ldflags) $(vorbis_ldflags) $(theora_ldflags) $(nghttp2_ldflags) $(vtb_ldflags) $(caption_ldflags) $(mpeghdec_ldflags) $(curl_ldflags)
 endif
 
 
@@ -62,7 +65,8 @@ ifeq ($(STATIC_MODULES),yes)
 
 CFLAGS+= -DGPAC_STATIC_MODULES
 
-ifeq ($(CONFIG_ALSA),yes)
+ifeq ($(CONFIG_ALSA),no)
+else
 OBJS+=../modules/alsa/alsa.o
 CFLAGS+=-DGPAC_HAS_ALSA
 EXTRALIBS+= -lasound
@@ -82,6 +86,11 @@ EXTRALIBS+= $(sdl_ldflags)
 OBJS+=../modules/sdl_out/sdl_out.o ../modules/sdl_out/audio.o ../modules/sdl_out/video.o
 endif
 
+ifeq ($(CONFIG_CACA),yes)
+CFLAGS+= $(libcaca_cflags)
+EXTRALIBS+= $(libcaca_ldflags)
+OBJS+=../modules/caca_out/caca_out.o
+endif
 
 ifeq ($(CONFIG_X11),yes)
 OBJS+= ../modules/x11_out/x11_out.o
@@ -120,13 +129,15 @@ endif
 endif
 
 
-ifeq ($(CONFIG_JACK),yes)
+ifeq ($(CONFIG_JACK),no)
+else
 OBJS+= ../modules/jack/jack.o
 CFLAGS+=-DGPAC_HAS_JACK
 EXTRALIBS+=-ljack
 endif
 
-ifeq ($(CONFIG_PULSEAUDIO),yes)
+ifeq ($(CONFIG_PULSEAUDIO),no)
+else
 OBJS+= ../modules/pulseaudio/pulseaudio.o
 CFLAGS+=-DGPAC_HAS_PULSEAUDIO
 EXTRALIBS+=-lpulse -lpulse-simple
@@ -158,4 +169,3 @@ endif
 
 #end of static modules
 endif
-

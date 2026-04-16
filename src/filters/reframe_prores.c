@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2019-2022
+ *			Copyright (c) Telecom ParisTech 2019-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / ProRes reframer filter
@@ -28,7 +28,7 @@
 #include <gpac/filters.h>
 #include <gpac/internal/media_dev.h>
 
-#ifndef GPAC_DISABLE_AV_PARSERS
+#ifndef GPAC_DISABLE_RFPRORES
 
 typedef struct
 {
@@ -103,10 +103,10 @@ GF_Err proresdmx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_rem
 	if (!ctx->timescale) {
 		ctx->notime = GF_TRUE;
 	} else {
-		ctx->copy_props = GF_TRUE;
 		//if we have a FPS prop, use it
 		p = gf_filter_pid_get_property(pid, GF_PROP_PID_FPS);
 		if (p) ctx->cur_fps = p->value.frac;
+		ctx->copy_props = GF_TRUE;
 	}
 	return GF_OK;
 }
@@ -151,7 +151,7 @@ static void proresdmx_check_dur(GF_Filter *filter, GF_ProResDmxCtx *ctx)
 
 	stream = gf_fopen_ex(filepath, NULL, "rb", GF_TRUE);
 	if (!stream) {
-		if (gf_fileio_is_main_thread(p->value.string))
+		if (p && gf_fileio_is_main_thread(p->value.string))
 			ctx->file_loaded = GF_TRUE;
 		return;
 	}
@@ -284,8 +284,8 @@ static Bool proresdmx_process_event(GF_Filter *filter, const GF_FilterEvent *evt
 static GFINLINE void proresdmx_update_cts(GF_ProResDmxCtx *ctx)
 {
 	u64 inc;
-	assert(ctx->cur_fps.num);
-	assert(ctx->cur_fps.den);
+	gf_assert(ctx->cur_fps.num);
+	gf_assert(ctx->cur_fps.den);
 
 	if (ctx->timescale) {
 		inc = ctx->cur_fps.den;
@@ -375,7 +375,11 @@ static void proresdmx_check_pid(GF_Filter *filter, GF_ProResDmxCtx *ctx, GF_ProR
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_CODECID, & PROP_UINT(codec_id));
 
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_TIMESCALE, & PROP_UINT(ctx->cur_fps.num));
-	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_FPS, & PROP_FRAC(ctx->cur_fps));
+
+	//if we have a FPS prop, use it
+	if (!gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_FPS))
+		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_FPS, & PROP_FRAC(ctx->cur_fps));
+
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_WIDTH, & PROP_UINT(finfo->width));
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_HEIGHT, & PROP_UINT(finfo->height));
 	switch (finfo->alpha_channel_type) {
@@ -427,7 +431,7 @@ static void proresdmx_check_pid(GF_Filter *filter, GF_ProResDmxCtx *ctx, GF_ProR
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_COLR_MX, & PROP_UINT(finfo->matrix_coefficients) );
 
 	//set interlaced or remove interlaced property
-	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_INTERLACED, ctx->cur_cfg.interlaced_mode ? & PROP_UINT(GF_TRUE) : NULL);
+	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_INTERLACED, ctx->cur_cfg.interlaced_mode ? & PROP_BOOL(GF_TRUE) : NULL);
 }
 
 
@@ -442,7 +446,7 @@ GF_Err proresdmx_process_buffer(GF_Filter *filter, GF_ProResDmxCtx *ctx, const u
 
 	while (gf_bs_available(ctx->bs)) {
 		u8 *output;
-		GF_FilterPacket *pck;
+		GF_FilterPacket *pck=NULL;
 		GF_ProResFrameInfo finfo;
 		e = gf_media_prores_parse_bs(ctx->bs, &finfo);
 
@@ -457,7 +461,8 @@ GF_Err proresdmx_process_buffer(GF_Filter *filter, GF_ProResDmxCtx *ctx, const u
 		if (gf_bs_available(ctx->bs)<finfo.frame_size)
 			break;
 
-		pck = gf_filter_pck_new_alloc(ctx->opid, finfo.frame_size, &output);
+		if (ctx->opid)
+			pck = gf_filter_pck_new_alloc(ctx->opid, finfo.frame_size, &output);
 		if (!pck) break;
 		gf_bs_read_data(ctx->bs, output, finfo.frame_size);
 
@@ -475,8 +480,7 @@ GF_Err proresdmx_process_buffer(GF_Filter *filter, GF_ProResDmxCtx *ctx, const u
 		if (ctx->rewind) {
 			ctx->buf_size = 0;
 			last_frame_end = 0;
-			assert(ctx->cur_frame);
-			ctx->cur_frame--;
+			if (ctx->cur_frame) ctx->cur_frame--;
 			if (!ctx->cur_frame) {
 				if (ctx->opid)
 					gf_filter_pid_set_eos(ctx->opid);
@@ -495,7 +499,7 @@ GF_Err proresdmx_process_buffer(GF_Filter *filter, GF_ProResDmxCtx *ctx, const u
 	}
 
 	if (is_copy && last_frame_end) {
-		assert(ctx->buf_size >= last_frame_end);
+		gf_assert(ctx->buf_size >= last_frame_end);
 		memmove(ctx->buffer, ctx->buffer+last_frame_end, sizeof(char) * (ctx->buf_size-last_frame_end));
 		ctx->buf_size -= last_frame_end;
 	}
@@ -601,7 +605,7 @@ GF_Err proresdmx_process(GF_Filter *filter)
 			gf_filter_pid_drop_packet(ctx->ipid);
 			return GF_OK;
 		}
-		assert(start && end);
+		gf_assert(start && end);
 		//process
 		e = proresdmx_process_buffer(filter, ctx, data, pck_size, GF_FALSE);
 
@@ -686,19 +690,18 @@ GF_FilterRegister ProResDmxRegister = {
 	.configure_pid = proresdmx_configure_pid,
 	.process = proresdmx_process,
 	.probe_data = proresdmx_probe_data,
-	.process_event = proresdmx_process_event
+	.process_event = proresdmx_process_event,
+	.hint_class_type = GF_FS_CLASS_FRAMING
 };
 
 
-const GF_FilterRegister *proresdmx_register(GF_FilterSession *session)
+const GF_FilterRegister *rfprores_register(GF_FilterSession *session)
 {
 	return &ProResDmxRegister;
 }
-
 #else
-const GF_FilterRegister *proresdmx_register(GF_FilterSession *session)
+const GF_FilterRegister *rfprores_register(GF_FilterSession *session)
 {
 	return NULL;
 }
-#endif // GPAC_DISABLE_AV_PARSERS
-
+#endif // GPAC_DISABLE_RFPRORES

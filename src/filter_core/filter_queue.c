@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2017-2018
+ *			Copyright (c) Telecom ParisTech 2017-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / filters sub-project
@@ -56,6 +56,7 @@ struct __gf_filter_queue
 	volatile u32 nb_items;
 
 	GF_Mutex *mx;
+	u8 use_mx;
 };
 
 
@@ -68,10 +69,11 @@ GF_FilterQueue *gf_fq_new(const GF_Mutex *mx)
 	if (!q) return NULL;
 
 	q->mx = (GF_Mutex *) mx;
-	if (mx) return q;
+	if (mx || gf_opts_get_bool("core", "no-mx")) q->use_mx = 1;
+	if (q->use_mx) return q;
 
 
-	//lock-free mode, create dummuy slot for head
+	//lock-free mode, create dummy slot for head
 	GF_SAFEALLOC(q->head, GF_LFQItem);
 	if (!q->head) {
 		gf_free(q);
@@ -79,7 +81,7 @@ GF_FilterQueue *gf_fq_new(const GF_Mutex *mx)
 	}
 	q->tail = q->head;
 
-	//lock-free mode, create dummuy slot for reservoir head
+	//lock-free mode, create dummy slot for reservoir head
 	GF_SAFEALLOC(q->res_head, GF_LFQItem);
 	if (!q->res_head) {
 		gf_free(q->head);
@@ -95,7 +97,7 @@ void gf_fq_del(GF_FilterQueue *q, void (*item_delete)(void *) )
 {
 	GF_LFQItem *it = q->head;
 	//first item is dummy if lock-free mode, doesn't hold a valid pointer
-	if (! q->mx) it->data=NULL;
+	if (!q->use_mx) it->data = NULL;
 
 	while (it) {
 		GF_LFQItem *ptr = it;
@@ -142,7 +144,7 @@ static void *gf_fq_lockfree_dequeue(GF_LFQItem **head_ptr, GF_LFQItem **tail_ptr
 	next = NULL;
 	*prev_head = NULL;
 
-	while (1 ) {
+	while (1) {
 		GF_LFQItem *tail;
 		head = *head_ptr;
 		tail = *tail_ptr;
@@ -158,7 +160,7 @@ static void *gf_fq_lockfree_dequeue(GF_LFQItem **head_ptr, GF_LFQItem **tail_ptr
 				//swap back tail at next
 				atomic_compare_and_swap(tail_ptr, tail, next);
 			} else {
-				assert(next);
+				gf_assert(next);
 				data = next->data;
 				//try to advance q->head to next
 				if (atomic_compare_and_swap(head_ptr, head, next))
@@ -173,7 +175,7 @@ static void *gf_fq_lockfree_dequeue(GF_LFQItem **head_ptr, GF_LFQItem **tail_ptr
 void gf_lfq_add(GF_FilterQueue *q, void *item)
 {
 	GF_LFQItem *it=NULL;
-	assert(q);
+	gf_assert(q);
 
 	gf_fq_lockfree_dequeue( &q->res_head, &q->res_tail, &it);
 	if (!it) {
@@ -195,7 +197,7 @@ void *gf_lfq_pop(GF_FilterQueue *q)
 	void *data = gf_fq_lockfree_dequeue( &q->head, &q->tail, &slot);
 	if (!data) return NULL;
 	safe_int_dec(&q->nb_items);
-	assert(slot);
+	gf_assert(slot);
 
 	slot->data = NULL;
 	slot->next = NULL;
@@ -213,9 +215,9 @@ u32 gf_fq_count(GF_FilterQueue *q)
 void gf_fq_add(GF_FilterQueue *fq, void *item)
 {
 	GF_LFQItem *it;
-	assert(fq);
+	gf_assert(fq);
 
-	if (! fq->mx) {
+	if (! fq->use_mx) {
 		gf_lfq_add(fq, item);
 	} else {
 		gf_mx_p(fq->mx);
@@ -249,7 +251,7 @@ void *gf_fq_pop(GF_FilterQueue *fq)
 		return NULL;
 
 	void *data=NULL;
-	if (! fq->mx) {
+	if (! fq->use_mx) {
 		return gf_lfq_pop(fq);
 	}
 
@@ -268,7 +270,7 @@ void *gf_fq_pop(GF_FilterQueue *fq)
 		} else {
 			fq->res_head = fq->res_tail = it;
 		}
-		assert(fq->nb_items);
+		gf_assert(fq->nb_items);
 		fq->nb_items--;
 
 		if (! fq->head) fq->tail = NULL;
@@ -284,7 +286,7 @@ void *gf_fq_head(GF_FilterQueue *fq)
 	void *data;
 	if (!fq) return NULL;
 
-	if (fq->mx) {
+	if (fq->use_mx) {
 		gf_mx_p(fq->mx);
 		data = fq->head ? fq->head->data : NULL;
 		gf_mx_v(fq->mx);
@@ -299,9 +301,9 @@ void *gf_fq_get(GF_FilterQueue *fq, u32 idx)
 {
 	void *data;
 	GF_LFQItem *it;
-	assert(fq);
+	gf_assert(fq);
 
-	if (fq->mx) {
+	if (fq->use_mx) {
 		gf_mx_p(fq->mx);
 		it = fq->head;
 
@@ -325,28 +327,36 @@ void *gf_fq_get(GF_FilterQueue *fq, u32 idx)
 	return data;
 }
 
-void gf_fq_enum(GF_FilterQueue *fq, Bool (*enum_func)(void *udta1, void *item), void *udta)
+void gf_fq_enum(GF_FilterQueue *fq, void (*enum_func)(void *udta1, void *item), void *udta)
 {
 	GF_LFQItem *it;
 	if (!enum_func) return;
-	assert(fq);
+	gf_assert(fq);
 
-	if (fq->mx) {
+	if (fq->use_mx) {
 		gf_mx_p(fq->mx);
 		it = fq->head;
 
 		while (it) {
-			if (!enum_func(udta, it->data))
-				break;
+			enum_func(udta, it->data);
 			it = it->next;
 		}
 		gf_mx_v(fq->mx);
 	} else {
 		it = fq->head->next;
 		while (it) {
-			if (!enum_func(udta, it->data))
-				break;
+			enum_func(udta, it->data);
 			it = it->next;
 		}
 	}
+}
+
+Bool gf_fq_res_add(GF_FilterQueue *fq, void *item)
+{
+	if (!fq) return GF_TRUE;
+	//avoid queuing up too many entries in a reservoir queue, this could grow memory
+	//way too much when packet bursts happen
+	if (fq->nb_items>=50) return GF_TRUE;
+	gf_fq_add(fq, item);
+	return GF_FALSE;
 }

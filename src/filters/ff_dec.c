@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2017-2022
+ *			Copyright (c) Telecom ParisTech 2017-2025
  *					All rights reserved
  *
  *  This file is part of GPAC / ffmpeg decode filter
@@ -241,16 +241,20 @@ static GF_Err ffdec_process_video(GF_Filter *filter, struct _gf_ffdec_ctx *ctx)
 		gf_filter_pid_drop_packet(ctx->in_pid);
 		return GF_OK;
 	}
-    //we don't own the codec and we're in end of stream, don't try to decode (the context might have been closed)
-    if (!pck && !ctx->owns_context) {
-        gf_filter_pid_set_eos(ctx->out_pid);
-        return GF_EOS;
-    }
+	//we don't own the codec and we're in end of stream, don't try to decode (the context might have been closed)
+	if (!pck && !ctx->owns_context) {
+		gf_filter_pid_set_eos(ctx->out_pid);
+		return GF_EOS;
+	}
+
+restart:
 
 	frame = ctx->frame;
 
 	FF_INIT_PCK(ctx, pkt)
 
+	//reset as we may get re-called from goto
+	pck_src=NULL;
 	if (pck) {
 		data = gf_filter_pck_get_data(pck, &size);
 
@@ -311,7 +315,7 @@ static GF_Err ffdec_process_video(GF_Filter *filter, struct _gf_ffdec_ctx *ctx)
 	case AVERROR_EOF:
 		break;
 	default:
-		GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFDec] PID %s failed to send frame PTS "LLU": %s\n", gf_filter_pid_get_name(ctx->in_pid), pkt->pts, av_err2str(res) ));
+		GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFDec] PID %s failed to queue packet PTS "LLU": %s\n", gf_filter_pid_get_name(ctx->in_pid), pkt->pts, av_err2str(res) ));
 		break;
 	}
 	gotpic = 0;
@@ -447,9 +451,9 @@ static GF_Err ffdec_process_video(GF_Filter *filter, struct _gf_ffdec_ctx *ctx)
 		gf_filter_pck_set_sap(dst_pck, GF_FILTER_SAP_1);
 	}
 
-    //rewrite dts and pts to PTS value
-    gf_filter_pck_set_dts(dst_pck, out_cts);
-    gf_filter_pck_set_cts(dst_pck, out_cts);
+	//rewrite dts and pts to PTS value
+	gf_filter_pck_set_dts(dst_pck, out_cts);
+	gf_filter_pck_set_cts(dst_pck, out_cts);
 
 	ff_pfmt = ctx->decoder->pix_fmt;
 	if (ff_pfmt==AV_PIX_FMT_YUVJ420P) {
@@ -474,6 +478,11 @@ static GF_Err ffdec_process_video(GF_Filter *filter, struct _gf_ffdec_ctx *ctx)
 		dst_planes[0] =  (uint8_t *)out_buffer;
 		dst_stride[0] = 4*ctx->width;
 		pix_out = AV_PIX_FMT_RGBA;
+		break;
+	case GF_PIXEL_BGRA:
+		dst_planes[0] =  (uint8_t *)out_buffer;
+		dst_stride[0] = 4*ctx->width;
+		pix_out = AV_PIX_FMT_BGRA;
 		break;
 	case GF_PIXEL_YUV:
 	case GF_PIXEL_YUV_10:
@@ -531,10 +540,18 @@ static GF_Err ffdec_process_video(GF_Filter *filter, struct _gf_ffdec_ctx *ctx)
 
 	gf_filter_pck_set_seek_flag(dst_pck, GF_FALSE);
 
+#if (LIBAVFORMAT_VERSION_MAJOR < 62)
 	if (frame->interlaced_frame)
 		gf_filter_pck_set_interlaced(dst_pck, frame->top_field_first ? 2 : 1);
+#else
+	if (frame->flags & AV_FRAME_FLAG_INTERLACED)
+		gf_filter_pck_set_interlaced(dst_pck, frame->flags & AV_FRAME_FLAG_TOP_FIELD_FIRST ? 2 : 1);
+#endif
 
 	gf_filter_pck_send(dst_pck);
+
+	if (!pck) goto restart;
+
 	return GF_OK;
 }
 
@@ -570,7 +587,7 @@ decode_next:
 
 	if (pck) pkt->data = (uint8_t *) gf_filter_pck_get_data(pck, &in_size);
 
-	if (pck) {
+	if (pck && in_size) {
 		src_pck = pck;
 		gf_filter_pck_ref_props(&src_pck);
 		if (src_pck) gf_list_add(ctx->src_packets, src_pck);
@@ -602,6 +619,7 @@ decode_next:
 
 	} else {
 		pkt->size = 0;
+		pkt->data = NULL;
 	}
 
 	prev_afmt = ctx->decoder->sample_fmt;
@@ -705,8 +723,13 @@ dispatch_next:
 	FF_RELEASE_PCK(pkt);
 
 
+#ifdef FFMPEG_OLD_CHLAYOUT
 	FF_CHECK_PROP(channels, channels, GF_PROP_PID_NUM_CHANNELS)
 	FF_CHECK_PROPL(channel_layout, channel_layout, GF_PROP_PID_CHANNEL_LAYOUT)
+#else
+	FF_CHECK_PROP(channels, ch_layout.nb_channels, GF_PROP_PID_NUM_CHANNELS)
+	FF_CHECK_PROPL(channel_layout, ch_layout.u.mask, GF_PROP_PID_CHANNEL_LAYOUT)
+#endif
 	FF_CHECK_PROP(sample_rate, sample_rate, GF_PROP_PID_SAMPLE_RATE)
 
 	if (prev_afmt != ctx->decoder->sample_fmt) {
@@ -814,10 +837,10 @@ dispatch_next:
 	if (pck) gf_filter_pid_drop_packet(ctx->in_pid);
 #endif
 
+	if (gf_filter_pid_would_block(ctx->out_pid))
+		return GF_OK;
 	//avoid recursion
 	goto decode_next;
-
-//	return ffdec_process_audio(filter, ctx);
 }
 
 #ifndef FFMPEG_NO_SUBS
@@ -1058,7 +1081,7 @@ static GF_Err ffdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_
 			prop = gf_filter_pid_get_property(pid, GF_PROP_PID_UNFRAMED);
 			if (!prop || !prop->value.boolean) {
 				gf_filter_override_caps(filter, FFDecodeAnnexBCaps, GF_ARRAY_LENGTH(FFDecodeAnnexBCaps));
-				gf_filter_pid_negociate_property(ctx->in_pid, GF_PROP_PID_UNFRAMED, &PROP_BOOL(GF_TRUE) );
+				gf_filter_pid_negotiate_property(ctx->in_pid, GF_PROP_PID_UNFRAMED, &PROP_BOOL(GF_TRUE) );
 				return GF_OK;
 			}
 		}
@@ -1106,9 +1129,9 @@ static GF_Err ffdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_
 	else {
 		u32 codec_id, ff_codectag=0;
 
-        if (!ctx->owns_context) {
-            ctx->decoder = NULL;
-        }
+		if (!ctx->owns_context) {
+			ctx->decoder = NULL;
+		}
 		if (ctx->decoder) {
 			codec_id = ffmpeg_codecid_from_gpac(gpac_codecid, NULL);
 			//same codec, same config, don't reinit
@@ -1123,7 +1146,7 @@ static GF_Err ffdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_
 				}
 			}
 
-            
+
 			//we could further optimize by detecting we have the same codecid and injecting the extradata
 			//but this is not 100% reliable, and will require parsing AVC/HEVC config
 			//since this seems to work properly with decoder close/open, we keep it as is
@@ -1194,7 +1217,11 @@ static GF_Err ffdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_
 		}
 		if (ctx->sample_rate && ctx->channels) {
 			ctx->decoder->sample_rate = ctx->sample_rate;
+#ifdef FFMPEG_OLD_CHLAYOUT
 			ctx->decoder->channels = ctx->channels;
+#else
+			ctx->decoder->ch_layout.nb_channels = ctx->channels;
+#endif
 		}
 	}
 
@@ -1241,6 +1268,8 @@ static GF_Err ffdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_
 
 	//clone options (in case we need to destroy/recreate the codec) and open codec
 	av_dict_copy(&options, ctx->options, 0);
+	ffmpeg_check_threads(filter, options, ctx->decoder);
+
 	res = avcodec_open2(ctx->decoder, codec, &options);
 	if (res < 0) {
 		if (options) av_dict_free(&options);
@@ -1326,7 +1355,7 @@ reuse_codec_context:
 		}
 		//if SAR is given ignore sar detection
 		prop = gf_filter_pid_get_property(pid, GF_PROP_PID_SAR);
-		if (prop) {
+		if (prop && (prop->value.frac.num>0)) {
 			ctx->sar.num = 0;
 			ctx->sar.den = 0;
 		} else if (ctx->sar.num) {
@@ -1342,13 +1371,23 @@ reuse_codec_context:
 			ctx->bytes_per_sample = gf_audio_fmt_bit_depth(ctx->sample_fmt) / 8;
 		}
 
+		u32 nb_ch=0;
+		u64 ff_ch_layout=0;
+#ifdef FFMPEG_OLD_CHLAYOUT
+		nb_ch = ctx->decoder->channels;
+		ff_ch_layout = ctx->decoder->channel_layout;
+#else
+		nb_ch = ctx->decoder->ch_layout.nb_channels;
+		ff_ch_layout = (ctx->decoder->ch_layout.order>=AV_CHANNEL_ORDER_CUSTOM) ? 0 : ctx->decoder->ch_layout.u.mask;
+#endif
+
 		//override PID props with what decoder gives us
-		if (ctx->decoder->channels) {
-			ctx->channels = 0;
-			FF_CHECK_PROP(channels, channels, GF_PROP_PID_NUM_CHANNELS)
+		if (nb_ch) {
+			gf_filter_pid_set_property(ctx->out_pid, GF_PROP_PID_NUM_CHANNELS, &PROP_UINT(nb_ch ) );
+			ctx->channels = nb_ch;
 		}
-		if (ctx->decoder->channel_layout) {
-			u64 ch_lay = ffmpeg_channel_layout_to_gpac(ctx->decoder->channel_layout);
+		if (ff_ch_layout) {
+			u64 ch_lay = ffmpeg_channel_layout_to_gpac(ff_ch_layout);
 			if (ctx->channel_layout != ch_lay) {
 				gf_filter_pid_set_property(ctx->out_pid, GF_PROP_PID_CHANNEL_LAYOUT, &PROP_LONGUINT(ch_lay ) );
 				ctx->channel_layout = ch_lay;
@@ -1443,6 +1482,7 @@ static const GF_FilterCapability FFDecodeCaps[] =
 	CAP_UINT(GF_CAPS_INPUT_EXCLUDED, GF_PROP_PID_CODECID, GF_CODECID_LHVC),
 	CAP_UINT(GF_CAPS_INPUT_EXCLUDED, GF_PROP_PID_CODECID, GF_CODECID_HEVC_TILES),
 	CAP_UINT(GF_CAPS_INPUT_EXCLUDED, GF_PROP_PID_CODECID, GF_CODECID_VVC_SUBPIC),
+	CAP_UINT(GF_CAPS_INPUT_EXCLUDED, GF_PROP_PID_CODECID, GF_CODECID_HEVC_MERGE),
 	CAP_UINT(GF_CAPS_OUTPUT, GF_PROP_PID_CODECID, GF_CODECID_RAW),
 	CAP_BOOL(GF_CAPS_INPUT_EXCLUDED, GF_PROP_PID_TILE_BASE, GF_TRUE),
 	{ .code=GF_PROP_PID_SCALABLE, .val={.type=GF_PROP_BOOL, .value.boolean = GF_TRUE}, .flags=(GF_CAPS_INPUT_OPT), .priority=255 },
@@ -1472,19 +1512,20 @@ static const GF_FilterCapability FFDecodeCaps[] =
 GF_FilterRegister FFDecodeRegister = {
 	.name = "ffdec",
 	.version = LIBAVCODEC_IDENT,
-	GF_FS_SET_DESCRIPTION("FFMPEG decoder")
-	GF_FS_SET_HELP("This filter decodes audio and video streams using FFMPEG.\n"
-	"See FFMPEG documentation (https://ffmpeg.org/documentation.html) for more details.\n"
+	GF_FS_SET_DESCRIPTION("FFmpeg decoder")
+	GF_FS_SET_HELP("This filter decodes audio and video streams using FFmpeg.\n"
+	"See FFmpeg documentation (https://ffmpeg.org/documentation.html) for more details.\n"
 	"To list all supported decoders for your GPAC build, use `gpac -h ffdec:*`.\n"
 	"\n"
 	"Options can be passed from prompt using `--OPT=VAL`\n"
+	"Decoder flags can be passed directly as `:FLAGNAME`.\n"
 	"The default threading mode is to let libavcodec decide how many threads to use. To enforce single thread, use `--threads=1`\n"
 	"\n"
 	"# Codec Map\n"
-	"The [-ffcmap]() option allows specifying FFMPEG codecs for codecs not supported by GPAC.\n"
+	"The [-ffcmap]() option allows specifying FFmpeg codecs for codecs not supported by GPAC.\n"
 	"Each entry in the list is formatted as `GID@name` or `GID@+name`, with:\n"
 	"- GID: 4CC or 32 bit identifier of codec ID, as indicated by `gpac -i source inspect:full`\n"
-	"- name: FFMPEG codec name\n"
+	"- name: FFmpeg codec name\n"
 	"- `+': is set and extra data is set and formatted as an ISOBMFF box, removes box header\n"
 	"\n"
 	"EX gpac -i source.mp4 --ffcmap=BKV1@binkvideo vout\n"
@@ -1498,11 +1539,11 @@ GF_FilterRegister FFDecodeRegister = {
 	.process = ffdec_process,
 	.update_arg = ffdec_update_arg,
 	.process_event = ffdec_process_event,
-	.flags = GF_FS_REG_META,
+	.flags = GF_FS_REG_META|GF_FS_REG_BLOCK_MAIN,
 	//use middle priorty, so that hardware decs/other native impl in gpac can take over if needed
 	//don't use lowest one since we use this for scalable codecs
-	.priority = 128
-
+	.priority = 128,
+	.hint_class_type = GF_FS_CLASS_DECODER
 };
 
 
@@ -1515,9 +1556,11 @@ static const GF_FilterArgs FFDecodeArgs[] =
 	{0}
 };
 
+const int FFDEC_STATIC_ARGS = (sizeof (FFDecodeArgs) / sizeof (GF_FilterArgs)) - 1;
+
 const GF_FilterRegister *ffdec_register(GF_FilterSession *session)
 {
-	return ffmpeg_build_register(session, &FFDecodeRegister, FFDecodeArgs, 1, FF_REG_TYPE_DECODE);
+	return ffmpeg_build_register(session, &FFDecodeRegister, FFDecodeArgs, FFDEC_STATIC_ARGS, FF_REG_TYPE_DECODE);
 }
 
 #else

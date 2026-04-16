@@ -1,6 +1,6 @@
 ;--------------------------------
 ;General
-!define GPAC_VERSION 2.2.1
+!define GPAC_VERSION 26.02
 !include default.out
 
 !define GPAC_ROOT ..\..\..
@@ -39,8 +39,8 @@ FunctionEnd
   !include "MUI2.nsh"
 
 WindowIcon on
-Icon "${GPAC_ROOT}\share\doc\gpac.ico"
-UninstallIcon "${GPAC_ROOT}\share\doc\gpac.ico"
+Icon "${GPAC_ROOT}\share\res\gpac.ico"
+UninstallIcon "${GPAC_ROOT}\share\res\gpac.ico"
 
 ;--------------------------------
 ;Interface Settings
@@ -211,15 +211,17 @@ Section "GPAC Core" SecGPAC
   File /oname=ReadMe.txt "${GPAC_ROOT}\README.md"
   File /oname=License.txt "${GPAC_ROOT}\COPYING"
   File /oname=Changelog.txt "${GPAC_ROOT}\Changelog"
-  File "${GPAC_ROOT}\share\doc\gpac.ico"
+  File "${GPAC_ROOT}\share\res\gpac.ico"
 
   File "${GPAC_BIN}\gpac.exe"
   File "${GPAC_BIN}\libgpac.dll"
   File "${GPAC_BIN}\gm_dx_hw.dll"
 
   ;all our deps
-  File "${GPAC_BIN}\libcryptoMD.dll"
-  File "${GPAC_BIN}\libsslMD.dll"
+  File "${GPAC_BIN}\libcrypto*.dll"
+  File "${GPAC_BIN}\libssl*.dll"
+  File /nonfatal "${GPAC_BIN}\libnghttp3*.dll"
+  File /nonfatal "${GPAC_BIN}\libngtcp2*.dll"
   File "${GPAC_BIN}\avcodec-*.dll"
   File "${GPAC_BIN}\avdevice-*.dll"
   File "${GPAC_BIN}\avfilter-*.dll"
@@ -230,6 +232,7 @@ Section "GPAC Core" SecGPAC
   File "${GPAC_BIN}\postproc-*.dll"
   File "${GPAC_BIN}\libx264-*.dll"
   File "${GPAC_BIN}\OpenSVCDecoder.dll"
+  File "${GPAC_BIN}\libcurl*.dll"
 
   ;copy shared resources
   SetOutPath $INSTDIR\share
@@ -258,6 +261,10 @@ Section "GPAC Core" SecGPAC
   ;copy lang
   SetOutPath $INSTDIR\share\lang
   File /r /x .git ${GPAC_ROOT}\share\lang\*
+
+  ;copy rmtws
+  SetOutPath $INSTDIR\share\rmtws
+  File /r /x .git ${GPAC_ROOT}\share\rmtws\*
 
   ;create default cache
   SetOutPath $INSTDIR\cache
@@ -307,6 +314,12 @@ Section "Validator" SecValidator
   File "${GPAC_BIN}\gm_validator.dll"
 SectionEnd
 
+Section "Libcaca Output" SecCACA
+  SectionIn 1
+  File "${GPAC_BIN}\libcaca.dll"
+  File "${GPAC_BIN}\gm_caca_out.dll"
+SectionEnd
+
 SubSectionEnd
 
 
@@ -317,13 +330,6 @@ Section "MP4Box" SecMP4B
   Push $INSTDIR
   Call AddToPath
 SectionEnd
-
-Section "Remotery Visualizer" SecRMT
-  SectionIn 1
-  SetOutPath $INSTDIR\share\vis
-  File /r /x .git ${GPAC_ROOT}\share\vis\*
-SectionEnd
-
 
 Section "Python Bindings" SecPython
   SectionIn 1
@@ -386,7 +392,6 @@ Section "Add Start Menu Shortcuts"
   CreateDirectory "$SMPROGRAMS\GPAC"
   CreateShortCut "$SMPROGRAMS\GPAC\Uninstall.lnk" "$INSTDIR\uninstall.exe" "" "$INSTDIR\uninstall.exe" 0
   CreateShortCut "$SMPROGRAMS\GPAC\GPAC.lnk" "$INSTDIR\gpac.exe" ""
-  CreateShortCut "$SMPROGRAMS\GPAC\Remotery GPAC.lnk" "$INSTDIR\share\vis\index.html" ""
   CreateShortCut "$SMPROGRAMS\GPAC\Readme.lnk" "$INSTDIR\ReadMe.txt"
   CreateShortCut "$SMPROGRAMS\GPAC\License.lnk" "$INSTDIR\License.txt"
   CreateShortCut "$SMPROGRAMS\GPAC\History.lnk" "$INSTDIR\changelog.txt"
@@ -407,8 +412,8 @@ SubSectionEnd
 ;  !insertmacro MUI_DESCRIPTION_TEXT ${SecMPEGU} "Support for W3C and MPEG-U Widgets"
   !insertmacro MUI_DESCRIPTION_TEXT ${SecSDK} "Headers and library files needed to develop modules for GPAC or applications based on GPAC"
   !insertmacro MUI_DESCRIPTION_TEXT ${SecPython} "Python bindings for libgpac"
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecRMT} "Remotery HTML visualizer"
   !insertmacro MUI_DESCRIPTION_TEXT ${SecSDL} "SDL Audio and Video output"
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecCACA} "Support for ASCII video output"
   !insertmacro MUI_DESCRIPTION_TEXT ${SecValidator} "GPAC Test Validator"
   !insertmacro MUI_DESCRIPTION_TEXT ${SecShortcuts} "System menu shortucts"
 !insertmacro MUI_FUNCTION_DESCRIPTION_END

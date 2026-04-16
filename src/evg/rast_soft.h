@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2025
  *					All rights reserved
  *
  *  This file is part of GPAC / software 2D rasterizer
@@ -29,6 +29,8 @@
 #define _GF_EVG_DEV_H_
 
 #include <gpac/evg.h>
+
+#ifndef GPAC_DISABLE_EVG
 
 typedef struct _traster_ctx EVGRasterCtx;
 
@@ -73,7 +75,7 @@ typedef struct EVG_Span_
 
 typedef void (*EVG_SpanFunc)(int y, int count, EVG_Span *spans, GF_EVGSurface *surf, EVGRasterCtx *rctx);
 
-GF_Err evg_sweep_lines(GF_EVGSurface *surf, u32 size_y, Bool zero_non_zero_rule, Bool is_tri_raster, GF_EVGFragmentParam *fparam);
+GF_Err evg_sweep_lines(GF_EVGSurface *surf, u32 size_y, u32 zero_non_zero_rule, Bool is_tri_raster, GF_EVGFragmentParam *fparam);
 
 GF_Err evg_raster_render(GF_EVGSurface *surf);
 
@@ -288,6 +290,11 @@ void evg_565_fill_var(s32 y, s32 count, EVG_Span *spans, GF_EVGSurface *surf, EV
 GF_Err evg_surface_clear_565(GF_EVGSurface *_this, GF_IRect rc, GF_Color col);
 
 
+void evg_332_fill_const(s32 y, s32 count, EVG_Span *spans, GF_EVGSurface *surf, EVGRasterCtx *rctx);
+void evg_332_fill_const_a(s32 y, s32 count, EVG_Span *spans, GF_EVGSurface *surf, EVGRasterCtx *rctx);
+void evg_332_fill_var(s32 y, s32 count, EVG_Span *spans, GF_EVGSurface *surf, EVGRasterCtx *rctx);
+GF_Err evg_surface_clear_332(GF_EVGSurface *surf, GF_IRect rc, GF_Color col);
+
 void evg_444_fill_const(s32 y, s32 count, EVG_Span *spans, GF_EVGSurface *surf, EVGRasterCtx *rctx);
 void evg_444_fill_const_a(s32 y, s32 count, EVG_Span *spans, GF_EVGSurface *surf, EVGRasterCtx *rctx);
 void evg_444_fill_var(s32 y, s32 count, EVG_Span *spans, GF_EVGSurface *surf, EVGRasterCtx *rctx);
@@ -346,6 +353,8 @@ void evg_555_fill_single_a(s32 y, s32 x, u8 coverage, u32 col, GF_EVGSurface *su
 void evg_555_fill_single(s32 y, s32 x, u32 col, GF_EVGSurface *surf);
 void evg_444_fill_single_a(s32 y, s32 x, u8 coverage, u32 col, GF_EVGSurface *surf);
 void evg_444_fill_single(s32 y, s32 x, u32 col, GF_EVGSurface *surf);
+void evg_332_fill_single_a(s32 y, s32 x, u8 coverage, u32 col, GF_EVGSurface *surf);
+void evg_332_fill_single(s32 y, s32 x, u32 col, GF_EVGSurface *surf);
 
 #include <limits.h>
 
@@ -536,8 +545,10 @@ struct _gf_evg_surface
 	EVG_Surface3DExt *ext3d;
 
 	EVGRasterCtx raster_ctx;
+#ifndef GPAC_DISABLE_THREADS
 	EVGRasterCtx *th_raster_ctx;
 	u32 nb_threads;
+#endif
 	GF_Mutex *raster_mutex;
 	GF_Semaphore *raster_sem;
 	u32 last_dispatch_line;
@@ -549,7 +560,7 @@ struct _gf_evg_surface
 	u32 max_lines;
 	TPos min_ex, max_ex, min_ey, max_ey;
 	TCoord ex, ey;
-	TPos x,  y, last_ey;
+	TPos x, y, last_ey;
 	TArea area;
 	int cover;
 	u32 idx1, idx2;
@@ -600,6 +611,8 @@ u32 th_sweep_lines(void *par);
 
 GF_Err gf_evg_setup_multi_texture(GF_EVGSurface *surf, GF_EVGMultiTextureMode operand, GF_EVGStencil *sten2, GF_EVGStencil *sten3, Float *params);
 
+
+#endif // GPAC_DISABLE_EVG
 
 #endif
 

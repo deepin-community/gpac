@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -29,7 +29,7 @@
 #include "texturing.h"
 #include "nodes_stacks.h"
 
-#ifndef GPAC_DISABLE_3D
+#if !defined(GPAC_DISABLE_3D) && !defined(GPAC_DISABLE_COMPOSITOR)
 
 #ifdef GPAC_USE_TINYGL
 #include <GL/oscontext.h>
@@ -228,7 +228,20 @@ void compositor_3d_draw_bitmap(Drawable *stack, DrawAspect2D *asp, GF_TraverseSt
 
 				stack->mesh = new_mesh();
 				if (txh->stream) {
-					mesh_new_rectangle_ex(stack->mesh, size, NULL, txh->stream->flip, txh->stream->rotate);
+					const GF_PropertyValue *srd = NULL;
+					const GF_PropertyValue *srd_ref = NULL;
+					if (txh->stream->odm && txh->stream->odm->pid) {
+						srd = gf_filter_pid_get_property(txh->stream->odm->pid, GF_PROP_PID_SRD_MAP);
+						srd_ref = gf_filter_pid_get_property(txh->stream->odm->pid, GF_PROP_PID_SRD_REF);
+					}
+
+					if (srd && srd_ref) {
+void mesh_new_planar_srd(GF_Mesh *mesh, SFVec2f size, u32 flip, u32 rotate, const GF_PropertyValue *srd_map, const GF_PropertyValue *srd_ref);
+						mesh_new_planar_srd(stack->mesh, size, txh->stream->flip, txh->stream->rotate, srd, srd_ref);
+
+					} else {
+						mesh_new_rectangle_ex(stack->mesh, size, NULL, txh->stream->flip, txh->stream->rotate);
+					}
 				} else {
 					mesh_new_rectangle(stack->mesh, size, NULL, GF_FALSE);
 				}
@@ -267,5 +280,5 @@ void compositor_3d_draw_bitmap(Drawable *stack, DrawAspect2D *asp, GF_TraverseSt
 	}
 }
 
-#endif
 
+#endif //!defined(GPAC_DISABLE_3D) && !defined(GPAC_DISABLE_COMPOSITOR)

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2025
  *					All rights reserved
  *
  *  This file is part of GPAC / ISO Media File Format sub-project
@@ -169,8 +169,8 @@ enum
 {
 	/*base media types*/
 	GF_ISOM_MEDIA_VISUAL	= GF_4CC( 'v', 'i', 'd', 'e' ),
-    GF_ISOM_MEDIA_AUXV      = GF_4CC( 'a', 'u', 'x', 'v' ),
-    GF_ISOM_MEDIA_PICT      = GF_4CC( 'p', 'i', 'c', 't' ),
+	GF_ISOM_MEDIA_AUXV      = GF_4CC( 'a', 'u', 'x', 'v' ),
+	GF_ISOM_MEDIA_PICT      = GF_4CC( 'p', 'i', 'c', 't' ),
 	GF_ISOM_MEDIA_AUDIO		= GF_4CC( 's', 'o', 'u', 'n' ),
 	GF_ISOM_MEDIA_HINT		= GF_4CC( 'h', 'i', 'n', 't' ),
 	GF_ISOM_MEDIA_META		= GF_4CC( 'm', 'e', 't', 'a' ),
@@ -216,6 +216,10 @@ enum
 	but it is encrypted.*/
 	GF_ISOM_SUBTYPE_MPEG4_CRYP	= GF_4CC( 'E', 'N', 'C', 'M' ),
 
+	/*restricted video subtype*/
+	GF_ISOM_SUBTYPE_RESV	= GF_4CC( 'r', 'e', 's', 'v' ),
+
+
 	/*AVC/H264 media type - not listed as an MPEG-4 type, ALTHOUGH this library automatically remaps
 	GF_AVCConfig to MPEG-4 ESD*/
 	GF_ISOM_SUBTYPE_AVC_H264		= GF_4CC( 'a', 'v', 'c', '1' ),
@@ -243,9 +247,15 @@ enum
 	/*AV1 media type*/
 	GF_ISOM_SUBTYPE_AV01 = GF_4CC('a', 'v', '0', '1'),
 
+	/*AVS3 Video media type*/
+	GF_ISOM_SUBTYPE_AVS3 = GF_4CC('a', 'v', 's', '3'),
+
 	/*Opus media type*/
 	GF_ISOM_SUBTYPE_OPUS = GF_4CC('O', 'p', 'u', 's'),
 	GF_ISOM_SUBTYPE_FLAC = GF_4CC( 'f', 'L', 'a', 'C' ),
+
+	/*IAMF media type*/
+	GF_ISOM_SUBTYPE_IAMF = GF_4CC('i', 'a', 'm', 'f'),
 
 	/* VP */
 	GF_ISOM_SUBTYPE_VP08 = GF_4CC('v', 'p', '0', '8'),
@@ -272,6 +282,7 @@ enum
 
 	GF_ISOM_SUBTYPE_AC3			= GF_4CC( 'a', 'c', '-', '3' ),
 	GF_ISOM_SUBTYPE_EC3			= GF_4CC( 'e', 'c', '-', '3' ),
+	GF_ISOM_SUBTYPE_AC4			= GF_4CC( 'a', 'c', '-', '4' ),
 	GF_ISOM_SUBTYPE_MP3			= GF_4CC( '.', 'm', 'p', '3' ),
 	GF_ISOM_SUBTYPE_MLPA		= GF_4CC( 'm', 'l', 'p', 'a' ),
 
@@ -362,6 +373,7 @@ enum
 	GF_QT_SUBTYPE_RGBA = GF_4CC('R','G','B','A'),
 	GF_QT_SUBTYPE_ABGR = GF_4CC('A','B','G','R'),
 	GF_QT_SUBTYPE_ALAC =  GF_4CC('a','l','a','c'),
+	GF_QT_SUBTYPE_LPCM =  GF_4CC('l','p','c','m'),
 	GF_ISOM_SUBTYPE_FFV1		= GF_4CC( 'F', 'F', 'V', '1' ),
 
 	GF_ISOM_ITEM_TYPE_AUXI 	= GF_4CC('a', 'u', 'x', 'i'),
@@ -379,7 +391,11 @@ enum
 	GF_ISOM_SUBTYPE_DTSH = GF_4CC('d','t','s','h'),
 	GF_ISOM_SUBTYPE_DTSL = GF_4CC('d','t','s','l'),
 	GF_ISOM_SUBTYPE_DTSE = GF_4CC('d','t','s','e'),
+	GF_ISOM_SUBTYPE_DTSX = GF_4CC('d','t','s','x'),
+	GF_ISOM_SUBTYPE_DTSY = GF_4CC('d','t','s','y'),
 
+	GF_ISOM_SUBTYPE_UNCV	= GF_4CC( 'u', 'n', 'c', 'v' ),
+	GF_ISOM_ITEM_TYPE_UNCI	= GF_4CC( 'u', 'n', 'c', 'i' ),
 };
 
 
@@ -476,7 +492,11 @@ enum
 
 	GF_ISOM_BRAND_AV01 = GF_4CC( 'a', 'v', '0', '1'),
 
+	GF_ISOM_BRAND_CAV3 = GF_4CC( 'c', 'a', 'v', '3'), // AVS 3 Video
+
 	GF_ISOM_BRAND_OPUS = GF_4CC( 'O', 'p', 'u', 's'),
+
+	GF_ISOM_BRAND_IAMF = GF_4CC( 'i', 'a', 'm', 'f'),
 
 	GF_ISOM_BRAND_ISMA = GF_4CC( 'I', 'S', 'M', 'A' ),
 
@@ -580,10 +600,15 @@ typedef struct
 	GF_ISOSAPType IsRAP;
 	/*! allocated data size - used only when using static sample in \ref gf_isom_get_sample_ex*/
 	u32 alloc_size;
-	
+
 	/*! number of packed samples in this sample. If 0 or 1, only 1 sample is present
 	only used for constant size and constant duration samples*/
 	u32 nb_pack;
+
+	/*! read API only - sample duration (multiply by nb_pack to get full duration)*/
+	u32 duration;
+	/*! read API only - set to GF_TRUE if sample data is corrupted*/
+	u32 corrupted;
 } GF_ISOSample;
 
 
@@ -629,6 +654,8 @@ typedef enum
 	Samples may be added to the file in this mode, they will be stored in memory
 	*/
 	GF_ISOM_OPEN_READ_EDIT,
+	/*! same as GF_ISOM_OPEN_READ_DUMP but does not decompress boxes*/
+	GF_ISOM_OPEN_READ_DUMP_NO_COMP
 } GF_ISOOpenMode;
 
 /*! indicates if target file is an IsoMedia file
@@ -653,15 +680,14 @@ u32 gf_isom_probe_file_range(const char *fileName, u64 start_range, u64 end_rang
 u32 gf_isom_probe_data(const u8*inBuf, u32 inSize);
 
 /*! opens an isoMedia File.
-If fileName is NULL data will be written in memory ; write with gf_isom_write() ; use gf_isom_get_bs() to get the data ; use gf_isom_delete() to delete the internal data.
-\param fileName name of the file to open, , gmem:// or gfio:// resource. The special name "_gpac_isobmff_redirect" is used to indicate that segment shall be written to a memory buffer passed to callback function set through \ref gf_isom_set_write_callback.
+\param fileName name of the file to open, , gmem:// or gfio:// resource. The special name "_gpac_isobmff_redirect" is used to indicate that segment shall be written to a memory buffer passed to callback function set through \ref gf_isom_set_write_callback. SHALL not be NULL.
 \param OpenMode file opening mode
 \param tmp_dir for the 2 edit modes only, specifies a location for temp file. If NULL, the library will use the default libgpac temporary file management schemes.
 \return the created ISO file if no error
 */
 GF_ISOFile *gf_isom_open(const char *fileName, GF_ISOOpenMode OpenMode, const char *tmp_dir);
 
-/*! closes the file, write it if new/edited - equivalent to gf_isom_write()+gf_isom_delete()
+/*! closes the file, write it if new/edited or if pending fragment
 \param isom_file the target ISO file
 \return error if any
 */
@@ -671,6 +697,13 @@ GF_Err gf_isom_close(GF_ISOFile *isom_file);
 \param isom_file the target ISO file
 */
 void gf_isom_delete(GF_ISOFile *isom_file);
+
+/*! Checks if an open movie can be accessed in the given mode
+\param isom_file the target ISO file
+\param mode the desried open mode
+\return GF_OK if access is possible, GF_ISOM_INVALID_MODE if access is not possible, GF_BAD_PARAM otherwise
+*/
+GF_Err gf_isom_can_access_movie(GF_ISOFile *isom_file, GF_ISOOpenMode Mode);
 
 /*! gets the last fatal error that occured in the file
 ANY FUNCTION OF THIS API WON'T BE PROCESSED IF THE FILE HAS AN ERROR
@@ -872,11 +905,17 @@ u8 gf_isom_is_track_enabled(GF_ISOFile *isom_file, u32 trackNumber);
 */
 u32 gf_isom_get_track_flags(GF_ISOFile *isom_file, u32 trackNumber);
 
-/*! gets the track duration
+/*! gets the track duration - this will try to fix any discrepencies between media duration+edit lists vs track duration
 \param isom_file the target ISO file
 \param trackNumber the target track
 \return the track duration in movie timescale, or 0 if error*/
 u64 gf_isom_get_track_duration(GF_ISOFile *isom_file, u32 trackNumber);
+
+/*! gets the unmodified track duration - mus be called before any call to \ref gf_isom_get_track_duration
+\param isom_file the target ISO file
+\param trackNumber the target track
+\return the track duration in movie timescale, or 0 if error*/
+u64 gf_isom_get_track_duration_orig(GF_ISOFile *isom_file, u32 trackNumber);
 
 /*! gets the media type (audio, video, etc) of a track
 \param isom_file the target ISO file
@@ -1005,7 +1044,7 @@ This is mostly used when processing raw audio tracks, for which extracting sampl
 \param isom_file the target ISO file
 \param trackNumber the target track
 \param pack_num_samples the target number of samples to pack in one ISOSample
-\return GF_TRUE if packing was successfull, GF_FALSE otherwise (non constant size and non constant duration)
+\return GF_TRUE if packing was successful, GF_FALSE otherwise (non constant size and non constant duration)
 */
 Bool gf_isom_enable_raw_pack(GF_ISOFile *isom_file, u32 trackNumber, u32 pack_num_samples);
 
@@ -1220,6 +1259,13 @@ GF_Err gf_isom_get_reference_ID(GF_ISOFile *isom_file, u32 trackNumber, u32 refe
 \return the reference index if the given track has a reference of type referenceType to refTreckID, 0 otherwise*/
 u32 gf_isom_has_track_reference(GF_ISOFile *isom_file, u32 trackNumber, u32 referenceType, GF_ISOTrackID refTrackID);
 
+/*! checks if a track is referenced by another track wuth the given reference type
+\param isom_file the target ISO file
+\param trackNumber the target track
+\param referenceType the four character code of the reference to query
+\return the track number of the first track  referencing the target track, 0 otherwise*/
+u32 gf_isom_is_track_referenced(GF_ISOFile *isom_file, u32 trackNumber, u32 referenceType);
+
 /*! fetches a sample for a given movie time, handling possible track edit lists.
 
 if no sample is playing, an empty sample is returned with no data and a DTS set to MovieTime when searching in sync modes
@@ -1307,7 +1353,7 @@ GF_Err gf_isom_get_chapter(GF_ISOFile *isom_file, u32 trackNumber, u32 Index, u6
 /*! checks if a media has sync points
 \param isom_file the target ISO file
 \param trackNumber the target track
-\return 0 if the media has no sync point info (eg, all samples are RAPs), 1 if the media has sync points (eg some samples are RAPs),  2 if the media has empty sync point info (no samples are RAPs - this will likely only happen
+\return 0 if the media has no sync point info (eg, all samples are RAPs), 1 if the media has sync points (eg some samples are RAPs), 2 if the media has empty sync point info (no samples are RAPs - this will likely only happen
 			in scalable context)
 */
 u8 gf_isom_has_sync_points(GF_ISOFile *isom_file, u32 trackNumber);
@@ -1440,9 +1486,23 @@ typedef struct
 {
 	/*! stream structure flags, 1: has channel layout, 2: has objects*/
 	u8 stream_structure;
+	/*!  order of formats in the stream : 0 unknown, 1: Channels, possibly followed by Objects, 2 Objects, possibly followed by Channels*/
+	u8 format_ordering;
+	/*! combined channel count of the channel layout and the object count*/
+	u8 base_channel_count;
 
 	/*! defined CICP channel layout*/
 	u8 definedLayout;
+	/*! indicates where the ordering of the audio channels for the definedLayout are specified
+	0: as listed for the ChannelConfigurations in ISO/IEC 23091-3
+	1: Default order of audio codec specification
+	2: Channel ordering #2 of audio codec specification
+	3: Channel ordering #3 of audio codec specification
+	4: Channel ordering #4 of audio codec specification
+	*/
+	u8 channel_order_definition;
+	/*! indicates if omittedChannelsMap is present*/
+	u8 omitted_channels_present;
 
 	/*! number of channels*/
 	u32 channels_count;
@@ -1615,6 +1675,16 @@ u64 gf_isom_get_track_magic(GF_ISOFile *isom_file, u32 trackNumber);
 */
 u32 gf_isom_get_track_group(GF_ISOFile *isom_file, u32 trackNumber, u32 track_group_type);
 
+/*! gets track group ID of a given track group type for this track
+\param isom_file the target ISO file
+\param trackNumber the target track
+\param idx 0-based index of enumeration, incremented by the function if success
+\param track_group_type set to the track group type - may be NULL
+\param track_group_id set to the track group ID - may be NULL
+\return GF_TRUE if success, GF_FALSE otherwise
+*/
+Bool gf_isom_enum_track_group(GF_ISOFile *isom_file, u32 trackNumber, u32 *idx, u32 *track_group_type, u32 *track_group_id);
+
 /*! checks if file is a single AV file with max one audio, one video, one text and basic od/bifs
 \param isom_file the target ISO file
 \return GF_TRUE if file is single AV, GF_FALSE otherwise
@@ -1676,6 +1746,24 @@ GF_Err gf_isom_get_track_template(GF_ISOFile *isom_file, u32 trackNumber, u8 **o
 */
 GF_Err gf_isom_get_trex_template(GF_ISOFile *isom_file, u32 trackNumber, u8 **output, u32 *output_size);
 
+/*! Query mode for min negative ctts query*/
+typedef enum
+{
+	/*! Use CLSG if found, otherwise min value in samples*/
+	GF_ISOM_MIN_NEGCTTS_ANY = 0,
+	/*! Use CLSG only*/
+	GF_ISOM_MIN_NEGCTTS_CLSG,
+	/*! Use min value in samples only*/
+	GF_ISOM_MIN_NEGCTTS_SAMPLES,
+} GF_ISOMMinNegCtsQuery;
+/*! gets the minimum CTS offset for tracks using negative cts
+\param isom_file the destination ISO file
+\param trackNumber the destination track
+\param query_mode if set, ignore any CompositionToDecode box present
+\return minimum negative CTS offset
+*/
+s32 gf_isom_get_min_negative_cts_offset(GF_ISOFile *isom_file, u32 trackNumber, GF_ISOMMinNegCtsQuery query_mode);
+
 /*! sets the number of removed bytes form the input bitstream when using gmem:// url
  The number of bytes shall be the total number since the opening of the movie
 \param isom_file the target ISO file
@@ -1701,6 +1789,37 @@ GF_Err gf_isom_get_current_top_box_offset(GF_ISOFile *isom_file, u64 *current_to
 \return error if any
 */
 GF_Err gf_isom_purge_samples(GF_ISOFile *isom_file, u32 trackNumber, u32 nb_samples);
+
+/*! External track flags*/
+enum
+{
+	/*! edit list override*/
+	GF_ISOM_EXTK_EDTS_SKIP=1,
+	/*! location is a URN */
+	GF_ISOM_EXTK_URN=1<<1,
+	/*! ignore source user data */
+	GF_ISOM_EXTK_NO_UDTA=1<<2,
+	/*! ignore source meta */
+	GF_ISOM_EXTK_NO_META=1<<3
+};
+
+/*! checks if a track is an external track
+\param isom_file the target ISO file
+\param trackNumber the desired track to purge
+\param tkid set to external track ID, may be NULL
+\param type set to external track handler type, may be NULL
+\param flags set to ExternalTrackLocation box flags, may be NULL
+\param location set to external file location, may be NULL
+\return GF_TRUE if track is an external track, GF_FALSE otherwise
+*/
+Bool gf_isom_is_external_track(GF_ISOFile *isom_file, u32 trackNumber, GF_ISOTrackID *tkid, u32 *type, u32 *flags, const char **location);
+
+/*! changes source URL, typically used when seeking operation change cache destination
+\param isom_file the target ISO file
+\param url the new url (local file path or gmem:// blob)
+\return error if any
+*/
+GF_Err gf_isom_switch_source(GF_ISOFile *isom_file, const char *url);
 
 #ifndef GPAC_DISABLE_ISOM_DUMP
 
@@ -1782,12 +1901,6 @@ typedef enum
 	GF_ISOM_STORE_FASTSTART,
 } GF_ISOStorageMode;
 
-/*! writes the file without deleting (see \ref gf_isom_delete)
-\param isom_file the target ISO file
-\return error if any
-*/
-GF_Err gf_isom_write(GF_ISOFile *isom_file);
-
 /*! freezes order of the current box tree in the file.
 By default the library always reorder boxes in the recommended order in the various specifications implemented.
 New created tracks or meta items will not have a frozen order of boxes, but the function can be called several time
@@ -1802,11 +1915,15 @@ GF_Err gf_isom_freeze_order(GF_ISOFile *isom_file);
 */
 void gf_isom_keep_utc_times(GF_ISOFile *isom_file, Bool keep_utc);
 
+#endif
+
 /*! Checks if UTC keeping is enabled
 \param isom_file the target ISO file
 \return GF_TRUE if UTC keeping is enabled
 */
 Bool gf_isom_has_keep_utc_times(GF_ISOFile *isom_file);
+
+#ifndef GPAC_DISABLE_ISOM_WRITE
 
 /*! sets the timescale of the movie. This rescales times expressed in movie timescale in edit lists and mvex boxes
 \param isom_file the target ISO file
@@ -1833,15 +1950,26 @@ GF_Err gf_isom_load_extra_boxes(GF_ISOFile *isom_file, u8 *moov_boxes, u32 moov_
 u32 gf_isom_new_track(GF_ISOFile *isom_file, GF_ISOTrackID trackID, u32 MediaType, u32 TimeScale);
 
 /*! creates a new track from an encoded trak box.
-\param isom_file the target ISO file
-\param trackID the ID of the track - if 0, the track ID is chosen by the API
+\param movie the target ISO file
+\param trakID the ID of the track - if 0, the track ID is chosen by the API
 \param MediaType the handler type (four character code) of the media
 \param TimeScale the time scale of the media
 \param tk_box a serialized trak box to use as template
 \param tk_box_size the size of the serialized trak box
 \param udta_only only replace/inject udta box and entries
 \return the track number or 0 if error*/
-u32 gf_isom_new_track_from_template(GF_ISOFile *isom_file, GF_ISOTrackID trackID, u32 MediaType, u32 TimeScale, u8 *tk_box, u32 tk_box_size, Bool udta_only);
+u32 gf_isom_new_track_from_template(GF_ISOFile *movie, GF_ISOTrackID trakID, u32 MediaType, u32 TimeScale, u8 *tk_box, u32 tk_box_size, Bool udta_only);
+
+/*! creates a new external track
+\param movie the target ISO file
+\param trakID the ID of the track- if 0, the track ID is chosen by the API
+\param refTrakID the ID of the referenced  track (not checked by API)
+\param MediaType the handler type (four character code) of the media
+\param TimeScale the time scale of the media
+\param uri location of external file
+\return the track number or 0 if error
+*/
+u32 gf_isom_new_external_track(GF_ISOFile *movie, GF_ISOTrackID trakID, GF_ISOTrackID refTrakID, u32 MediaType, u32 TimeScale, const char *uri);
 
 /*! removes a track - internal cross dependencies will be updated.
 \warning Any OD streams with references to this track through  ODUpdate, ESDUpdate, ESDRemove commands
@@ -1860,6 +1988,14 @@ GF_Err gf_isom_remove_track(GF_ISOFile *isom_file, u32 trackNumber);
 */
 GF_Err gf_isom_set_track_enabled(GF_ISOFile *isom_file, u32 trackNumber, Bool enableTrack);
 
+/*! forces the track duration - should only be used for external tracks
+\param isom_file the target ISO file
+\param trackNumber the target track
+\param duration track duration in movie timescale
+\return error if any
+*/
+GF_Err gf_isom_force_track_duration(GF_ISOFile *isom_file, u32 trackNumber, u64 duration);
+
 /*! Track header flags operation type*/
 typedef enum
 {
@@ -1871,6 +2007,7 @@ typedef enum
 	GF_ISOM_TKFLAGS_ADD,
 } GF_ISOMTrackFlagOp;
 
+#endif //GPAC_DISABLE_ISOM_WRITE
 
 /*! Track header flags*/
 enum
@@ -1884,6 +2021,8 @@ enum
 	/*! track size is an aspect ratio indicator only*/
 	GF_ISOM_TK_SIZE_IS_AR = 1<<3
 };
+
+#ifndef GPAC_DISABLE_ISOM_WRITE
 
 /*! toggles track flags on or off
 \param isom_file the target ISO file
@@ -2008,7 +2147,7 @@ If both dur_num and dur_den are both zero, forces last sample duration to be the
 */
 GF_Err gf_isom_set_last_sample_duration_ex(GF_ISOFile *isom_file, u32 trackNumber, u32 dur_num, u32 dur_den);
 
-/*! patches last stts entry to make sure the cumulated duration equals the given next_dts value
+/*! patches last stts entry to make sure the cumulated duration equals the given next_dts value - this will overwrite timing of all previous samples using an average dur
 \param isom_file the target ISO file
 \param trackNumber the target track
 \param next_dts target decode time of next sample
@@ -2108,7 +2247,7 @@ GF_Err gf_isom_remove_sample(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleN
 \param force_rescale_type type fo rescaling, Ignored if new_tsinc is not 0:
  - if set to 0, rescale timings.
  - if set to 1, only the media timescale is changed but media times are not updated.
- - if set to 2,  media timescale is updated if new_timescale is set, and all sample durations are set to new_tsinc
+ - if set to 2, media timescale is updated if new_timescale is set, and all sample durations are set to new_tsinc
 \return GF_EOS if no action taken (same config), or error if any
 */
 GF_Err gf_isom_set_media_timescale(GF_ISOFile *isom_file, u32 trackNumber, u32 new_timescale, u32 new_tsinc, u32 force_rescale_type);
@@ -2161,8 +2300,7 @@ GF_Err gf_isom_set_interleave_time(GF_ISOFile *isom_file, u32 InterleaveTime);
 GF_Err gf_isom_force_64bit_chunk_offset(GF_ISOFile *isom_file, Bool set_on);
 
 /*! compression mode of top-level boxes*/
-typedef enum
-{
+GF_OPT_ENUM (GF_ISOCompressMode,
 	/*! no compression is used*/
 	GF_ISOM_COMP_NONE=0,
 	/*! only moov box is compressed*/
@@ -2171,11 +2309,11 @@ typedef enum
 	GF_ISOM_COMP_MOOF,
 	/*! only moof and sidx boxes are compressed*/
 	GF_ISOM_COMP_MOOF_SIDX,
-	/*! only moof,  sidx and ssix boxes are compressed*/
+	/*! only moof, sidx and ssix boxes are compressed*/
 	GF_ISOM_COMP_MOOF_SSIX,
-	/*! all (moov, moof,  sidx and ssix) boxes are compressed*/
+	/*! all (moov, moof, sidx and ssix) boxes are compressed*/
 	GF_ISOM_COMP_ALL,
-} GF_ISOCompressMode;
+);
 
 enum
 {
@@ -2258,10 +2396,10 @@ GF_Err gf_isom_set_alternate_group_id(GF_ISOFile *isom_file, u32 trackNumber, u3
 */
 GF_Err gf_isom_add_chapter(GF_ISOFile *isom_file, u32 trackNumber, u64 timestamp, char *name);
 
-/*! deletes copyright
+/*! deletes chapter
 \param isom_file the target ISO file
 \param trackNumber the target track
-\param index the 1-based index of the copyright notice to remove, or 0 to remove all chapters
+\param index the 1-based index of the chapter notice to remove, or 0 to remove all chapters
 \return error if any
 */
 GF_Err gf_isom_remove_chapter(GF_ISOFile *isom_file, u32 trackNumber, u32 index);
@@ -2278,7 +2416,7 @@ the media normal timing. EditTime and EditDuration are expressed in movie timesc
 \param EditDuration the duration of the edit in movie timecale
 \param MediaTime the corresponding media time of the start of the edit, in media timescale. -1 for empty edits
 \param EditMode the edit mode
-\return error if any, GF_EOS if empty edit was inserted 
+\return error if any, GF_EOS if empty edit was inserted
 */
 GF_Err gf_isom_set_edit(GF_ISOFile *isom_file, u32 trackNumber, u64 EditTime, u64 EditDuration, u64 MediaTime, GF_ISOEditType EditMode);
 
@@ -2457,7 +2595,7 @@ GF_Err gf_isom_set_track_layout_info(GF_ISOFile *isom_file, u32 trackNumber, u32
 /*! sets track matrix
 \param isom_file the target ISO file
 \param trackNumber the target track number
-\param matrix the transformation matrix of the track on the movie canvas; all coeficients are expressed as 16.16 floating points
+\param matrix the transformation matrix of the track on the movie canvas; all coefficients are expressed as 16.16 floating points
 \return error if any
  */
 GF_Err gf_isom_set_track_matrix(GF_ISOFile *isom_file, u32 trackNumber, s32 matrix[9]);
@@ -2558,18 +2696,20 @@ GF_Err gf_isom_set_visual_color_info(GF_ISOFile *isom_file, u32 trackNumber, u32
 
 
 /*! Audio Sample Description signaling mode*/
-typedef enum {
+GF_OPT_ENUM (GF_AudioSampleEntryImportMode,
 	/*! use ISOBMF sample entry v0*/
 	GF_IMPORT_AUDIO_SAMPLE_ENTRY_NOT_SET = 0,
-	/*! use ISOBMF sample entry v0*/
-	GF_IMPORT_AUDIO_SAMPLE_ENTRY_v0_BS,
+	/*! use ISOBMF sample entry v0 for best backward-compatibility*/
+	GF_IMPORT_AUDIO_SAMPLE_ENTRY_v0_DEFAULT,
 	/*! use ISOBMF sample entry v0 and forces channel count to 2*/
 	GF_IMPORT_AUDIO_SAMPLE_ENTRY_v0_2,
+	/*! use ISOBMF sample entry v0 and forces values from bitstream*/
+	GF_IMPORT_AUDIO_SAMPLE_ENTRY_v0_BS,
 	/*! use ISOBMF sample entry v1*/
 	GF_IMPORT_AUDIO_SAMPLE_ENTRY_v1_MPEG,
 	/*! use QTFF sample entry v1*/
 	GF_IMPORT_AUDIO_SAMPLE_ENTRY_v1_QTFF
-} GF_AudioSampleEntryImportMode;
+);
 
 
 /*! sets audio format  information for a sample description
@@ -2693,6 +2833,20 @@ if both average_bitrate and max_bitrate are 0, this removes any bitrate informat
 GF_Err gf_isom_update_bitrate(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDescriptionIndex, u32 average_bitrate, u32 max_bitrate, u32 decode_buffer_size);
 
 
+/*! updates average and max bitrate of a sample description
+if both average_bitrate and max_bitrate are 0, this removes any bitrate information
+\param isom_file the target ISO file
+\param trackNumber the target track number
+\param sampleDescriptionIndex the target sample description
+\param average_bitrate the average bitrate of the media for that sample description
+\param max_bitrate the maximum bitrate of the media for that sample description
+\param decode_buffer_size the decoder buffer size in bytes for that sample description
+\param forced_for_mpeg4 if set to TRUE, the bitrate box will be added/removed even for MPEG-4 systems entries (mp4a, mp4v, mp4s) where the info is usually in the esds
+\return error if any
+*/
+GF_Err gf_isom_update_bitrate_ex(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDescriptionIndex, u32 average_bitrate, u32 max_bitrate, u32 decode_buffer_size, Bool forced_for_mpeg4);
+
+
 /*! track clone flags*/
 typedef enum
 {
@@ -2777,19 +2931,46 @@ GF_Err gf_isom_make_interleave_ex(GF_ISOFile *isom_file, GF_Fraction *fTimeInSec
 */
 void gf_isom_set_progress_callback(GF_ISOFile *isom_file, void (*progress_cbk)(void *udta, u64 nb_done, u64 nb_total), void *progress_cbk_udta);
 
+/*! Callback function to receive new data blocks
+\param usr_data user callback, as passed to \ref gf_isom_set_write_callback
+\param block data block to write
+\param block_size data block size in bytes
+\param sample_cbk_data callback data of sample or NULL
+\param sample_cbk_magic callback magic of sample or 0
+\return error if any
+*/
+typedef GF_Err (*gf_isom_on_block_out)(void *usr_data, u8 *block, u32 block_size, void *sample_cbk_data, u32 sample_cbk_magic);
+
+/*! Callback function to receive new data blocks, only used in non-fragmented mode:
+ -  to patch mdat size
+ - to inject moov for GF_ISOM_STORE_FASTSTART mode
+\param usr_data user callback, as passed to \ref gf_isom_set_write_callback
+\param block data block to write
+\param block_size data block size in bytes
+\param block_offset offset in file for block to patch
+\param is_insert if GF_TRUE, indicates the bytes must be inserted at the given offset. Otherwise bytes are to be replaced
+\return error if any
+*/
+typedef GF_Err (*gf_isom_on_block_patch)(void *usr_data, u8 *block, u32 block_size, u64 block_offset, Bool is_insert);
+
+/*! Callback function to indicate the last call to \ref gf_isom_on_block_out is about to be produced for a segment, unused for non-fragmented or non-dash cases
+ \param usr_data user callback, as passed to \ref gf_isom_set_write_callback
+*/
+typedef void (*gf_isom_on_last_block_start)(void *usr_data);
+
 /*! sets write callback functions for in-memory file writing
 \param isom_file the target ISO file
-\param on_block_out the block write callback function
-\param on_block_patch the block patch callback function
+\param on_block_out the block write callback function, mandatory
+\param on_block_patch the block patch callback function, may be NULL if only fragmented files or very small files are being produced
 \param on_last_block_start called before writing the last block of a sequence of movie fragments
 \param usr_data opaque user data passed to callback functions
 \param block_size desired block size in bytes
 \return error if any
 */
 GF_Err gf_isom_set_write_callback(GF_ISOFile *isom_file,
- 			GF_Err (*on_block_out)(void *cbk, u8 *data, u32 block_size),
-			GF_Err (*on_block_patch)(void *usr_data, u8 *block, u32 block_size, u64 block_offset, Bool is_insert),
- 			void (*on_last_block_start)(void *cbk),
+			gf_isom_on_block_out on_block_out,
+			gf_isom_on_block_patch on_block_patch,
+			gf_isom_on_last_block_start on_last_block_start,
  			void *usr_data,
  			u32 block_size);
 
@@ -2807,7 +2988,7 @@ Bool gf_isom_is_inplace_rewrite(GF_ISOFile *isom_file);
  - specifying a storage mode using  \ref gf_isom_set_storage_mode
  - removing or adding tracks or items
  - removing, adding or updating samples
- - using stdout, redirect file "_gpac_isobmff_redirect",  memory file " gmem://"
+ - using stdout, redirect file "_gpac_isobmff_redirect", memory file " gmem://"
 
 In-place rewriting is enabled by default on files open in edit mode.
 
@@ -3017,8 +3198,6 @@ GF_Err gf_isom_add_desc_to_description(GF_ISOFile *isom_file, u32 trackNumber, u
 */
 GF_Err gf_isom_clone_pl_indications(GF_ISOFile *orig_file, GF_ISOFile *dest_file);
 
-/*deletes chapter (1-based index, index 0 for all)*/
-GF_Err gf_isom_remove_chapter(GF_ISOFile *the_file, u32 trackNumber, u32 index);
 
 /*! associates a given SL config with a given ESD while extracting the OD information
 This is useful while reading the IOD / OD stream of an MP4 file. Note however that
@@ -3088,6 +3267,8 @@ typedef struct
 	u16 bits_per_sample;
 	/*! indicates if QTFF signaling should be used, audio codecs only*/
 	Bool is_qtff;
+	/*! for lpcm only, indicates format flags*/
+	u32 lpcm_flags;
 
 	/*optional, sample description specific configuration*/
 	u8 *extension_buf;
@@ -3159,6 +3340,15 @@ GF_Err gf_isom_set_rvc_config(GF_ISOFile *isom_file, u32 trackNumber, u32 sample
 */
 GF_Err gf_isom_update_video_sample_entry_fields(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDescriptionIndex, u16 revision, u32 vendor, u32 temporalQ, u32 spatialQ, u32 horiz_res, u32 vert_res, u16 frames_per_sample, const char *compressor_name, s16 color_table_index);
 
+/*! Sets all sample descriptions from a serialized sample description box, removing all child boxes of stsd
+\param isom_file the target ISO file
+\param trackNumber the target track number
+\param stsd_data a serialized sample description box
+\param stsd_data_size size of the serialized sample description
+\return error if any
+*/
+GF_Err gf_isom_set_track_stsd_templates(GF_ISOFile *isom_file, u32 trackNumber, u8 *stsd_data, u32 stsd_data_size);
+
 /*! updates a sample description from a serialized sample description box. Only child boxes are removed in the process
 \param isom_file the target ISO file
 \param trackNumber the target track number
@@ -3168,7 +3358,6 @@ GF_Err gf_isom_update_video_sample_entry_fields(GF_ISOFile *isom_file, u32 track
 \return error if any
 */
 GF_Err gf_isom_update_sample_description_from_template(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDescriptionIndex, u8 *data, u32 size);
-
 
 /*! creates a new unknown StreamDescription in the file.
 \note use this to store media not currently supported by the ISO media format or media types not implemented in this library
@@ -3398,6 +3587,14 @@ GF_AV1Config *gf_isom_av1_config_get(GF_ISOFile *isom_file, u32 trackNumber, u32
 */
 GF_VPConfig *gf_isom_vp_config_get(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDescriptionIndex);
 
+/*! gets AVS3 Video config for a sample description
+\param isom_file the target ISO file
+\param trackNumber the target track
+\param sampleDescriptionIndex the target sample description index
+\return the AVS3 Video config - user is responsible for deleting it
+*/
+GF_AVS3VConfig *gf_isom_avs3v_config_get(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDescriptionIndex);
+
 /*! gets DOVI config for a sample description
 \param isom_file the target ISO file
 \param trackNumber the target track
@@ -3405,6 +3602,14 @@ GF_VPConfig *gf_isom_vp_config_get(GF_ISOFile *isom_file, u32 trackNumber, u32 s
 \return the DOVI config - user is responsible for deleting it
 */
 GF_DOVIDecoderConfigurationRecord* gf_isom_dovi_config_get(GF_ISOFile* isom_file, u32 trackNumber, u32 sampleDescriptionIndex);
+
+/*! gets IAMF config for a sample description
+\param isom_file the target ISO file
+\param trackNumber the target track
+\param sampleDescriptionIndex the target sample description index
+\return the IAMF config - user is responsible for deleting it
+*/
+GF_IAConfig* gf_isom_iamf_config_get(GF_ISOFile* isom_file, u32 trackNumber, u32 sampleDescriptionIndex);
 
 /*! checks if some tracks in file needs layer reconstruction
 \param isom_file the target ISO file
@@ -3556,7 +3761,7 @@ GF_Err gf_isom_hevc_set_inband_config(GF_ISOFile *isom_file, u32 trackNumber, u3
 */
 GF_Err gf_isom_lhvc_force_inband_config(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDescriptionIndex);
 
-/*! sets hvt1 entry type (tile track) or hev2/hvc2 type if is_base_track is set. It is the use responsability to set the tbas track reference to the base hevc track
+/*! sets hvt1 entry type (tile track) or hev2/hvc2 type if is_base_track is set. It is the use responsibility to set the tbas track reference to the base hevc track
 \param isom_file the target ISO file
 \param trackNumber the target track
 \param sampleDescriptionIndex the target sample description index
@@ -3660,7 +3865,6 @@ GF_Err gf_isom_vvc_config_update(GF_ISOFile *isom_file, u32 trackNumber, u32 sam
 */
 GF_Err gf_isom_vp_config_new(GF_ISOFile *isom_file, u32 trackNumber, GF_VPConfig *cfg, const char *URLname, const char *URNname, u32 *outDescriptionIndex, u32 vpx_type);
 
-
 /*! creates new AV1 config
 \param isom_file the target ISO file
 \param trackNumber the target track
@@ -3671,6 +3875,29 @@ GF_Err gf_isom_vp_config_new(GF_ISOFile *isom_file, u32 trackNumber, GF_VPConfig
 \return error if any
 */
 GF_Err gf_isom_av1_config_new(GF_ISOFile *isom_file, u32 trackNumber, GF_AV1Config *cfg, const char *URLname, const char *URNname, u32 *outDescriptionIndex);
+
+/*! creates new AVS 3 Video config
+\param isom_file the target ISO file
+\param trackNumber the target track
+\param cfg the AVS3 Video config for this sample description
+\param URLname URL value of the data reference, NULL if no data reference (media in the file)
+\param URNname URN value of the data reference, NULL if no data reference (media in the file)
+\param outDescriptionIndex set to the index of the created sample description
+\return error if any
+*/
+GF_Err gf_isom_avs3v_config_new(GF_ISOFile *isom_file, u32 trackNumber, GF_AVS3VConfig *cfg, const char *URLname, const char *URNname, u32 *outDescriptionIndex);
+
+
+/*! creates new IAMF config
+\param isom_file the target ISO file
+\param trackNumber the target track
+\param cfg the IAMF config for this sample description
+\param URLname URL value of the data reference, NULL if no data reference (media in the file)
+\param URNname URN value of the data reference, NULL if no data reference (media in the file)
+\param outDescriptionIndex set to the index of the created sample description
+\return error if any
+*/
+GF_Err gf_isom_iamf_config_new(GF_ISOFile *isom_file, u32 trackNumber, GF_IAConfig *cfg, const char *URLname, const char *URNname, u32 *outDescriptionIndex);
 
 
 #endif /*GPAC_DISABLE_ISOM_WRITE*/
@@ -3725,6 +3952,17 @@ GF_Err gf_isom_get_dims_description(GF_ISOFile *isom_file, u32 trackNumber, u32 
 GF_Err gf_isom_new_dims_description(GF_ISOFile *isom_file, u32 trackNumber, GF_DIMSDescription *desc, const char *URLname, const char *URNname, u32 *outDescriptionIndex);
 #endif /*GPAC_DISABLE_ISOM_WRITE*/
 
+
+/*! gets a UDTS Specific Configuration sample description
+\param isom_file the target ISO file
+\param trackNumber the target track
+\param sampleDescriptionIndex the target sample description index
+\param cfg set to the UDTS Specific Configuration
+\return error if any
+*/
+GF_Err gf_isom_get_udts_config(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDescriptionIndex, GF_UDTSConfig *cfg);
+
+
 /*! gets an AC3 sample description
 \param isom_file the target ISO file
 \param trackNumber the target track
@@ -3756,6 +3994,68 @@ GF_Err gf_isom_ac3_config_update(GF_ISOFile *isom_file, u32 trackNumber, u32 sam
 
 #endif /*GPAC_DISABLE_ISOM_WRITE*/
 
+/*! gets an AC4 sample description
+\param isom_file the target ISO file
+\param trackNumber the target track
+\param sampleDescriptionIndex the target sample description index
+\return AC-4 config
+*/
+GF_AC4Config *gf_isom_ac4_config_get(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDescriptionIndex);
+
+#ifndef GPAC_DISABLE_ISOM_WRITE
+/*! creates an AC4 sample description
+\param isom_file the target ISO file
+\param trackNumber the target track
+\param cfg the AC4 config for this sample description
+\param URLname URL value of the data reference, NULL if no data reference (media in the file)
+\param URNname URN value of the data reference, NULL if no data reference (media in the file)
+\param outDescriptionIndex set to the index of the created sample description
+\return error if any
+*/
+GF_Err gf_isom_ac4_config_new(GF_ISOFile *isom_file, u32 trackNumber, GF_AC4Config *cfg, const char *URLname, const char *URNname, u32 *outDescriptionIndex);
+
+/*! updates an AC4 sample description
+\param isom_file the target ISO file
+\param trackNumber the target track
+\param sampleDescriptionIndex the target sample description index
+\param cfg the AC4 config for this sample description
+\return error if any
+*/
+GF_Err gf_isom_ac4_config_update(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDescriptionIndex, GF_AC4Config *cfg);
+
+#endif /*GPAC_DISABLE_ISOM_WRITE*/
+
+/*! gets an AC4 sample description
+\param isom_file the target ISO file
+\param trackNumber the target track
+\param sampleDescriptionIndex the target sample description index
+\return AC-4 config
+*/
+GF_AC4Config *gf_isom_ac4_config_get(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDescriptionIndex);
+
+#ifndef GPAC_DISABLE_ISOM_WRITE
+/*! creates an AC4 sample description
+\param isom_file the target ISO file
+\param trackNumber the target track
+\param cfg the AC4 config for this sample description
+\param URLname URL value of the data reference, NULL if no data reference (media in the file)
+\param URNname URN value of the data reference, NULL if no data reference (media in the file)
+\param outDescriptionIndex set to the index of the created sample description
+\return error if any
+*/
+GF_Err gf_isom_ac4_config_new(GF_ISOFile *isom_file, u32 trackNumber, GF_AC4Config *cfg, const char *URLname, const char *URNname, u32 *outDescriptionIndex);
+
+/*! updates an AC4 sample description
+\param isom_file the target ISO file
+\param trackNumber the target track
+\param sampleDescriptionIndex the target sample description index
+\param cfg the AC4 config for this sample description
+\return error if any
+*/
+GF_Err gf_isom_ac4_config_update(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDescriptionIndex, GF_AC4Config *cfg);
+
+#endif /*GPAC_DISABLE_ISOM_WRITE*/
+
 /*! gets TrueHD  sample description info
 \param isom_file the target ISO file
 \param trackNumber the target track
@@ -3767,7 +4067,7 @@ GF_Err gf_isom_ac3_config_update(GF_ISOFile *isom_file, u32 trackNumber, u32 sam
 GF_Err gf_isom_truehd_config_get(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDescriptionIndex, u32 *format_info, u32 *peak_data_rate);
 
 #ifndef GPAC_DISABLE_ISOM_WRITE
-/*! creates a FLAC sample description
+/*! creates a TrueHD sample description
 \param isom_file the target ISO file
 \param trackNumber the target track
 \param URLname URL value of the data reference, NULL if no data reference (media in the file)
@@ -3881,16 +4181,40 @@ GF_Err gf_isom_tmcd_config_new(GF_ISOFile *isom_file, u32 trackNumber, u32 fps_n
 */
 GF_Err gf_isom_get_tmcd_config(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDescriptionIndex, u32 *tmcd_flags, u32 *tmcd_fps_num, u32 *tmcd_fps_den, u32 *tmcd_fpt);
 
+
+#ifndef GPAC_DISABLE_ISOM_WRITE
+
+/*! creates an event message track metadata sample description
+\param isom_file the target ISO file
+\param trackNumber the target track
+\param outDescriptionIndex set to the index of the created sample description
+\return error if any
+*/
+GF_Err gf_isom_evte_config_new(GF_ISOFile *isom_file, u32 trackNumber, u32 *outDescriptionIndex);
+
+#endif /*GPAC_DISABLE_ISOM_WRITE*/
+
 /*! gets information of a raw PCM  sample description, ISOBMFF style
 \param isom_file the target ISO file
 \param trackNumber the target track
 \param sampleDescriptionIndex the target sample description index
-\param flags set to the pcm config flags (0: big endian, 1: little endian)
-\param pcm_size  set to PCM sample size (per channel, 16, 24, 32, 64
+\param flags set to the pcm config flags (0: big endian, 1: little endian), may be NULL
+\param pcm_size  set to PCM sample size (per channel, 16, 24, 32, 64, may be NULL
 \return error if any
 */
 GF_Err gf_isom_get_pcm_config(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDescriptionIndex, u32 *flags, u32 *pcm_size);
 
+/*! gets information of a raw PCM  sample description, QT style (lpcm codecid)
+\param isom_file the target ISO file
+\param trackNumber the target track
+\param sampleDescriptionIndex the target sample description index
+\param sample_rate set to the pcm sample rate, may be NULL
+\param nb_channels set to the pcm channel count, may be NULL
+\param flags set to the pcm config flags (1: float, 2: big endian, 4: signed, other flags cf QTFF), may be NULL
+\param pcm_size  set to PCM sample size (per channel, 16, 24, 32, 64, may be NULL
+\return error if any
+*/
+GF_Err gf_isom_get_lpcm_config(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDescriptionIndex, Double *sample_rate, u32 *nb_channels, u32 *flags, u32 *pcm_size);
 
 
 #ifndef GPAC_DISABLE_ISOM_WRITE
@@ -3901,7 +4225,7 @@ GF_Err gf_isom_get_pcm_config(GF_ISOFile *isom_file, u32 trackNumber, u32 sample
 \param URLname URL value of the data reference, NULL if no data reference (media in the file)
 \param URNname URN value of the data reference, NULL if no data reference (media in the file)
 \param outDescriptionIndex set to the index of the created sample description
-\param dsi the MPEGH audio config (payload of mhaC box):  byte[0]=1 (config version) ,byte[1]=ProfileLevel,  byte[2]=channel layout, byte[3],byte[4]: the size of what follows the rest being a mpegh3daConfig
+\param dsi the MPEGH audio config (payload of mhaC box):  byte[0]=1 (config version) ,byte[1]=ProfileLevel, byte[2]=channel layout, byte[3],byte[4]: the size of what follows the rest being a mpegh3daConfig
 \param dsi_size the size of the MPEGH audio config
 \param mha_subtype mha1/mha2:/mhm1/mhm2 subtype to use
 \return error if any
@@ -3991,7 +4315,6 @@ GF_Err gf_isom_set_y3d_info(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDe
 /*! @} */
 
 
-#ifndef GPAC_DISABLE_ISOM_FRAGMENTS
 /*!
 \addtogroup isofragred_grp Fragmented ISOBMFF Read
 \ingroup iso_grp
@@ -4006,11 +4329,14 @@ This describes function specific to fragmented ISOBMF files
 \return GF_FALSE if movie isn't fragmented, GF_TRUE otherwise
 */
 Bool gf_isom_is_fragmented(GF_ISOFile *isom_file);
+
 /*! checks if a movie file is fragmented
 \param isom_file the target ISO file
 \param TrackID the target track
 \return GF_FALSE if track isn't fragmented, GF_TRUE otherwise*/
 Bool gf_isom_is_track_fragmented(GF_ISOFile *isom_file, GF_ISOTrackID TrackID);
+
+#ifndef GPAC_DISABLE_ISOM_FRAGMENTS
 
 /*! checks if a file has a top styp box
 \param isom_file the target ISO file
@@ -4139,7 +4465,6 @@ GF_Err gf_isom_get_fragment_defaults(GF_ISOFile *isom_file, u32 trackNumber,
 */
 Bool gf_isom_get_last_producer_time_box(GF_ISOFile *isom_file, GF_ISOTrackID *refTrackID, u64 *ntp, u64 *timestamp, Bool reset_info);
 
-#ifndef GPAC_DISABLE_ISOM_WRITE
 /*! enables storage of traf templates (serialized sidx/moof/traf without trun/senc) at segment boundaries
 This is mostly used to recreate identical segment information when refragmenting a file
 \param isom_file the target ISO file
@@ -4174,6 +4499,8 @@ typedef struct
 	u64 sidx_start;
 	/*! sidx end, 0 if absent*/
 	u64 sidx_end;
+	/*! DTS of first sample in this fragment fotr the queried track*/
+	u64 first_dts;
 } GF_ISOFragmentBoundaryInfo;
 
 /*! checks if a sample is a fragment start
@@ -4184,23 +4511,6 @@ Only use this function if \ref gf_isom_enable_traf_map_templates has been called
 \param frag_info filled with information on fragment boundaries (optional - can be NULL)
 \return GF_TRUE if this sample was the first sample of a traf in the fragmented source file, GF_FALSE otherwise*/
 Bool gf_isom_sample_is_fragment_start(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleNum, GF_ISOFragmentBoundaryInfo *frag_info);
-#endif //GPAC_DISABLE_ISOM_WRITE
-
-/*! resets sample information for all tracks setup. This allows keeping the memory footprint low when playing DASH/CMAF segments
-\note seeking in the file is then no longer possible
-\param isom_file the target ISO file
-\param reset_sample_count if GF_TRUE, sets sample count of all tracks back to 0
-\return error if any
-*/
-GF_Err gf_isom_reset_tables(GF_ISOFile *isom_file, Bool reset_sample_count);
-
-/*! sets the offset for parsing from the input buffer to 0 (used to reclaim input buffer)
-\param isom_file the target ISO file
-\param top_box_start set to the byte offset in the source buffer of the first top level box
-\return error if any
-*/
-GF_Err gf_isom_reset_data_offset(GF_ISOFile *isom_file, u64 *top_box_start);
-
 
 /*! releases current movie segment. This closes the associated file IO object.
 \note seeking in the file is no longer possible when tables are rested
@@ -4212,6 +4522,24 @@ GF_Err gf_isom_reset_data_offset(GF_ISOFile *isom_file, u64 *top_box_start);
 */
 GF_Err gf_isom_release_segment(GF_ISOFile *isom_file, Bool reset_tables);
 
+#endif //GPAC_DISABLE_ISOM_FRAGMENTS
+
+
+/*! resets sample information for all tracks setup. This allows keeping the memory footprint low when playing DASH/CMAF segments
+\note seeking in the file is then no longer possible
+\param isom_file the target ISO file
+\param reset_sample_count if GF_TRUE, sets sample count of all tracks back to 0
+\return error if any
+*/
+GF_Err gf_isom_reset_tables(GF_ISOFile *isom_file, Bool reset_sample_count);
+
+/*! sets the offset for parsing from the input buffer to 0 (used to reclaim input buffer)
+\param isom_file the target ISO file
+\param top_box_start set to the byte offset in the source buffer of the first top level box, may be NULL
+\return error if any
+*/
+GF_Err gf_isom_reset_data_offset(GF_ISOFile *isom_file, u64 *top_box_start);
+
 /*! Flags for gf_isom_open_segment*/
 typedef enum
 {
@@ -4220,6 +4548,8 @@ typedef enum
 	/*! the segment contains a scalable layer of the last opened segment*/
 	GF_ISOM_SEGMENT_SCALABLE_FLAG = 1<<1,
 } GF_ISOSegOpenMode;
+
+#ifndef GPAC_DISABLE_ISOM_FRAGMENTS
 
 /*! opens a new segment file. Access to samples in previous segments is no longer possible
 if end_range>start_range, restricts the URL to the given byterange when parsing
@@ -4579,9 +4909,10 @@ GF_Err gf_isom_flush_fragments(GF_ISOFile *isom_file, Bool last_segment);
 \param reference_track_ID the ID of the track used as a reference for media timestamps
 \param ntp absolute NTP time
 \param timestamp media time corresponding to the NTP time, in reference track media timescale
+\param at_mux whether the box should also contain the ntp time of when the movie fragment is written
 \return error if any
 */
-GF_Err gf_isom_set_fragment_reference_time(GF_ISOFile *isom_file, GF_ISOTrackID reference_track_ID, u64 ntp, u64 timestamp);
+GF_Err gf_isom_set_fragment_reference_time(GF_ISOFile *isom_file, GF_ISOTrackID reference_track_ID, u64 ntp, u64 timestamp, Bool at_mux);
 
 /*! writes an empty sidx in the current movie.
 
@@ -4612,6 +4943,16 @@ GF_Err gf_isom_allocate_sidx(GF_ISOFile *isom_file, s32 subsegs_per_sidx, Bool d
 \return error if any
 */
 GF_Err gf_isom_setup_track_fragment_template(GF_ISOFile *isom_file, GF_ISOTrackID TrackID, u8 *boxes, u32 boxes_size, u8 force_traf_flags);
+
+/*! sets up track fragment defaults using the given template. The template shall be a serialized array of one or more trex boxes
+
+\param isom_file the target ISO file
+\param TrackID ID of the target track
+\param orig_dur  last sample original duration
+\param elapsed_dur   first sample elapsed duration
+\return error if any
+*/
+GF_Err gf_isom_set_fragment_original_duration(GF_ISOFile *isom_file, GF_ISOTrackID TrackID, u32 orig_dur, u32 elapsed_dur);
 
 #ifdef GF_ENABLE_CTRN
 /*! enables track fragment inheriting from a given traf.
@@ -4718,6 +5059,11 @@ GF_Err gf_isom_fragment_append_data(GF_ISOFile *isom_file, GF_ISOTrackID TrackID
 \return error if any
 */
 GF_Err gf_isom_fragment_set_cenc_sai(GF_ISOFile *isom_file, GF_ISOTrackID trackID, u8 *sai_b, u32 sai_b_size, Bool use_subsample, Bool use_saio_32bit, Bool use_multikey);
+
+#endif // !defined(GPAC_DISABLE_ISOM_FRAGMENTS) && !defined(GPAC_DISABLE_ISOM_WRITE)
+
+#if !defined(GPAC_DISABLE_ISOM_WRITE)
+
 /*! clones PSSH data between two files
 \param dst_file the target ISO file
 \param src_file the source ISO file
@@ -4726,6 +5072,10 @@ GF_Err gf_isom_fragment_set_cenc_sai(GF_ISOFile *isom_file, GF_ISOTrackID trackI
 */
 GF_Err gf_isom_clone_pssh(GF_ISOFile *dst_file, GF_ISOFile *src_file, Bool in_moof);
 
+#endif
+
+
+#if !defined(GPAC_DISABLE_ISOM_FRAGMENTS) && !defined(GPAC_DISABLE_ISOM_WRITE)
 
 /*! sets roll information for a sample in a track fragment
 \param isom_file the target ISO file
@@ -4746,6 +5096,16 @@ GF_Err gf_isom_fragment_set_sample_roll_group(GF_ISOFile *isom_file, GF_ISOTrack
 \return error if any
 */
 GF_Err gf_isom_fragment_set_sample_rap_group(GF_ISOFile *isom_file, GF_ISOTrackID trackID, u32 sample_number_in_frag, Bool is_rap, u32 num_leading_samples);
+
+/*! sets AV1 Switching Frame information for a sample in a track fragment
+\param isom_file the target ISO file
+\param trackID the ID of the target track
+\param sample_number_in_frag the sample number of the sample in the traf
+\param is_rap set to GF_TRUE to indicate the sample is a RAP sample (open-GOP), GF_FALSE otherwise
+\param num_leading_samples set to the number of leading pictures for a RAP sample
+\return error if any
+*/
+GF_Err gf_isom_fragment_set_sample_av1_switch_frame_group(GF_ISOFile *isom_file, GF_ISOTrackID trackID, u32 sample_number_in_frag, Bool is_switch_Frame);
 
 /*! sets sample dependency flags in a track fragment - see ISO/IEC 14496-12 and \ref gf_filter_pck_set_dependency_flags
 \param isom_file the target ISO file
@@ -5110,6 +5470,15 @@ GF_Err gf_isom_text_dump(GF_ISOFile *isom_file, u32 trackNumber, FILE *dump, GF_
 */
 GF_Err gf_isom_text_get_encoded_tx3g(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDescriptionIndex, u32 sidx_offset, u8 **tx3g, u32 *tx3g_size);
 
+/*! sets TX3G flags for forced samples
+\param isom_file the target ISO file
+\param trackNumber the target track
+\param sampleDescriptionIndex the sample description index
+\param force_type if 0, no forced subs are present. If 1, some forced subs are present; if 2, all samples are forced subs
+\return error if any
+*/
+GF_Err gf_isom_set_forced_text(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDescriptionIndex, u32 force_type);
+
 /*! text sample formatting*/
 typedef struct _3gpp_text_sample GF_TextSample;
 /*! creates text sample handle
@@ -5384,6 +5753,13 @@ GF_Err gf_isom_text_add_blink(GF_TextSample *tx_samp, u16 start_char, u16 end_ch
 */
 GF_Err gf_isom_text_set_wrap(GF_TextSample *tx_samp, u8 wrap_flags);
 
+/*! sets force for the sample
+\param tx_samp the target text sample
+\param is_forced for ce sample if TRUE
+\return error if any
+*/
+GF_Err gf_isom_text_set_forced(GF_TextSample *tx_samp, Bool is_forced);
+
 /*! formats sample as a regular GF_ISOSample payload in a bitstream object.
 \param tx_samp the target text sample
 \param bs thetarget bitstream
@@ -5444,6 +5820,8 @@ GF_Err gf_isom_xml_subtitle_sample_add_text(GF_GenericSubtitleSample *subt_samp,
 @{
 */
 
+#endif // GPAC_DISABLE_ISOM
+
 /*! DRM related code points*/
 enum
 {
@@ -5473,12 +5851,6 @@ enum
 	GF_ISOM_SVE1_SCHEME	= GF_4CC('s','v','e','1'),
 };
 
-/*! checks if a track is encrypted or protected
-\param isom_file the target ISO file
-\param trackNumber the target track
-\return GF_TRUE if track is protected, GF_FALSE otherwise*/
-Bool gf_isom_is_track_encrypted(GF_ISOFile *isom_file, u32 trackNumber);
-
 
 /*! flags for GF_ISMASample*/
 typedef enum
@@ -5488,6 +5860,17 @@ typedef enum
 	/*! signals the sample is encrypted*/
 	GF_ISOM_ISMA_IS_ENCRYPTED = 2,
 } GF_ISOISMACrypFlags;
+
+
+#ifndef GPAC_DISABLE_ISOM
+
+/*! checks if a track is encrypted or protected
+\param isom_file the target ISO file
+\param trackNumber the target track
+\return GF_TRUE if track is protected, GF_FALSE otherwise*/
+Bool gf_isom_is_track_encrypted(GF_ISOFile *isom_file, u32 trackNumber);
+
+
 
 /*! ISMA sample*/
 typedef struct
@@ -5716,7 +6099,7 @@ GF_Err gf_isom_track_cenc_add_sample_info(GF_ISOFile *isom_file, u32 trackNumber
 \return error if any
 */
 GF_Err gf_isom_set_cenc_protection(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDescriptionIndex, u32 scheme_type,
-                                   u32 scheme_version, u32 default_IsEncrypted, u8 default_crypt_byte_block, u8 default_skip_byte_block,
+                                   u32 scheme_version, u32 default_IsEncrypted, u32 default_crypt_byte_block, u32 default_skip_byte_block,
 								    u8 *key_info, u32 key_info_size);
 
 
@@ -5734,7 +6117,7 @@ GF_Err gf_isom_set_cenc_protection(GF_ISOFile *isom_file, u32 trackNumber, u32 s
 \return error if any
 */
 GF_Err gf_isom_set_cenc_protection_mkey(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDescriptionIndex, u32 scheme_type,
-                                   u32 scheme_version, u32 default_IsEncrypted, u8 default_crypt_byte_block, u8 default_skip_byte_block,
+                                   u32 scheme_version, u32 default_IsEncrypted, u32 default_crypt_byte_block, u32 default_skip_byte_block,
 								    u8 *key_info, u32 key_info_size);
 
 
@@ -5749,20 +6132,21 @@ GF_Err gf_isom_set_cenc_protection_mkey(GF_ISOFile *isom_file, u32 trackNumber, 
 \param pssh_mode 0: regular PSSH in moov, 1: PIFF PSSH in moov, 2: regular PSSH in meta
 \return error if any
 */
-GF_Err gf_cenc_set_pssh(GF_ISOFile *isom_file, bin128 systemID, u32 version, u32 KID_count, bin128 *KID, u8 *data, u32 len, u32 pssh_mode);
+GF_Err gf_isom_cenc_set_pssh(GF_ISOFile *isom_file, bin128 systemID, u32 version, u32 KID_count, bin128 *KID, u8 *data, u32 len, u32 pssh_mode);
 
 /*! removes CENC senc box info
 \param isom_file the target ISO file
 \param trackNumber the target track
 \return error if any
 */
-GF_Err gf_isom_remove_samp_enc_box(GF_ISOFile *isom_file, u32 trackNumber);
+GF_Err gf_isom_remove_cenc_senc_box(GF_ISOFile *isom_file, u32 trackNumber);
+
 /*! removes all CENC sample groups
 \param isom_file the target ISO file
 \param trackNumber the target track
 \return error if any
 */
-GF_Err gf_isom_remove_samp_group_box(GF_ISOFile *isom_file, u32 trackNumber);
+GF_Err gf_isom_remove_cenc_seig_sample_group(GF_ISOFile *isom_file, u32 trackNumber);
 
 #endif //GPAC_DISABLE_ISOM_WRITE
 
@@ -5847,7 +6231,7 @@ GF_Err gf_isom_cenc_get_sample_aux_info(GF_ISOFile *isom_file, u32 trackNumber, 
 \param key_info_size set to multikey descriptor size
 \return error if any
 */
-GF_Err gf_isom_cenc_get_default_info(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDescriptionIndex, u32 *container_type, Bool *default_IsEncrypted, u8 *crypt_byte_block, u8 *skip_byte_block, const u8 **key_info, u32 *key_info_size);
+GF_Err gf_isom_cenc_get_default_info(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleDescriptionIndex, u32 *container_type, Bool *default_IsEncrypted, u32 *crypt_byte_block, u32 *skip_byte_block, const u8 **key_info, u32 *key_info_size);
 
 /*! gets the number of PSSH defined
 \param isom_file the target ISO file
@@ -5897,7 +6281,7 @@ GF_Err gf_isom_dump_ismacryp_sample(GF_ISOFile *isom_file, u32 trackNumber, u32 
 \param key_info_size set to key descriptor size
 \return error if any
 */
-GF_Err gf_isom_get_sample_cenc_info(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleNumber, Bool *IsEncrypted, u8 *crypt_byte_block, u8 *skip_byte_block, const u8 **key_info, u32 *key_info_size);
+GF_Err gf_isom_get_sample_cenc_info(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleNumber, Bool *IsEncrypted, u32 *crypt_byte_block, u32 *skip_byte_block, const u8 **key_info, u32 *key_info_size);
 
 /*! @} */
 
@@ -6025,7 +6409,7 @@ GF_Err gf_isom_extract_meta_item_mem(GF_ISOFile *isom_file, Bool root_meta, u32 
 \return error if any
 */
 GF_Err gf_isom_extract_meta_item_get_cenc_info(GF_ISOFile *isom_file, Bool root_meta, u32 track_num, u32 item_id, Bool *is_protected,
-	u8 *skip_byte_block, u8 *crypt_byte_block, const u8 **key_info, u32 *key_info_size, u32 *aux_info_type_parameter,
+	u32 *skip_byte_block, u32 *crypt_byte_block, const u8 **key_info, u32 *key_info_size, u32 *aux_info_type_parameter,
 	u8 **sai_out_data, u32 *sai_out_size, u32 *sai_out_alloc_size);
 
 /*! gets primary item ID
@@ -6054,6 +6438,16 @@ u32 gf_isom_meta_get_item_ref_count(GF_ISOFile *isom_file, Bool root_meta, u32 t
 \return ID if the referred item*/
 u32 gf_isom_meta_get_item_ref_id(GF_ISOFile *isom_file, Bool root_meta, u32 track_num, u32 from_id, u32 type, u32 ref_idx);
 
+/*! gets number of references of a given type to a given item ID
+\param isom_file the target ISO file
+\param root_meta if GF_TRUE uses meta at the file, otherwise uses meta at the movie level if track number is 0
+\param track_num if GF_TRUE and root_meta is GF_FALSE, uses meta at the track level
+\param to_id item ID to check
+\param type reference type to check
+\return number of referenced items*/
+u32 gf_isom_meta_item_has_ref(GF_ISOFile *isom_file, Bool root_meta, u32 track_num, u32 to_id, u32 type);
+
+
 /*! item tile mode*/
 typedef enum {
 	/*! not a tile item*/
@@ -6079,8 +6473,8 @@ typedef struct
 {
 	u32 scheme_type;
 	u32 scheme_version;
-	u8 crypt_byte_block;
-	u8 skip_byte_block;
+	u32 crypt_byte_block;
+	u32 skip_byte_block;
 	const u8 *key_info;
 	u32 key_info_size;
 	const u8 *sai_data;
@@ -6165,6 +6559,9 @@ typedef struct
 	/*AV1 operation point index*/
 	u8 av1_op_index;
 
+	/*interlace type - uncv*/
+	u8 interlace_type;
+
 	const char *aux_urn;
 	const u8 *aux_data;
 	u32 aux_data_len;
@@ -6234,6 +6631,26 @@ GF_Err gf_isom_meta_get_next_item_id(GF_ISOFile *isom_file, Bool root_meta, u32 
 */
 GF_Err gf_isom_add_meta_item(GF_ISOFile *isom_file, Bool root_meta, u32 track_num, Bool self_reference, char *resource_path, const char *item_name, u32 item_id, u32 item_type, const char *mime_type, const char *content_encoding, const char *URL, const char *URN, GF_ImageItemProperties *image_props);
 
+/*! adds an item to a meta box from file (same as \ref gf_isom_add_meta_item but outputs the item's id in io_item_id)
+\param isom_file the target ISO file
+\param root_meta if GF_TRUE uses meta at the file, otherwise uses meta at the movie level if track number is 0
+\param track_num if GF_TRUE and root_meta is GF_FALSE, uses meta at the track level
+\param self_reference if GF_TRUE, indicates that the item is in fact the entire container file
+\param resource_path path to the file to add
+\param item_name name of the item
+\param io_item_id pointer to the item's id. If the pointed value is 0 or the same as an existing item, it is set to the item's newly attributed id
+\param item_type four character code of item type
+\param mime_type mime type of the item, can be NULL
+\param content_encoding content encoding of the item, can be NULL
+\param URL URL of the item for external data reference (data is not contained in meta parent file)
+\param URN URN of the item for external data reference (data is not contained in meta parent file)
+\param image_props image properties information for image items
+\return error if any
+*/
+GF_Err gf_isom_add_meta_item2(GF_ISOFile *isom_file, Bool root_meta, u32 track_num, Bool self_reference, char *resource_path, const char *item_name, u32 *io_item_id, u32 item_type, const char *mime_type, const char *content_encoding, const char *URL, const char *URN, GF_ImageItemProperties *image_props);
+
+#endif //GPAC_DISABLE_ISOM
+
 /*! item extend description*/
 typedef struct
 {
@@ -6249,6 +6666,7 @@ typedef struct
 #endif
 } GF_ItemExtentEntry;
 
+#ifndef GPAC_DISABLE_ISOM_WRITE
 
 /*! adds an item to a meta box from memory
 \param isom_file the target ISO file
@@ -6517,6 +6935,24 @@ GF_Err gf_isom_apple_get_tag(GF_ISOFile *isom_file, GF_ISOiTunesTag tag, const u
 GF_Err gf_isom_apple_enum_tag(GF_ISOFile *isom_file, u32 idx, GF_ISOiTunesTag *out_tag, const u8 **data, u32 *data_len, u64 *out_int_val, u32 *out_int_val2, u32 *out_flags);
 
 
+/*! enumerate itunes tags.
+
+\param isom_file the target ISO file
+\param idx 0-based index of the tag to get
+\param out_tag set to the tag code
+\param data set to the tag data pointer - do not modify
+\param data_len set to the size of the tag data. Data is set to NULL and data_size to 1 if the associated tag has no data
+\param out_int_val set to the int/bool/frac numerator type for known tags, in which case data is set to NULL
+\param out_int_val2 set to the frac denominator for known tags, in which case data is set to NULL
+\param out_flags set to the flags value of the data container box
+\param out_mean set to the mean string identifier, if any
+\param out_name set to the name string identifier, if any
+\param out_locale set to the locale data identifier, if any
+\return error if any (GF_URL_ERROR if no more tags)
+*/
+GF_Err gf_isom_apple_enum_tag_ex(GF_ISOFile *isom_file, u32 idx, GF_ISOiTunesTag *out_tag, const u8 **data, u32 *data_len, u64 *out_int_val, u32 *out_int_val2, u32 *out_flags, const char **out_mean, const char **out_name, u32 *out_locale);
+
+
 /*! enumerate WMA tags.
 
 \param isom_file the target ISO file
@@ -6635,6 +7071,21 @@ GF_Err gf_isom_enum_udta_keys(GF_ISOFile *isom_file, u32 idx, GF_QT_UDTAKey *out
 \return error if any
 */
 GF_Err gf_isom_apple_set_tag(GF_ISOFile *isom_file, GF_ISOiTunesTag tag, const u8 *data, u32 data_len, u64 int_val, u32 int_val2);
+
+/*! sets the given tag info.
+
+\param isom_file the target ISO file
+\param for_tag the tag to set
+\param data tag data buffer or string to parse
+\param data_len size of the tag data buffer. If data is NULL and and data_len not  0, removes the given tag
+\param int_val value for integer/boolean tags. If data and data_len are set, parse data as string  to get the value
+\param int_val2 value for fractional tags. If data and data_len are set, parse data as string to get the value
+\param name domain name of tag, ignores for_tag if not null
+\param mean mean of tag, ignores for_tag if not null
+\param locale locale of tag, ignored if name and mean are null
+\return error if any
+*/
+GF_Err gf_isom_apple_set_tag_ex(GF_ISOFile *isom_file, GF_ISOiTunesTag for_tag, const u8 *data, u32 data_len, u64 int_val, u32 int_val2, const char *name, const char *mean, u32 locale);
 
 
 /*! sets the given WMA tag info (only string tags are supported).
@@ -6838,9 +7289,12 @@ enum {
 	GF_ISOM_SAMPLE_GROUP_VIPR = GF_4CC( 'v', 'i', 'p', 'r'), //p15
 	GF_ISOM_SAMPLE_GROUP_LBLI = GF_4CC( 'l', 'b', 'l', 'i'), //p15
 	GF_ISOM_SAMPLE_GROUP_3GAG = GF_4CC( '3', 'g', 'a', 'g'), //3gpp
+	GF_ISOM_SAMPLE_GROUP_AV1S = GF_4CC( 'a', 'v', '1', 's'), //av1-isobmff
 	GF_ISOM_SAMPLE_GROUP_AVCB = GF_4CC( 'a', 'v', 'c', 'b'), //avif
 	GF_ISOM_SAMPLE_GROUP_SPOR = GF_4CC( 's', 'p', 'o', 'r'), //p15
 	GF_ISOM_SAMPLE_GROUP_SULM = GF_4CC( 's', 'u', 'l', 'm'), //p15
+	GF_ISOM_SAMPLE_GROUP_ESGH = GF_4CC( 'e', 's', 'g', 'h'), //p12
+	GF_ISOM_SAMPLE_GROUP_ILCE = GF_4CC( 'i', 'l', 'c', 'e'), //uncv
 };
 
 /*! gets 'rap ' and 'roll' group info for the given sample
@@ -6869,7 +7323,7 @@ Bool gf_isom_get_sample_group_info(GF_ISOFile *isom_file, u32 trackNumber, u32 s
 \param trackNumber the target track
 \param sample_number sample number to query
 \param grouping_type four character code of grouping type of sample group description to query
-\param grouping_type_parameter  grouping type parameter of sample group description to query
+\param grouping_type_parameter grouping type parameter of sample group description to query
 \param sampleGroupDescIndex set to the 1-based sample group description index, or 0 if no sample group of this type is associated
 \return error if any
 */
@@ -6905,12 +7359,13 @@ Bool gf_isom_get_tile_info(GF_ISOFile *isom_file, u32 trackNumber, u32 sample_gr
 \param sample_number the target sample
 \param sgrp_idx the current index. Must be set to 0 on first call, incremented by this call on each success, must not be NULL
 \param sgrp_type set to the grouping type, or set to 0 if no more sample group descriptions, must not be NULL
+\param sgrp_flags set to the grouping flags, (0x1: static_group_description, 0x2: static_mapping)
 \param sgrp_parameter set to the grouping_type_parameter or 0 if not defined
-\param sgrp_data set to the sample group description data
-\param sgrp_size set to the sample group description size
+\param sgrp_data set to the sample group description data, may be NULL - MUST be freed by caller
+\param sgrp_size set to the sample group description size, may be NULL
 \return error if any
 */
-GF_Err gf_isom_enum_sample_group(GF_ISOFile *isom_file, u32 trackNumber, u32 sample_number, u32 *sgrp_idx, u32 *sgrp_type, u32 *sgrp_parameter, const u8 **sgrp_data, u32 *sgrp_size);
+GF_Err gf_isom_enum_sample_group(GF_ISOFile *isom_file, u32 trackNumber, u32 sample_number, u32 *sgrp_idx, u32 *sgrp_type, u32 *sgrp_flags, u32 *sgrp_parameter, u8 **sgrp_data, u32 *sgrp_size);
 
 /*! enumerates custom sample auxiliary data (not natively supported by this library) for a given sample
 \param isom_file the target ISO file
@@ -6939,6 +7394,18 @@ GF_Err gf_isom_enum_sample_aux_data(GF_ISOFile *isom_file, u32 trackNumber, u32 
 */
 GF_Err gf_isom_set_sample_rap_group(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleNumber, Bool is_rap, u32 num_leading_samples);
 
+/*! sets AV1 Switching Frame info for sample_number
+\warning Sample group info MUST be added in order (no insertion in the tables)
+
+\param isom_file the target ISO file
+\param trackNumber the target track
+\param sampleNumber the target sample number
+\param is_rap indicates if the sample is a RAP (open gop) sample
+\param num_leading_samples indicates the number of leading samples (samples after this RAP that have dependences on samples before this RAP and hence should be discarded when tuning in)
+\return error if any
+*/
+GF_Err gf_isom_set_sample_av1_switch_frame_group(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleNumber, Bool is_switch_Frame);
+
 /*! sets roll_distance info for sample_number (number of frames before (<0) or after (>0) this sample to have a complete refresh of the decoded data (used by GDR in AVC)
 
 \warning Sample group info MUST be added in order (no insertion in the tables)
@@ -6962,7 +7429,7 @@ GF_Err gf_isom_set_sample_roll_group(GF_ISOFile *isom_file, u32 trackNumber, u32
 \param key_info_size multikey descriptor size
 \return error if any
 */
-GF_Err gf_isom_set_sample_cenc_group(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleNumber, u8 isEncrypted, u8 crypt_byte_block, u8 skip_byte_block, u8 *key_info, u32 key_info_size);
+GF_Err gf_isom_set_sample_cenc_group(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleNumber, u8 isEncrypted, u32 crypt_byte_block, u32 skip_byte_block, u8 *key_info, u32 key_info_size);
 
 
 /*! sets a sample using the default CENC parameters in a CENC saig sample group SEIG, creating a sample group description if needed (when seig is already defined)
@@ -7001,9 +7468,10 @@ GF_Err gf_isom_remove_sample_group(GF_ISOFile *isom_file, u32 trackNumber, u32 g
 \param grouping_type_parameter associated grouping type parameter (usually 0)
 \param data the payload of the sample group description
 \param data_size the size of the payload
+\param sgpd_flags flags for sgpd: 1: static description, 2, static mapping, 1<<30: essential sample group, 1<<31: default sample description
 \return error if any
 */
-GF_Err gf_isom_set_sample_group_description(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleNumber, u32 grouping_type, u32 grouping_type_parameter, void *data, u32 data_size);
+GF_Err gf_isom_set_sample_group_description(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleNumber, u32 grouping_type, u32 grouping_type_parameter, void *data, u32 data_size, u32 sgpd_flags);
 
 
 /*! adds a sample to the given sample group
@@ -7024,8 +7492,38 @@ GF_Err gf_isom_add_sample_info(GF_ISOFile *isom_file, u32 trackNumber, u32 sampl
 GF_Err gf_isom_set_sample_group_in_traf(GF_ISOFile *isom_file);
 #endif
 
+/*! sets sample references
+\param isom_file the target ISO file
+\param trackNumber the target track
+\param sampleNumber the target sample number - currently restricted to be  the last sample
+\param ID ID for the sample
+\param nb_refs number of references for this sample, may be 0 if none (IDR)
+\param refs IDs of samples this sample depends on
+\return error if any*/
+GF_Err gf_isom_set_sample_references(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleNumber, s32 ID, u32 nb_refs, s32 *refs);
+
 #endif // GPAC_DISABLE_ISOM_WRITE
 
+/*! gets sample references
+\param isom_file the target ISO file
+\param trackNumber the target track
+\param sampleNumber the target sample number
+\param refID ID for the sample
+\param nb_refs number of references for this sample, may be 0 if none (IDR)
+\param refs IDs of samples this sample depends on. Do NOT modify
+\return error if any, GF_NOT_FOUND if no such info*/
+GF_Err gf_isom_get_sample_references(GF_ISOFile *isom_file, u32 trackNumber, u32 sampleNumber, u32 *refID, u32 *nb_refs, const u32 **refs);
+
+#ifndef GPAC_DISABLE_ISOM_FRAGMENTS
+/*! sets sample references for fragmented mode
+\param isom_file the target ISO file
+\param TrackID the target track ID
+\param refID ID for the sample
+\param nb_refs number of references for this sample, may be 0 if none (IDR)
+\param refs IDs of samples this sample depends on
+\return error if any*/
+GF_Err gf_isom_fragment_add_sample_references(GF_ISOFile *isom_file, GF_ISOTrackID TrackID, s32 refID, u32 nb_refs, s32 *refs);
+#endif
 
 /*! @} */
 
@@ -7037,5 +7535,3 @@ GF_Err gf_isom_set_sample_group_in_traf(GF_ISOFile *isom_file);
 
 
 #endif	/*_GF_ISOMEDIA_H_*/
-
-

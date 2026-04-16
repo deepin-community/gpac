@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2017-2022
+ *			Copyright (c) Telecom ParisTech 2017-2025
  *					All rights reserved
  *
  *  This file is part of GPAC / filters sub-project
@@ -25,6 +25,7 @@
 
 #include <gpac/filters.h>
 #include <gpac/constants.h>
+#include <gpac/bitstream.h>
 
 typedef struct
 {
@@ -99,14 +100,17 @@ CodecIDReg CodecRegistry [] = {
 	{GF_CODECID_DIRAC, 0xA4, GF_STREAM_VISUAL, "Dirac Video", "dirac", NULL, "video/dirac"},
 	{GF_CODECID_AC3, 0xA5, GF_STREAM_AUDIO, "AC3 Audio", "ac3", "ac-3", "audio/ac3", .unframe=GF_TRUE},
 	{GF_CODECID_EAC3, 0xA6, GF_STREAM_AUDIO, "Enhanced AC3 Audio", "eac3", "ec-3", "audio/eac3", .unframe=GF_TRUE},
+	{GF_CODECID_AC4, 0, GF_STREAM_AUDIO, "AC4 Audio", "ac4", "ac-4", "audio/ac4", .unframe=GF_TRUE},
 	{GF_CODECID_TRUEHD, 0, GF_STREAM_AUDIO, "Dolby TrueHD", "mlp", "mlpa", "audio/truehd", .unframe=GF_TRUE},
 	{GF_CODECID_DRA, 0xA7, GF_STREAM_AUDIO, "DRA Audio", "dra", NULL, "audio/dra"},
 	{GF_CODECID_G719, 0xA8, GF_STREAM_AUDIO, "G719 Audio", "g719", NULL, "audio/g719"},
-	{GF_CODECID_DTS_CA, 0xA9, GF_STREAM_AUDIO, "DTS Coherent Acoustics Audio", "dstca", NULL, "audio/dts"},
-	{GF_CODECID_DTS_HD_HR, 0xAA, GF_STREAM_AUDIO, "DTS-HD High Resolution Audio", "dtsh", NULL, "audio/dts"},
-	{GF_CODECID_DTS_HD_MASTER, 0xAB, GF_STREAM_AUDIO, "DTS-HD Master Audio", "dstm", NULL, "audio/dts"},
-	{GF_CODECID_DTS_LBR, 0xAC, GF_STREAM_AUDIO, "DTS Express low bit rate Audio", "dtsl", NULL, "audio/dts"},
-	{GF_CODECID_OPUS, 0xAD, GF_STREAM_AUDIO, "Opus Audio", "opus", NULL, "audio/opus"},
+	{GF_CODECID_DTS_CA, 0xA9, GF_STREAM_AUDIO, "DTS Coherent Acoustics and Digital Surround Audio", "dtsc", NULL, "audio/dts"},
+	{GF_CODECID_DTS_HD_HR_MASTER, 0xAA, GF_STREAM_AUDIO, "DTS-HD High Resolution Audio and DTS-Master Audio", "dtsh", NULL, "audio/dts"},
+	{GF_CODECID_DTS_HD_LOSSLESS, 0xAB, GF_STREAM_AUDIO, "DTS-HD Substream containing only XLLAudio", "dtsl", NULL, "audio/dts"},
+	{GF_CODECID_DTS_EXPRESS_LBR, 0xAC, GF_STREAM_AUDIO, "DTS Express low bit rate Audio", "dtse", NULL, "audio/dts"},
+	{GF_CODECID_DTS_X, 0xB2, GF_STREAM_AUDIO, "DTS-X UHD Audio Profile 2", "dtsx", NULL, "audio/dts"},
+	{GF_CODECID_DTS_Y, 0xB3, GF_STREAM_AUDIO, "DTS-X UHD Audio Profile 3", "dtsy", NULL, "audio/dts"},
+	{GF_CODECID_OPUS, 0xAD, GF_STREAM_AUDIO, "Opus Audio", "opus", "Opus", "audio/opus"},
 	{GF_CODECID_DVB_EIT, 0, GF_STREAM_PRIVATE_SCENE, "DVB Event Information", "eti", NULL, "application/x-dvb-eit"},
 	{GF_CODECID_SVG, 0, GF_STREAM_PRIVATE_SCENE, "SVG over RTP", "svgr", NULL, "application/x-svg-rtp"},
 	{GF_CODECID_SVG_GZ, 0, GF_STREAM_PRIVATE_SCENE, "SVG+gz over RTP", "svgzr", NULL, "application/x-svgz-rtp"},
@@ -122,6 +126,7 @@ CodecIDReg CodecRegistry [] = {
 	{GF_CODECID_THEORA, 0xDF, GF_STREAM_VISUAL, "Theora Video", "theo|theora", NULL, "video/theora"},
 	{GF_CODECID_VORBIS, 0xDD, GF_STREAM_AUDIO, "Vorbis Audio", "vorb|vorbis", NULL, "audio/vorbis"},
 	{GF_CODECID_OPUS, 0xDE, GF_STREAM_AUDIO, "Opus Audio", "opus", NULL, "audio/opus"},
+	{GF_CODECID_IAMF, 0, GF_STREAM_AUDIO, "AOM IAMF (Immersive Audio Model and Formats)", "iamf", NULL, "audio/iamf", .unframe=GF_TRUE},
 	{GF_CODECID_FLAC, 0, GF_STREAM_AUDIO, "Flac Audio", "flac", "fLaC", "audio/flac", .unframe=GF_TRUE},
 	{GF_CODECID_SPEEX, 0, GF_STREAM_AUDIO, "Speex Audio", "spx|speex", NULL, "audio/speex"},
 	{GF_CODECID_SUBPIC, 0xE0, GF_STREAM_TEXT, "VobSub Subtitle", "vobsub", NULL, "text/x-vobsub"},
@@ -141,11 +146,15 @@ CodecIDReg CodecRegistry [] = {
 	{GF_CODECID_IBM_ADPCM, 0, GF_STREAM_AUDIO, "IBM ADPCL", "iadpcl", NULL, "audio/pcm"},
 	{GF_CODECID_FLASH, 0, GF_STREAM_SCENE, "Adobe Flash", "swf", NULL, "audio/pcm"},
 	{GF_CODECID_RAW, 0, GF_STREAM_UNKNOWN, "Raw media", "raw", NULL, "*/*"},
+	{GF_CODECID_RAW_UNCV, 0, GF_STREAM_UNKNOWN, "Raw Video", "uncv", NULL, "*/*"},
 
 	{GF_CODECID_AV1, 0, GF_STREAM_VISUAL, "AOM AV1 Video", "av1|ivf|obu|av1b", NULL, "video/av1", .unframe=GF_TRUE},
 	{GF_CODECID_VP8, 0, GF_STREAM_VISUAL, "VP8 Video", "vp8|ivf", NULL, "video/vp8"},
 	{GF_CODECID_VP9, 0, GF_STREAM_VISUAL, "VP9 Video", "vp9|ivf", NULL, "video/vp9", .unframe=GF_TRUE},
 	{GF_CODECID_VP10, 0, GF_STREAM_VISUAL, "VP10 Video", "vp10|ivf", NULL, "video/vp10"},
+
+	{GF_CODECID_AVS3_VIDEO, 0, GF_STREAM_VISUAL, "AVS3 Video", "avsv|avs3", NULL, "video/avs3"},
+	{GF_CODECID_AVS3_AUDIO, 0, GF_STREAM_AUDIO,  "AVS3 Audio", "avsa|avs3", NULL, "audio/avs3"},
 
 	{GF_CODECID_MPHA, 0, GF_STREAM_AUDIO, "MPEG-H Audio", "mhas", "mha1", "audio/x-mpegh", .unframe=GF_TRUE},
 	{GF_CODECID_MHAS, 0, GF_STREAM_AUDIO, "MPEG-H AudioMux", "mhas", "mhm1", "audio/x-mhas", .unframe=GF_TRUE},
@@ -156,19 +165,22 @@ CodecIDReg CodecRegistry [] = {
 	{GF_CODECID_APCS, 0, GF_STREAM_VISUAL, "ProRes Video 422 LT", "prores|apcs", "apcs", "video/prores", GF_CODECID_APCH, .unframe=GF_TRUE},
 	{GF_CODECID_AP4X, 0, GF_STREAM_VISUAL, "ProRes Video 4444 XQ", "prores|ap4x", "ap4x", "video/prores", GF_CODECID_APCH, .unframe=GF_TRUE},
 	{GF_CODECID_AP4H, 0, GF_STREAM_VISUAL, "ProRes Video 4444", "prores|ap4h", "ap4h", "video/prores", GF_CODECID_APCH, .unframe=GF_TRUE},
-	{GF_CODECID_FFMPEG, 0, GF_STREAM_UNKNOWN, "FFMPEG unmapped codec", "ffmpeg", NULL, NULL},
+	{GF_CODECID_FFMPEG, 0, GF_STREAM_UNKNOWN, "FFmpeg unmapped codec", "ffmpeg", NULL, NULL},
 
 	{GF_CODECID_TMCD, 0, GF_STREAM_METADATA, "QT TimeCode", "tmcd", NULL, NULL},
+	{GF_CODECID_SCTE35, 0, GF_STREAM_METADATA, "SCTE35", "sc35", "evte", NULL},
+	{GF_CODECID_EVTE, 0, GF_STREAM_METADATA, "Event Messages", "evte", "evte", NULL},
 	{GF_CODECID_VVC, 0, GF_STREAM_VISUAL, "VVC Video", "vvc|266|h266", "vvc1", "video/vvc", .unframe=GF_TRUE},
 	{GF_CODECID_VVC_SUBPIC, 0, GF_STREAM_VISUAL, "VVC Subpicture Video", "vvs1", "vvs1", "video/x-vvc-subpic", .alt_codecid=GF_CODECID_VVC, .unframe=GF_TRUE},
 	{GF_CODECID_USAC, GF_CODECID_AAC_MPEG4, GF_STREAM_AUDIO, "xHEAAC / USAC Audio", "usac|xheaac", "mp4a", "audio/x-xheaac", .unframe=GF_TRUE},
-	{GF_CODECID_FFV1, 0, GF_STREAM_VISUAL, "FFMPEG Video Codec 1", "ffv1", NULL, "video/x-ffv1"},
+	{GF_CODECID_FFV1, 0, GF_STREAM_VISUAL, "FFmpeg Video Codec 1", "ffv1", NULL, "video/x-ffv1"},
 
 	{GF_CODECID_DVB_SUBS, 0, GF_STREAM_TEXT, "DVB Subtitles", "dvbs", NULL, NULL},
 	{GF_CODECID_DVB_TELETEXT, 0, GF_STREAM_TEXT, "DVB-TeleText", "dvbs", NULL, NULL},
 	{GF_CODECID_MSPEG4_V3, 0, GF_STREAM_VISUAL, "MS-MPEG4 V3", "div3", NULL, NULL, GF_CODECID_MSPEG4_V3},
 
 	{GF_CODECID_ALAC, 0, GF_STREAM_AUDIO, "Apple Lossless Audio", "caf", NULL, NULL},
+	{GF_CODECID_DNXHD, 0, GF_STREAM_VISUAL, "AViD DNxHD", "dnx", "AVdn", "video/dnx"},
 
 };
 
@@ -179,6 +191,9 @@ GF_CodecID gf_codecid_parse(const char *cname)
 	u32 ilen = (u32) strlen(cname);
 	u32 i, count = sizeof(CodecRegistry) / sizeof(CodecIDReg);
 	for (i=0; i<count; i++) {
+		if (!strcmp(CodecRegistry[i].name, cname))
+			return CodecRegistry[i].codecid;
+
 		const char *n = CodecRegistry[i].sname;
 		while (n) {
 			char *sep = strchr(n, '|');
@@ -229,6 +244,8 @@ GF_CodecID gf_codec_id_from_isobmf(u32 isobmftype)
 		return GF_CODECID_AC3;
 	case GF_ISOM_SUBTYPE_EC3:
 		return GF_CODECID_EAC3;
+	case GF_ISOM_SUBTYPE_AC4:
+		return GF_CODECID_AC4;
 	case GF_ISOM_SUBTYPE_FLAC:
 		return GF_CODECID_FLAC;
 	case GF_ISOM_SUBTYPE_MP3:
@@ -267,6 +284,8 @@ GF_CodecID gf_codec_id_from_isobmf(u32 isobmftype)
 		return GF_CODECID_VP9;
 	case GF_ISOM_SUBTYPE_VP10:
 		return GF_CODECID_VP10;
+	case GF_ISOM_SUBTYPE_AVS3:
+		return GF_CODECID_AVS3_VIDEO;
 
 	case GF_QT_SUBTYPE_APCH:
 		return GF_CODECID_APCH;
@@ -281,32 +300,42 @@ GF_CodecID gf_codec_id_from_isobmf(u32 isobmftype)
 	case GF_QT_SUBTYPE_AP4H:
 		return GF_CODECID_AP4H;
 	case GF_QT_SUBTYPE_TWOS:
-		return GF_CODECID_RAW;
 	case GF_QT_SUBTYPE_SOWT:
-		return GF_CODECID_RAW;
 	case GF_QT_SUBTYPE_FL32:
-		return GF_CODECID_RAW;
 	case GF_QT_SUBTYPE_FL64:
-		return GF_CODECID_RAW;
 	case GF_QT_SUBTYPE_IN24:
-		return GF_CODECID_RAW;
 	case GF_QT_SUBTYPE_IN32:
+	case GF_ISOM_SUBTYPE_IPCM:
+	case GF_ISOM_SUBTYPE_FPCM:
 		return GF_CODECID_RAW;
 	case GF_ISOM_SUBTYPE_MLPA:
 		return GF_CODECID_TRUEHD;
 	case GF_ISOM_SUBTYPE_FFV1:
 		return GF_CODECID_FFV1;
 	case GF_ISOM_SUBTYPE_DTSC:
-	case GF_ISOM_SUBTYPE_DTSL:
-	case GF_ISOM_SUBTYPE_DTSH:
-	case GF_ISOM_SUBTYPE_DTSE:
 		return GF_CODECID_DTS_CA;
+	case GF_ISOM_SUBTYPE_DTSL:
+		return GF_CODECID_DTS_HD_LOSSLESS;
+	case GF_ISOM_SUBTYPE_DTSH:
+		return GF_CODECID_DTS_HD_HR_MASTER;
+	case GF_ISOM_SUBTYPE_DTSE:
+		return GF_CODECID_DTS_EXPRESS_LBR;
+	case GF_ISOM_SUBTYPE_DTSX:
+		return GF_CODECID_DTS_X;
+	case GF_ISOM_SUBTYPE_DTSY:
+		return GF_CODECID_DTS_Y;
 	case GF_QT_SUBTYPE_ALAC:
 		return GF_CODECID_ALAC;
 	case GF_ISOM_SUBTYPE_VC1:
 		return GF_CODECID_SMPTE_VC1;
 	default:
 		break;
+	}
+	const char *c4cc = gf_4cc_to_str(isobmftype);
+	u32 i, count = sizeof(CodecRegistry) / sizeof(CodecIDReg);
+	for (i=0; i<count; i++) {
+		if (CodecRegistry[i].rfc_4cc && !strncmp(CodecRegistry[i].rfc_4cc, c4cc, 4))
+			return CodecRegistry[i].codecid;
 	}
 	return 0;
 }
@@ -336,7 +365,8 @@ GF_EXPORT
 const char *gf_codecid_name(GF_CodecID codecid)
 {
 	CodecIDReg *r = gf_codecid_reg_find(codecid);
-	if (!r) return "Codec Not Supported";
+	if (!r)
+		return "Codec Not Supported";
 	return r->name;
 }
 
@@ -483,7 +513,7 @@ const char *gf_stream_type_short_name(u32 streamType)
 		if (GF_StreamTypes[i].st == streamType)
 			return GF_StreamTypes[i].sname;
 	}
-	return "unkn";
+	return "unknown";
 }
 
 GF_EXPORT
@@ -493,11 +523,13 @@ u32 gf_stream_type_by_name(const char *val)
 	for (i=0; i<nb_st; i++) {
 		if (!stricmp(GF_StreamTypes[i].name, val))
 			return GF_StreamTypes[i].st;
+		if (GF_StreamTypes[i].sname && !stricmp(GF_StreamTypes[i].sname, val))
+			return GF_StreamTypes[i].st;
 		if (GF_StreamTypes[i].alt_name && !stricmp(GF_StreamTypes[i].alt_name, val))
 			return GF_StreamTypes[i].st;
 	}
 	if (strnicmp(val, "unkn", 4) && strnicmp(val, "undef", 5)) {
-		GF_LOG(GF_LOG_WARNING, GF_LOG_CORE, ("Unknow stream type %s\n", val));
+		GF_LOG(GF_LOG_WARNING, GF_LOG_CORE, ("Unknown stream type %s\n", val));
 	}
 	return GF_STREAM_UNKNOWN;
 }
@@ -521,7 +553,7 @@ const char *gf_stream_type_all_names()
 				break;
 			}
 			if (i) {
-				strcat((char *)szAllStreamTypes, ",");
+				strcat((char *)szAllStreamTypes, "|");
 				tot_len += 1;
 			}
 			strcat((char *)szAllStreamTypes, GF_StreamTypes[i].name);
@@ -599,9 +631,13 @@ static const GF_AudioFmt GF_AudioFormats[] =
 	{GF_AUDIO_FMT_S16, "s16", "16 bit PCM Little Endian", "pcm"},
 	{GF_AUDIO_FMT_S16_BE, "s16b", "16 bit PCM Big Endian", "pcmb"},
 	{GF_AUDIO_FMT_S24, "s24", "24 bit PCM"},
+	{GF_AUDIO_FMT_S24_BE, "s24b", "24 bit Big-Endian PCM"},
 	{GF_AUDIO_FMT_S32, "s32", "32 bit PCM Little Endian"},
+	{GF_AUDIO_FMT_S32_BE, "s32b", "32 bit PCM Big Endian"},
 	{GF_AUDIO_FMT_FLT, "flt", "32-bit floating point PCM"},
+	{GF_AUDIO_FMT_FLT_BE, "fltb", "32-bit floating point PCM Big Endian"},
 	{GF_AUDIO_FMT_DBL, "dbl", "64-bit floating point PCM"},
+	{GF_AUDIO_FMT_DBL_BE, "dblb", "64-bit floating point PCM Big Endian"},
 	{GF_AUDIO_FMT_U8P, "u8p", "8 bit PCM planar", "pc8p"},
 	{GF_AUDIO_FMT_S16P, "s16p", "16 bit PCM Little Endian planar", "pcmp"},
 	{GF_AUDIO_FMT_S24P, "s24p", "24 bit PCM planar"},
@@ -670,7 +706,7 @@ const char *gf_audio_fmt_all_names()
 				GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("Not enough memory to hold all audio formats!!\n"));
 				break;
 			}
-			strcat((char *)szAllAudioFormats, ",");
+			strcat((char *)szAllAudioFormats, "|");
 			tot_len += 1;
 			strcat((char *)szAllAudioFormats, GF_AudioFormats[i].name);
 			tot_len += len;
@@ -734,23 +770,33 @@ u32 gf_audio_fmt_bit_depth(GF_AudioFormat audio_fmt)
 {
 	switch (audio_fmt) {
 	case GF_AUDIO_FMT_U8P:
-	case GF_AUDIO_FMT_U8: return 8;
+	case GF_AUDIO_FMT_U8:
+		return 8;
 
 	case GF_AUDIO_FMT_S16P:
 	case GF_AUDIO_FMT_S16_BE:
-	case GF_AUDIO_FMT_S16: return 16;
+	case GF_AUDIO_FMT_S16:
+		return 16;
 
 	case GF_AUDIO_FMT_S32P:
-	case GF_AUDIO_FMT_S32: return 32;
+	case GF_AUDIO_FMT_S32_BE:
+	case GF_AUDIO_FMT_S32:
+		return 32;
 
 	case GF_AUDIO_FMT_FLTP:
-	case GF_AUDIO_FMT_FLT: return 32;
+	case GF_AUDIO_FMT_FLT:
+	case GF_AUDIO_FMT_FLT_BE:
+		return 32;
 
 	case GF_AUDIO_FMT_DBLP:
-	case GF_AUDIO_FMT_DBL: return 64;
+	case GF_AUDIO_FMT_DBL:
+	case GF_AUDIO_FMT_DBL_BE:
+		return 64;
 
 	case GF_AUDIO_FMT_S24P:
-	case GF_AUDIO_FMT_S24:  return 24;
+	case GF_AUDIO_FMT_S24_BE:
+	case GF_AUDIO_FMT_S24:
+		return 24;
 
 	default:
 		break;
@@ -781,10 +827,10 @@ static struct pcmfmt_to_qt
 	u32 qt4cc;
 } AudiosToQT[] = {
 	{GF_AUDIO_FMT_S16, GF_QT_SUBTYPE_SOWT},
-	{GF_AUDIO_FMT_FLT, GF_QT_SUBTYPE_FL32},
-	{GF_AUDIO_FMT_DBL, GF_QT_SUBTYPE_FL64},
-	{GF_AUDIO_FMT_S24, GF_QT_SUBTYPE_IN24},
-	{GF_AUDIO_FMT_S32, GF_QT_SUBTYPE_IN32},
+	{GF_AUDIO_FMT_FLT_BE, GF_QT_SUBTYPE_FL32},
+	{GF_AUDIO_FMT_DBL_BE, GF_QT_SUBTYPE_FL64},
+	{GF_AUDIO_FMT_S24_BE, GF_QT_SUBTYPE_IN24},
+	{GF_AUDIO_FMT_S32_BE, GF_QT_SUBTYPE_IN32},
 	{GF_AUDIO_FMT_S16_BE, GF_QT_SUBTYPE_TWOS},
 };
 
@@ -830,6 +876,8 @@ u32 gf_audio_fmt_get_cicp_layout(u32 nb_chan, u32 nb_surr, u32 nb_lfe)
 	else if ((nb_chan==2) && (nb_surr==1) && !nb_lfe) return 9;
 	else if ((nb_chan==2) && (nb_surr==2) && !nb_lfe) return 10;
 	else if ((nb_chan==3) && (nb_surr==3) && (nb_lfe==1)) return 11;
+	else if ((nb_chan==4) && (nb_surr==2) && (nb_lfe==1)) return 11;
+
 	else if ((nb_chan==3) && (nb_surr==4) && (nb_lfe==1)) return 12;
 	else if ((nb_chan==11) && (nb_surr==11) && (nb_lfe==2)) return 13;
 	//we miss left / right front center vs left / right front vertical to signal this one
@@ -861,17 +909,17 @@ static const GF_CICPAudioLayout GF_CICPLayouts[] =
 	{2, "stereo"/*"2/0.0"*/, GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT },
 	{3, "3/0.0", GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_FRONT_CENTER },
 	{4, "3/1.0", GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_FRONT_CENTER | GF_AUDIO_CH_REAR_CENTER },
-	{5, "3/2.0", GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_FRONT_CENTER | GF_AUDIO_CH_REAR_SURROUND_LEFT | GF_AUDIO_CH_REAR_SURROUND_RIGHT },
-	{6, "3/2.1", GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_FRONT_CENTER | GF_AUDIO_CH_REAR_SURROUND_LEFT | GF_AUDIO_CH_REAR_SURROUND_RIGHT | GF_AUDIO_CH_LFE },
-	{7, "5/2.1", GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_FRONT_CENTER | GF_AUDIO_CH_REAR_SURROUND_LEFT | GF_AUDIO_CH_REAR_SURROUND_RIGHT | GF_AUDIO_CH_LFE },
+	{5, "3/2.0", GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_FRONT_CENTER | GF_AUDIO_CH_SURROUND_LEFT | GF_AUDIO_CH_SURROUND_RIGHT },
+	{6, "3/2.1", GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_FRONT_CENTER | GF_AUDIO_CH_SURROUND_LEFT | GF_AUDIO_CH_SURROUND_RIGHT | GF_AUDIO_CH_LFE },
+	{7, "5/2.1", GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_FRONT_CENTER | GF_AUDIO_CH_SURROUND_LEFT | GF_AUDIO_CH_SURROUND_RIGHT | GF_AUDIO_CH_LFE },
 	{8, "1+1", GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT },
 	{9, "2/1.0", GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_REAR_CENTER },
 	{10, "2/2.0", GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_SURROUND_LEFT | GF_AUDIO_CH_SURROUND_RIGHT },
 	{11, "3/3.1", GF_AUDIO_CH_FRONT_CENTER | GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_SURROUND_LEFT | GF_AUDIO_CH_SURROUND_RIGHT | GF_AUDIO_CH_REAR_CENTER | GF_AUDIO_CH_LFE },
 	{12, "3/4.1", GF_AUDIO_CH_FRONT_CENTER | GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_SURROUND_LEFT | GF_AUDIO_CH_SURROUND_RIGHT | GF_AUDIO_CH_REAR_SURROUND_LEFT | GF_AUDIO_CH_REAR_SURROUND_RIGHT | GF_AUDIO_CH_LFE },
 	{13, "11/11.2", GF_AUDIO_CH_FRONT_CENTER | GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_FRONT_CENTER_LEFT | GF_AUDIO_CH_FRONT_CENTER_RIGHT | GF_AUDIO_CH_SIDE_SURROUND_LEFT | GF_AUDIO_CH_SIDE_SURROUND_RIGHT | GF_AUDIO_CH_REAR_SURROUND_LEFT | GF_AUDIO_CH_REAR_SURROUND_RIGHT | GF_AUDIO_CH_REAR_CENTER | GF_AUDIO_CH_LFE | GF_AUDIO_CH_LFE2 | GF_AUDIO_CH_FRONT_TOP_LEFT | GF_AUDIO_CH_FRONT_TOP_RIGHT | GF_AUDIO_CH_FRONT_TOP_CENTER | GF_AUDIO_CH_SURROUND_TOP_LEFT | GF_AUDIO_CH_SURROUND_TOP_RIGHT | GF_AUDIO_CH_REAR_CENTER_TOP | GF_AUDIO_CH_SIDE_SURROUND_TOP_LEFT | GF_AUDIO_CH_SIDE_SURROUND_TOP_RIGHT | GF_AUDIO_CH_CENTER_SURROUND_TOP | GF_AUDIO_CH_FRONT_BOTTOM_CENTER | GF_AUDIO_CH_FRONT_BOTTOM_LEFT | GF_AUDIO_CH_FRONT_BOTTOM_RIGHT },
-	{14, "5/2.1", GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_FRONT_CENTER | GF_AUDIO_CH_REAR_SURROUND_LEFT | GF_AUDIO_CH_REAR_SURROUND_RIGHT | GF_AUDIO_CH_LFE | GF_AUDIO_CH_FRONT_TOP_LEFT | GF_AUDIO_CH_FRONT_TOP_RIGHT },
-	{15, "5/5.2", GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_FRONT_CENTER | GF_AUDIO_CH_REAR_SURROUND_LEFT | GF_AUDIO_CH_REAR_SURROUND_RIGHT | GF_AUDIO_CH_SIDE_SURROUND_LEFT | GF_AUDIO_CH_SIDE_SURROUND_RIGHT | GF_AUDIO_CH_FRONT_TOP_LEFT | GF_AUDIO_CH_FRONT_TOP_RIGHT | GF_AUDIO_CH_CENTER_SURROUND_TOP | GF_AUDIO_CH_LFE | GF_AUDIO_CH_LFE2 },
+	{14, "5/2.1", GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_FRONT_CENTER | GF_AUDIO_CH_SURROUND_LEFT | GF_AUDIO_CH_SURROUND_RIGHT | GF_AUDIO_CH_LFE | GF_AUDIO_CH_FRONT_TOP_LEFT | GF_AUDIO_CH_FRONT_TOP_RIGHT },
+	{15, "5/5.2", GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_FRONT_CENTER | GF_AUDIO_CH_SURROUND_LEFT | GF_AUDIO_CH_SURROUND_RIGHT | GF_AUDIO_CH_SIDE_SURROUND_LEFT | GF_AUDIO_CH_SIDE_SURROUND_RIGHT | GF_AUDIO_CH_FRONT_TOP_LEFT | GF_AUDIO_CH_FRONT_TOP_RIGHT | GF_AUDIO_CH_CENTER_SURROUND_TOP | GF_AUDIO_CH_LFE | GF_AUDIO_CH_LFE2 },
 	{16, "5/4.1", GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_FRONT_CENTER | GF_AUDIO_CH_SURROUND_LEFT | GF_AUDIO_CH_SURROUND_RIGHT | GF_AUDIO_CH_LFE | GF_AUDIO_CH_FRONT_TOP_LEFT | GF_AUDIO_CH_FRONT_TOP_RIGHT | GF_AUDIO_CH_SURROUND_TOP_LEFT | GF_AUDIO_CH_SURROUND_TOP_RIGHT },
 	{17, "6/5.1", GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_FRONT_CENTER | GF_AUDIO_CH_SURROUND_LEFT | GF_AUDIO_CH_SURROUND_RIGHT | GF_AUDIO_CH_LFE | GF_AUDIO_CH_FRONT_TOP_LEFT | GF_AUDIO_CH_FRONT_TOP_RIGHT | GF_AUDIO_CH_FRONT_TOP_CENTER | GF_AUDIO_CH_SURROUND_TOP_LEFT | GF_AUDIO_CH_SURROUND_TOP_RIGHT | GF_AUDIO_CH_CENTER_SURROUND_TOP },
 	{18, "6/7.1", GF_AUDIO_CH_FRONT_LEFT | GF_AUDIO_CH_FRONT_RIGHT | GF_AUDIO_CH_FRONT_CENTER | GF_AUDIO_CH_SURROUND_LEFT | GF_AUDIO_CH_SURROUND_RIGHT | GF_AUDIO_CH_BACK_SURROUND_LEFT | GF_AUDIO_CH_BACK_SURROUND_RIGHT | GF_AUDIO_CH_LFE | GF_AUDIO_CH_FRONT_TOP_LEFT | GF_AUDIO_CH_FRONT_TOP_RIGHT | GF_AUDIO_CH_FRONT_TOP_CENTER | GF_AUDIO_CH_SURROUND_TOP_LEFT | GF_AUDIO_CH_SURROUND_TOP_RIGHT | GF_AUDIO_CH_CENTER_SURROUND_TOP },
@@ -908,6 +956,13 @@ const char *gf_audio_fmt_get_layout_name(u64 ch_layout)
 	for (i = 0; i < nb_cicp; i++) {
 		if (GF_CICPLayouts[i].channel_mask == ch_layout) return GF_CICPLayouts[i].name;
 	}
+	if (!(ch_layout & GF_AUDIO_CH_REAR_SURROUND_LEFT) && !(ch_layout & GF_AUDIO_CH_REAR_SURROUND_RIGHT)
+		&& (ch_layout & GF_AUDIO_CH_SURROUND_LEFT) && (ch_layout & GF_AUDIO_CH_SURROUND_RIGHT)
+	) {
+		ch_layout &= ~(GF_AUDIO_CH_SURROUND_LEFT|GF_AUDIO_CH_SURROUND_RIGHT);
+		ch_layout |= (GF_AUDIO_CH_REAR_SURROUND_LEFT|GF_AUDIO_CH_REAR_SURROUND_RIGHT);
+		return gf_audio_fmt_get_layout_name(ch_layout);
+	}
 	GF_LOG(GF_LOG_WARNING, GF_LOG_CORE, ("Unsupported audio layout value "LLU"\n", ch_layout));
 	return "unknown";
 }
@@ -940,12 +995,6 @@ u32 gf_audio_fmt_get_cicp_from_layout(u64 chan_layout)
 	return 255;
 }
 
-//unused
-#if 0
-/*! get channel CICP code  from name
-\param name channel layout name
-\return channel CICP code
-*/
 u32 gf_audio_fmt_get_cicp_from_name(const char *name)
 {
 	u32 i, iname, nb_cicp = sizeof(GF_CICPLayouts) / sizeof(GF_CICPAudioLayout);
@@ -961,10 +1010,6 @@ u32 gf_audio_fmt_get_cicp_from_name(const char *name)
 	return 0;
 }
 
-/*! get channel CICP name from
-\param cicp_code channel cicp code
-\return channel CICP name
-*/
 const char *gf_audio_fmt_get_cicp_name(u32 cicp_code)
 {
 	u32 i, nb_cicp = sizeof(GF_CICPLayouts) / sizeof(GF_CICPAudioLayout);
@@ -974,7 +1019,6 @@ const char *gf_audio_fmt_get_cicp_name(u32 cicp_code)
 	GF_LOG(GF_LOG_WARNING, GF_LOG_CORE, ("Unsupported cicp audio layout for channel layout "LLU"\n", cicp_code));
 	return NULL;
 }
-#endif
 
 
 GF_EXPORT
@@ -994,7 +1038,7 @@ const char *gf_audio_fmt_cicp_all_names()
 	if (szCICPLayoutAllNames[0] == 0) {
 		u32 i, count = GF_ARRAY_LENGTH(GF_CICPLayouts);
 		for (i=0; i<count; i++) {
-			if (i) strcat(szCICPLayoutAllNames, ",");
+			if (i) strcat(szCICPLayoutAllNames, "|");
 			strcat(szCICPLayoutAllNames, GF_CICPLayouts[i].name);
 		}
 	}
@@ -1014,20 +1058,19 @@ u32 gf_audio_fmt_cicp_enum(u32 idx, const char **short_name, u64 *ch_mask)
 
 
 GF_EXPORT
-u16 gf_audio_fmt_get_dolby_chanmap(u32 cicp)
+u16 gf_audio_fmt_get_dolby_chanmap_from_layout(u64 layout)
 {
 	u16 res = 0;
-	u64 layout = gf_audio_fmt_get_layout_from_cicp(cicp);
 
 	if (layout & GF_AUDIO_CH_FRONT_LEFT) res |= (1<<15); // 0
 	if (layout & GF_AUDIO_CH_FRONT_CENTER) res |= (1<<14); //1
 	if (layout & GF_AUDIO_CH_FRONT_RIGHT) res |= (1<<13); //2
-	if (layout & GF_AUDIO_CH_REAR_SURROUND_LEFT) res |= (1<<12); //3
-	if (layout & GF_AUDIO_CH_REAR_SURROUND_RIGHT) res |= (1<<11); //4
+	if (layout & GF_AUDIO_CH_SURROUND_LEFT) res |= (1<<12); //3
+	if (layout & GF_AUDIO_CH_SURROUND_RIGHT) res |= (1<<11); //4
 	//Lc/Rc
 	if (layout & GF_AUDIO_CH_FRONT_CENTER_LEFT) res |= (1<<11); //5
 	//Lrs/Rrs
-	if (layout & GF_AUDIO_CH_SURROUND_LEFT) res |= (1<<9); //6
+	if (layout & GF_AUDIO_CH_REAR_SURROUND_LEFT) res |= (1<<9); //6
 	//Cs
 	if (layout & GF_AUDIO_CH_REAR_CENTER) res |= (1<<8); //7
 	//Ts
@@ -1035,7 +1078,7 @@ u16 gf_audio_fmt_get_dolby_chanmap(u32 cicp)
 	//Lsd/Rsd
 	if (layout & GF_AUDIO_CH_SIDE_SURROUND_LEFT) res |= (1<<6); //9
 	//Lw/Rw
-	if (layout & GF_AUDIO_CH_FRONT_CENTER_LEFT) res |= (1<<5); //10
+	if (layout & GF_AUDIO_CH_WIDE_FRONT_LEFT) res |= (1<<5); //10
 	//Vhl/Vhr
 	if (layout & GF_AUDIO_CH_FRONT_TOP_LEFT) res |= (1<<4); //11
 	//Vhc
@@ -1047,9 +1090,69 @@ u16 gf_audio_fmt_get_dolby_chanmap(u32 cicp)
 	//LFE
 	if (layout & GF_AUDIO_CH_LFE) res |= (1); //15
 	return res;
-
 }
 
+u32 gf_audio_get_dolby_channel_config_value_from_mask(u32 mask)
+{
+	const u32 mask_dict[][2] = {
+		{0x000002, 1}, {0x000001, 2}, {0x000003, 3},
+		{0x008003, 4}, {0x000007, 5}, {0x000047, 6},
+		{0x020047, 7}, {0x008001, 9}, {0x000005, 10},
+		{0x008047, 11}, {0x00004F, 12}, {0x02FF7F, 13},
+		{0x06FF6F, 13}, {0x000057, 14}, {0x040047, 14},
+		{0x00145F, 15}, {0x04144F, 15}, {0x000077, 16},
+		{0x040067, 16}, {0x000A77, 17}, {0x040A67, 17},
+		{0x000A7F, 18}, {0x040A6F, 18}, {0x00007F, 19},
+		{0x04006F, 19}, {0x01007F, 20}, {0x05006F, 2}
+	};
+	for (int i=0; i<28; i++) {
+		if (mask == mask_dict[i][0]) {
+			return mask_dict[i][1];
+		}
+	}
+	return mask;
+}
+
+// ETSI TS 103 190-2 V1.3.1 (2018-02) E10.14 presentation_channel_mask_v1
+u32 gf_ac4_dolby_channel_count_from_channel_mask_v1(u32 mask)
+{
+	const u32 channel_mask_v1_2_channel_count[19] = {
+		2,  // L,R
+		1,  // C
+		2,  // Ls,Rs
+		2,  // Lb,Rb
+		2,  //Tfl,Tfr
+		2,  //Tbl,Tbr
+		1,  //LFE
+		2,  //Tl,Tr
+		2,  //Tsl,Tsr
+		1,  //Tfc
+		1,  //Tbc
+		1,  //Tc
+		1,  //LEF2
+		2,  //Bfl,Bfr
+		1,  //Bfc
+		1,  //Cb
+		2,  //Lscr,Rscr
+		2,  //Lw,Rw
+		2   //Vhl,Vhr
+	};
+	u32 count = 0;
+    for(u32 i = 0; i < 19; i++) {
+        if(mask % 2 == 1) {
+            count += channel_mask_v1_2_channel_count[i];
+        }
+        mask /= 2;
+    }
+    return count;
+}
+
+GF_EXPORT
+u16 gf_audio_fmt_get_dolby_chanmap(u32 cicp)
+{
+	u64 layout = gf_audio_fmt_get_layout_from_cicp(cicp);
+	return gf_audio_fmt_get_dolby_chanmap_from_layout(layout);
+}
 
 typedef struct
 {
@@ -1095,6 +1198,7 @@ static const GF_PixFmt GF_PixelFormats[] =
 	{GF_PIXEL_GREYSCALE, "grey", "Greyscale 8 bit"},
 	{GF_PIXEL_ALPHAGREY, "algr", "Alpha+Grey 8 bit"},
 	{GF_PIXEL_GREYALPHA, "gral", "Grey+Alpha 8 bit"},
+	{GF_PIXEL_RGB_332, "rgb8", "RGB 332, 8 bits / pixel"},
 	{GF_PIXEL_RGB_444, "rgb4", "RGB 444, 12 bits (16 stored) / pixel"},
 	{GF_PIXEL_RGB_555, "rgb5", "RGB 555, 15 bits (16 stored) / pixel"},
 	{GF_PIXEL_RGB_565, "rgb6", "RGB 555, 16 bits / pixel"},
@@ -1234,7 +1338,7 @@ const char *gf_pixel_fmt_all_names()
 				GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("Not enough memory to hold all pixel formats!!\n"));
 				break;
 			}
-			strcat((char *)szAllPixelFormats, ",");
+			strcat((char *)szAllPixelFormats, "|");
 			tot_len += 1;
 			strcat((char *)szAllPixelFormats, GF_PixelFormats[i].name);
 			tot_len += len;
@@ -1290,12 +1394,23 @@ Bool gf_pixel_get_size_info(GF_PixelFormat pixfmt, u32 width, u32 height, u32 *o
 	switch (pixfmt) {
 	case GF_PIXEL_GREYSCALE:
 		stride = no_in_stride ? width : *out_stride;
+		if (stride && height >= GF_UINT_MAX / stride)
+			return GF_FALSE;
 		size = stride * height;
 		planes=1;
 		break;
 	case GF_PIXEL_ALPHAGREY:
 	case GF_PIXEL_GREYALPHA:
 		stride = no_in_stride ? 2*width : *out_stride;
+		if (stride && height >= GF_UINT_MAX / stride)
+			return GF_FALSE;
+		size = stride * height;
+		planes=1;
+		break;
+	case GF_PIXEL_RGB_332:
+		stride = no_in_stride ? width : *out_stride;
+		if (stride && height >= GF_UINT_MAX / stride)
+			return GF_FALSE;
 		size = stride * height;
 		planes=1;
 		break;
@@ -1303,6 +1418,8 @@ Bool gf_pixel_get_size_info(GF_PixelFormat pixfmt, u32 width, u32 height, u32 *o
 	case GF_PIXEL_RGB_555:
 	case GF_PIXEL_RGB_565:
 		stride = no_in_stride ? 2*width : *out_stride;
+		if (stride && height >= GF_UINT_MAX / stride)
+			return GF_FALSE;
 		size = stride * height;
 		planes=1;
 		break;
@@ -1317,18 +1434,24 @@ Bool gf_pixel_get_size_info(GF_PixelFormat pixfmt, u32 width, u32 height, u32 *o
 	case GF_PIXEL_RGBD:
 	case GF_PIXEL_RGBDS:
 		stride = no_in_stride ? 4*width : *out_stride;
+		if (stride && height >= GF_UINT_MAX / stride)
+			return GF_FALSE;
 		size = stride * height;
 		planes=1;
 		break;
 	case GF_PIXEL_RGB_DEPTH:
 		stride = no_in_stride ? 3*width : *out_stride;
 		stride_uv = no_in_stride_uv ? width : *out_stride_uv;
+		if (stride && height >= GF_UINT_MAX / (4*width))
+			return GF_FALSE;
 		size = 4 * width * height;
 		planes=1;
 		break;
 	case GF_PIXEL_RGB:
 	case GF_PIXEL_BGR:
 		stride = no_in_stride ? 3*width : *out_stride;
+		if (stride && height >= GF_UINT_MAX / stride)
+			return GF_FALSE;
 		size = stride * height;
 		planes=1;
 		break;
@@ -1341,6 +1464,8 @@ Bool gf_pixel_get_size_info(GF_PixelFormat pixfmt, u32 width, u32 height, u32 *o
 		if (no_in_stride_uv && (stride%2) )
 		 	stride_uv+=1;
 		planes=3;
+		if ((stride && height >= GF_UINT_MAX / stride) || height * stride >= GF_UINT_MAX - stride_uv * uv_height * 2)
+			return GF_FALSE;
 		size = stride * height + stride_uv * uv_height * 2;
 		break;
 	case GF_PIXEL_YUVA:
@@ -1352,6 +1477,8 @@ Bool gf_pixel_get_size_info(GF_PixelFormat pixfmt, u32 width, u32 height, u32 *o
 		if (no_in_stride_uv && (stride%2) )
 		 	stride_uv+=1;
 		planes=4;
+		if ((stride && height >= GF_UINT_MAX / (2*stride)) || height * 2*stride >= GF_UINT_MAX - stride_uv * uv_height * 2)
+			return GF_FALSE;
 		size = 2*stride * height + stride_uv * uv_height * 2;
 		break;
 	case GF_PIXEL_YUV_10:
@@ -1362,6 +1489,8 @@ Bool gf_pixel_get_size_info(GF_PixelFormat pixfmt, u32 width, u32 height, u32 *o
 		if (no_in_stride_uv && (stride%2) )
 		 	stride_uv+=1;
 		planes=3;
+		if ((stride && height >= GF_UINT_MAX / stride) || height * stride >= GF_UINT_MAX - stride_uv * uv_height * 2)
+			return GF_FALSE;
 		size = stride * height + stride_uv * uv_height * 2;
 		break;
 	case GF_PIXEL_YUV422:
@@ -1371,6 +1500,8 @@ Bool gf_pixel_get_size_info(GF_PixelFormat pixfmt, u32 width, u32 height, u32 *o
 		if (no_in_stride_uv && (stride%2) )
 		 	stride_uv+=1;
 		planes=3;
+		if ((stride && height >= GF_UINT_MAX / stride) || height * stride >= GF_UINT_MAX - stride_uv * uv_height * 2)
+			return GF_FALSE;
 		size = stride * height + stride_uv * height * 2;
 		break;
 	case GF_PIXEL_YUV422_10:
@@ -1380,6 +1511,8 @@ Bool gf_pixel_get_size_info(GF_PixelFormat pixfmt, u32 width, u32 height, u32 *o
 		if (no_in_stride_uv && (stride%2) )
 		 	stride_uv+=1;
 		planes=3;
+		if ((stride && height >= GF_UINT_MAX / stride) || height * stride >= GF_UINT_MAX - stride_uv * uv_height * 2)
+			return GF_FALSE;
 		size = stride * height + stride_uv * height * 2;
 		break;
 	case GF_PIXEL_YUV444:
@@ -1387,6 +1520,8 @@ Bool gf_pixel_get_size_info(GF_PixelFormat pixfmt, u32 width, u32 height, u32 *o
 		uv_height = height;
 		stride_uv = no_in_stride_uv ? stride : *out_stride_uv;
 		planes=3;
+		if (stride && height >= GF_UINT_MAX / (3*stride))
+			return GF_FALSE;
 		size = stride * height * 3;
 		break;
 	case GF_PIXEL_YUVA444:
@@ -1394,6 +1529,8 @@ Bool gf_pixel_get_size_info(GF_PixelFormat pixfmt, u32 width, u32 height, u32 *o
 		uv_height = height;
 		stride_uv = no_in_stride_uv ? stride : *out_stride_uv;
 		planes=4;
+		if (stride && height >= GF_UINT_MAX / (4*stride))
+			return GF_FALSE;
 		size = stride * height * 4;
 		break;
 	case GF_PIXEL_YUV444_10:
@@ -1401,11 +1538,15 @@ Bool gf_pixel_get_size_info(GF_PixelFormat pixfmt, u32 width, u32 height, u32 *o
 		uv_height = height;
 		stride_uv = no_in_stride_uv ? stride : *out_stride_uv;
 		planes=3;
+		if (stride && height >= GF_UINT_MAX / (3*stride))
+			return GF_FALSE;
 		size = stride * height * 3;
 		break;
 	case GF_PIXEL_NV12:
 	case GF_PIXEL_NV21:
 		stride = no_in_stride ? width : *out_stride;
+		if (stride && height/2 >= GF_UINT_MAX / (3*stride))
+			return GF_FALSE;
 		size = 3 * stride * height / 2;
 		uv_height = height/2;
 		stride_uv = no_in_stride_uv ? stride : *out_stride_uv;
@@ -1418,6 +1559,8 @@ Bool gf_pixel_get_size_info(GF_PixelFormat pixfmt, u32 width, u32 height, u32 *o
 		if (height % 2) uv_height++;
 		stride_uv = no_in_stride_uv ? stride : *out_stride_uv;
 		planes=2;
+		if (stride && height/2 >= GF_UINT_MAX / (3*stride))
+			return GF_FALSE;
 		size = 3 * stride * height / 2;
 		break;
 	case GF_PIXEL_UYVY:
@@ -1426,6 +1569,8 @@ Bool gf_pixel_get_size_info(GF_PixelFormat pixfmt, u32 width, u32 height, u32 *o
 	case GF_PIXEL_YVYU:
 		stride = no_in_stride ? 2*width : *out_stride;
 		planes=1;
+		if (stride && height >= GF_UINT_MAX / stride)
+			return GF_FALSE;
 		size = height * stride;
 		break;
 	case GF_PIXEL_UYVY_10:
@@ -1434,23 +1579,31 @@ Bool gf_pixel_get_size_info(GF_PixelFormat pixfmt, u32 width, u32 height, u32 *o
 	case GF_PIXEL_YVYU_10:
 		stride = no_in_stride ? 4*width : *out_stride;
 		planes=1;
+		if (stride && height >= GF_UINT_MAX / stride)
+			return GF_FALSE;
 		size = height * stride;
 		break;
 	case GF_PIXEL_YUV444_PACK:
 	case GF_PIXEL_VYU444_PACK:
 		stride = no_in_stride ? 3 * width : *out_stride;
 		planes=1;
+		if (stride && height >= GF_UINT_MAX / stride)
+			return GF_FALSE;
 		size = height * stride;
 		break;
 	case GF_PIXEL_YUVA444_PACK:
 	case GF_PIXEL_UYVA444_PACK:
 		stride = no_in_stride ? 4 * width : *out_stride;
 		planes=1;
+		if (stride && height >= GF_UINT_MAX / stride)
+			return GF_FALSE;
 		size = height * stride;
 		break;
 	case GF_PIXEL_YUV444_10_PACK:
 		stride = no_in_stride ? 4 * width : *out_stride;
 		planes = 1;
+		if (stride && height >= GF_UINT_MAX / stride)
+			return GF_FALSE;
 		size = height * stride;
 		break;
 
@@ -1470,6 +1623,8 @@ Bool gf_pixel_get_size_info(GF_PixelFormat pixfmt, u32 width, u32 height, u32 *o
 			stride = *out_stride;
 		}
 		planes=1;
+		if (stride && height >= GF_UINT_MAX / stride)
+			return GF_FALSE;
 		size = height * stride;
 		break;
 	default:
@@ -1531,6 +1686,7 @@ u32 gf_pixel_get_bytes_per_pixel(GF_PixelFormat pixfmt)
 {
 	switch (pixfmt) {
 	case GF_PIXEL_GREYSCALE:
+	case GF_PIXEL_RGB_332:
 		return 1;
 	case GF_PIXEL_ALPHAGREY:
 	case GF_PIXEL_GREYALPHA:
@@ -1611,6 +1767,7 @@ u32 gf_pixel_get_nb_comp(GF_PixelFormat pixfmt)
 	case GF_PIXEL_ALPHAGREY:
 	case GF_PIXEL_GREYALPHA:
 		return 2;
+	case GF_PIXEL_RGB_332:
 	case GF_PIXEL_RGB_444:
 	case GF_PIXEL_RGB_555:
 	case GF_PIXEL_RGB_565:
@@ -1684,6 +1841,42 @@ u32 gf_pixel_get_nb_comp(GF_PixelFormat pixfmt)
 		break;
 	}
 	return 0;
+}
+
+GF_EXPORT
+void gf_pixel_get_downsampling(GF_PixelFormat pixfmt, u32 *downsample_w, u32 *downsample_h)
+{
+	*downsample_w=0;
+	*downsample_h=0;
+	switch (pixfmt) {
+	case GF_PIXEL_YUV:
+	case GF_PIXEL_YVU:
+	case GF_PIXEL_YUV_10:
+	case GF_PIXEL_NV12:
+	case GF_PIXEL_NV21:
+	case GF_PIXEL_NV12_10:
+	case GF_PIXEL_NV21_10:
+	case GF_PIXEL_YUVA:
+	case GF_PIXEL_YUVD:
+		*downsample_h = 2;
+		//fallthrough
+	case GF_PIXEL_YUV422:
+	case GF_PIXEL_YUV422_10:
+	case GF_PIXEL_UYVY:
+	case GF_PIXEL_VYUY:
+	case GF_PIXEL_YUYV:
+	case GF_PIXEL_YVYU:
+	case GF_PIXEL_UYVY_10:
+	case GF_PIXEL_VYUY_10:
+	case GF_PIXEL_YUYV_10:
+	case GF_PIXEL_YVYU_10:
+		*downsample_w = 2;
+		break;
+	default:
+		*downsample_w = 1;
+		*downsample_h = 1;
+		break;
+	}
 }
 
 static struct pixfmt_to_qt
@@ -1834,7 +2027,7 @@ s32 gf_itags_find_by_name(const char *tag_name)
 {
 	u32 i, count = GF_ARRAY_LENGTH(itunes_tags);
 	for (i=0; i<count; i++) {
-		if (!stricmp(tag_name, itunes_tags[i].name)) {
+		if (!stricmp(tag_name, itunes_tags[i].name) || (itunes_tags[i].alt_name && !stricmp(tag_name, itunes_tags[i].alt_name))) {
 			return i;
 		} else if (itunes_tags[i].match_substr && !strnicmp(tag_name, itunes_tags[i].name, strlen(itunes_tags[i].name) )) {
 			return i;
@@ -1980,7 +2173,7 @@ u32 gf_cicp_parse_color_primaries(const char *val)
 		}
 	}
 	if (strcmp(val, "-1")) {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("Unknow CICP color primaries type %s\n", val));
+		GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("Unknown CICP color primaries type %s\n", val));
 	}
 	return (u32) -1;
 }
@@ -2005,7 +2198,7 @@ const char *gf_cicp_color_primaries_all_names()
 	if (szCICPPrimAllNames[0] == 0) {
 		u32 i, count = GF_ARRAY_LENGTH(CICPColorPrimaries);
 		for (i=0; i<count; i++) {
-			if (i) strcat(szCICPPrimAllNames, ",");
+			if (i) strcat(szCICPPrimAllNames, "|");
 			strcat(szCICPPrimAllNames, CICPColorPrimaries[i].name);
 		}
 	}
@@ -2050,7 +2243,7 @@ u32 gf_cicp_parse_color_transfer(const char *val)
 		}
 	}
 	if (strcmp(val, "-1")) {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("Unknow CICP color transfer type %s\n", val));
+		GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("Unknown CICP color transfer type %s\n", val));
 	}
 	return (u32) -1;
 }
@@ -2075,7 +2268,7 @@ const char *gf_cicp_color_transfer_all_names()
 	if (szCICPTFCAllNames[0] == 0) {
 		u32 i, count = GF_ARRAY_LENGTH(CICPColorTransfer);
 		for (i=0; i<count; i++) {
-			if (i) strcat(szCICPTFCAllNames, ",");
+			if (i) strcat(szCICPTFCAllNames, "|");
 			strcat(szCICPTFCAllNames, CICPColorTransfer[i].name);
 		}
 	}
@@ -2111,7 +2304,7 @@ u32 gf_cicp_parse_color_matrix(const char *val)
 		}
 	}
 	if (strcmp(val, "-1")) {
-		GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("Unknow CICP color matrix type %s\n", val));
+		GF_LOG(GF_LOG_ERROR, GF_LOG_CORE, ("Unknown CICP color matrix type %s\n", val));
 	}
 	return (u32) -1;
 }
@@ -2135,7 +2328,7 @@ const char *gf_cicp_color_matrix_all_names()
 	if (szCICPMXAllNames[0] == 0) {
 		u32 i, count = GF_ARRAY_LENGTH(CICPColorMatrixCoefficients);
 		for (i=0; i<count; i++) {
-			if (i) strcat(szCICPMXAllNames, ",");
+			if (i) strcat(szCICPMXAllNames, "|");
 			strcat(szCICPMXAllNames, CICPColorMatrixCoefficients[i].name);
 		}
 	}
@@ -2146,7 +2339,7 @@ const char *gf_cicp_color_matrix_all_names()
 GF_EXPORT
 u64 gf_timestamp_rescale(u64 value, u64 timescale, u64 new_timescale)
 {
-	if (!timescale || !new_timescale)
+	if (!timescale || !new_timescale || !value)
 		return 0;
 	//no timestamp
 	if (value==0xFFFFFFFFFFFFFFFFUL)
@@ -2154,7 +2347,7 @@ u64 gf_timestamp_rescale(u64 value, u64 timescale, u64 new_timescale)
 
 	if (new_timescale == timescale)
 		return value;
-		
+
 	if (! (new_timescale % timescale)) {
 		u32 div = (u32) (new_timescale / timescale);
 		return value * div;
@@ -2255,4 +2448,548 @@ GF_EXPORT
 Bool gf_timestamp_equal(u64 value1, u64 timescale1, u64 value2, u64 timescale2)
 {
 	TIMESTAMP_COMPARE(==)
+}
+
+GF_EXPORT
+Bool gf_pixel_fmt_get_uncc(GF_PixelFormat pixfmt, u32 profile_mode, u8 **dsi, u32 *dsi_size)
+{
+	u32 nb_comps;
+	u32 comps_ID[10];
+	u32 bits[10], i;
+	memset(bits, 0, sizeof(u32)*10);
+	u32 sampling=0;
+	u32 ileave=1; //pixel interleave by default
+	Bool is_10_bps=GF_FALSE;
+	u32 block_size=0;
+	u32 block_le=0;
+	u32 block_pad_lsb=0;
+	u32 block_reversed=0;
+	u32 profile=0;
+	Bool restricted_allowed=GF_FALSE;
+
+	switch (pixfmt) {
+	case GF_PIXEL_GREYSCALE:
+		nb_comps=1;
+		comps_ID[0] = 0;
+		break;
+	case GF_PIXEL_ALPHAGREY:
+		nb_comps=2;
+		comps_ID[0] = 7;
+		comps_ID[1] = 0;
+		break;
+	case GF_PIXEL_GREYALPHA:
+		nb_comps=2;
+		comps_ID[0] = 0;
+		comps_ID[1] = 7;
+		break;
+	case GF_PIXEL_RGB_332:
+		nb_comps=3;
+		comps_ID[0] = 4;
+		comps_ID[1] = 5;
+		comps_ID[2] = 6;
+		bits[0] = bits[1] = 3;
+		bits[2] = 2;
+		break;
+	case GF_PIXEL_RGB_444:
+		nb_comps=3;
+		comps_ID[0] = 4;
+		comps_ID[1] = 5;
+		comps_ID[2] = 6;
+		bits[0] = bits[1] = bits[2] = 4;
+		break;
+	case GF_PIXEL_RGB_555:
+		nb_comps=3;
+		comps_ID[0] = 4;
+		comps_ID[1] = 5;
+		comps_ID[2] = 6;
+		bits[0] = bits[1] = bits[2] = 5;
+		break;
+	case GF_PIXEL_RGB_565:
+		nb_comps=3;
+		comps_ID[0] = 4;
+		comps_ID[1] = 5;
+		comps_ID[2] = 6;
+		bits[0] = bits[2] = 5;
+		bits[1] = 6;
+		break;
+	case GF_PIXEL_RGBX:
+		nb_comps=4;
+		comps_ID[0] = 4;
+		comps_ID[1] = 5;
+		comps_ID[2] = 6;
+		comps_ID[3] = 12;
+		break;
+	case GF_PIXEL_BGRX:
+		nb_comps=4;
+		comps_ID[0] = 6;
+		comps_ID[1] = 5;
+		comps_ID[2] = 4;
+		comps_ID[3] = 12;
+		break;
+	case GF_PIXEL_XRGB:
+		nb_comps=4;
+		comps_ID[0] = 12;
+		comps_ID[1] = 4;
+		comps_ID[2] = 5;
+		comps_ID[3] = 6;
+		break;
+	case GF_PIXEL_XBGR:
+		nb_comps=4;
+		comps_ID[0] = 12;
+		comps_ID[1] = 6;
+		comps_ID[2] = 5;
+		comps_ID[3] = 4;
+		break;
+	case GF_PIXEL_ARGB:
+		nb_comps=4;
+		comps_ID[0] = 7;
+		comps_ID[1] = 4;
+		comps_ID[2] = 5;
+		comps_ID[3] = 6;
+		break;
+	case GF_PIXEL_RGBA:
+		nb_comps=4;
+		comps_ID[0] = 4;
+		comps_ID[1] = 5;
+		comps_ID[2] = 6;
+		comps_ID[3] = 7;
+		profile = GF_4CC('r','g','b','a');
+		restricted_allowed=GF_TRUE;
+		break;
+	case GF_PIXEL_BGRA:
+		nb_comps=4;
+		comps_ID[0] = 6;
+		comps_ID[1] = 5;
+		comps_ID[2] = 4;
+		comps_ID[3] = 7;
+		break;
+	case GF_PIXEL_ABGR:
+		nb_comps=4;
+		comps_ID[0] = 7;
+		comps_ID[1] = 6;
+		comps_ID[2] = 5;
+		comps_ID[3] = 4;
+		profile = GF_4CC('a','b','g','r');
+		restricted_allowed=GF_TRUE;
+		break;
+	case GF_PIXEL_RGBD:
+		nb_comps=4;
+		comps_ID[0] = 4;
+		comps_ID[1] = 5;
+		comps_ID[2] = 6;
+		comps_ID[3] = 8;
+		break;
+	case GF_PIXEL_RGBDS:
+		nb_comps=5;
+		comps_ID[0] = 4;
+		comps_ID[1] = 5;
+		comps_ID[2] = 6;
+		comps_ID[3] = 8;
+		comps_ID[4] = 7;
+		bits[3] = 7;
+		bits[4] = 1;
+		break;
+	case GF_PIXEL_RGB:
+		nb_comps=3;
+		comps_ID[0] = 4;
+		comps_ID[1] = 5;
+		comps_ID[2] = 6;
+		profile = GF_4CC('r','g','b','3');
+		restricted_allowed=GF_TRUE;
+		break;
+	case GF_PIXEL_BGR:
+		nb_comps=3;
+		comps_ID[0] = 6;
+		comps_ID[1] = 5;
+		comps_ID[2] = 4;
+		break;
+	case GF_PIXEL_YUV_10:
+		is_10_bps=GF_TRUE;
+	case GF_PIXEL_YUV:
+		nb_comps=3;
+		comps_ID[0] = 1;
+		comps_ID[1] = 2;
+		comps_ID[2] = 3;
+		sampling=2;
+		ileave=0;
+		if (!is_10_bps)
+			profile = GF_4CC('i','4','2','0');
+		break;
+	case GF_PIXEL_YVU:
+		nb_comps=3;
+		comps_ID[0] = 1;
+		comps_ID[1] = 3;
+		comps_ID[2] = 2;
+		sampling=2;
+		ileave=0;
+		break;
+	case GF_PIXEL_YUVA:
+		nb_comps=4;
+		comps_ID[0] = 1;
+		comps_ID[1] = 2;
+		comps_ID[2] = 3;
+		comps_ID[3] = 7;
+		sampling=2;
+		ileave=0;
+		break;
+	case GF_PIXEL_YUVA444:
+		nb_comps=4;
+		comps_ID[0] = 1;
+		comps_ID[1] = 2;
+		comps_ID[2] = 3;
+		comps_ID[3] = 7;
+		ileave=0;
+		break;
+	case GF_PIXEL_YUVD:
+		nb_comps=4;
+		comps_ID[0] = 1;
+		comps_ID[1] = 2;
+		comps_ID[2] = 3;
+		comps_ID[3] = 8;
+		sampling=2;
+		ileave=0;
+		break;
+	case GF_PIXEL_YUV422_10:
+		is_10_bps=GF_TRUE;
+	case GF_PIXEL_YUV422:
+		nb_comps=3;
+		comps_ID[0] = 1;
+		comps_ID[1] = 2;
+		comps_ID[2] = 3;
+		sampling=1;
+		ileave=0;
+		break;
+	case GF_PIXEL_YUV444_10:
+		is_10_bps=GF_TRUE;
+	case GF_PIXEL_YUV444:
+		nb_comps=3;
+		comps_ID[0] = 1;
+		comps_ID[1] = 2;
+		comps_ID[2] = 3;
+		ileave=0;
+		if (!is_10_bps)
+			profile = GF_4CC('v','3','0','8');
+		break;
+	case GF_PIXEL_NV12_10:
+		is_10_bps=GF_TRUE;
+	case GF_PIXEL_NV12:
+		nb_comps=3;
+		comps_ID[0] = 1;
+		comps_ID[1] = 2;
+		comps_ID[2] = 3;
+		ileave=2;
+		sampling=2;
+		if (!is_10_bps)
+			profile = GF_4CC('n','v','1','2');
+		break;
+	case GF_PIXEL_NV21_10:
+		is_10_bps=GF_TRUE;
+	case GF_PIXEL_NV21:
+		nb_comps=3;
+		comps_ID[0] = 1;
+		comps_ID[1] = 3;
+		comps_ID[2] = 2;
+		ileave=2;
+		sampling=2;
+		if (!is_10_bps)
+			profile = GF_4CC('n','v','2','1');
+		break;
+	case GF_PIXEL_UYVY_10:
+		is_10_bps=GF_TRUE;
+	case GF_PIXEL_UYVY:
+		nb_comps=4;
+		comps_ID[0] = 2;
+		comps_ID[1] = 1;
+		comps_ID[2] = 3;
+		comps_ID[3] = 1;
+		ileave=5;
+		sampling=1;
+		profile = GF_4CC('2','v','u','y');
+		break;
+	case GF_PIXEL_VYUY_10:
+		is_10_bps=GF_TRUE;
+	case GF_PIXEL_VYUY:
+		nb_comps=4;
+		comps_ID[0] = 3;
+		comps_ID[1] = 1;
+		comps_ID[2] = 2;
+		comps_ID[3] = 1;
+		ileave=5;
+		sampling=1;
+		profile = GF_4CC('v','y','u','y');
+		break;
+	case GF_PIXEL_YUYV_10:
+		is_10_bps=GF_TRUE;
+	case GF_PIXEL_YUYV:
+		nb_comps=4;
+		comps_ID[0] = 1;
+		comps_ID[1] = 2;
+		comps_ID[2] = 1;
+		comps_ID[3] = 3;
+		ileave=5;
+		sampling=1;
+		profile = GF_4CC('y','u','v','2');
+		break;
+	case GF_PIXEL_YVYU_10:
+		is_10_bps=GF_TRUE;
+	case GF_PIXEL_YVYU:
+		nb_comps=4;
+		comps_ID[0] = 1;
+		comps_ID[1] = 3;
+		comps_ID[2] = 1;
+		comps_ID[3] = 2;
+		ileave=5;
+		sampling=1;
+		profile = GF_4CC('y','v','y','u');
+		break;
+
+	case GF_PIXEL_YUV444_PACK:
+		nb_comps=3;
+		comps_ID[0] = 1;
+		comps_ID[1] = 2;
+		comps_ID[2] = 3;
+		break;
+	case GF_PIXEL_VYU444_PACK:
+		nb_comps=3;
+		comps_ID[0] = 3;
+		comps_ID[1] = 1;
+		comps_ID[2] = 2;
+		profile = GF_4CC('v','3','0','8');
+		break;
+	case GF_PIXEL_YUVA444_PACK:
+		nb_comps=4;
+		comps_ID[0] = 1;
+		comps_ID[1] = 2;
+		comps_ID[2] = 3;
+		comps_ID[3] = 7;
+		break;
+	case GF_PIXEL_UYVA444_PACK:
+		nb_comps=4;
+		comps_ID[0] = 2;
+		comps_ID[1] = 1;
+		comps_ID[2] = 3;
+		comps_ID[3] = 7;
+		profile = GF_4CC('v','4','0','8');
+		break;
+	case GF_PIXEL_YUV444_10_PACK:
+		nb_comps=3;
+		comps_ID[0] = 2;
+		comps_ID[1] = 1;
+		comps_ID[2] = 3;
+		block_size=4;
+		block_le=1;
+		block_pad_lsb=1;
+		block_reversed=1;
+		bits[0] = bits[1] = bits[2] = 10;
+		profile = GF_4CC('v','4','1','0');
+		break;
+	case GF_PIXEL_V210:
+		nb_comps=4;
+		comps_ID[0] = 2;
+		comps_ID[1] = 1;
+		comps_ID[2] = 3;
+		comps_ID[3] = 1;
+		block_size=4;
+		block_le=1;
+		block_pad_lsb=0;
+		block_reversed=1;
+		bits[0] = bits[1] = bits[2] = 10;
+		sampling=1;
+		profile = GF_4CC('v','2','1','0');
+		break;
+	//no mapping possible in uncv
+	case GF_PIXEL_RGB_DEPTH:
+	case GF_PIXEL_GL_EXTERNAL:
+	case GF_PIXEL_UNCV:
+		return GF_FALSE;
+	default:
+		GF_LOG(GF_LOG_WARNING, GF_LOG_CORE, ("Pixel format %s not mapped to uncC, please contact GPAC devs\n", gf_pixel_fmt_name(pixfmt) ));
+		return GF_FALSE;
+	}
+	GF_BitStream *bs = gf_bs_new(NULL, 0, GF_BITSTREAM_WRITE);
+	if (!bs) return GF_FALSE;
+
+	if (!profile_mode) profile = 0;
+	if (!profile || (profile_mode<2))
+		restricted_allowed = GF_FALSE;
+
+	if (!restricted_allowed) {
+		//cmpd
+		gf_bs_write_u32(bs, 12+nb_comps*2);
+		gf_bs_write_u32(bs, GF_4CC('c','m','p','d'));
+		gf_bs_write_u32(bs, nb_comps);
+		for (i=0; i<nb_comps; i++)
+			gf_bs_write_u16(bs, comps_ID[i]);
+	}
+
+	//uncC
+	u32 end, pos = (u32) gf_bs_get_position(bs);
+	gf_bs_write_u32(bs, 0);
+	gf_bs_write_u32(bs, GF_4CC('u','n','c','C'));
+	gf_bs_write_u32(bs, restricted_allowed ? 1 : 0); //version and flags
+	gf_bs_write_u32(bs, profile); //profile
+	if (restricted_allowed) goto done;
+
+	gf_bs_write_u32(bs, nb_comps);
+	for (i=0; i<nb_comps; i++) {
+		gf_bs_write_u16(bs, i);
+		u32 nbbits = bits[i];
+		if (!nbbits) nbbits = is_10_bps ? 10 : 8;
+		gf_bs_write_u8(bs, nbbits-1);
+		gf_bs_write_u8(bs, 0);
+		gf_bs_write_u8(bs, is_10_bps ? 2 : 0);
+	}
+	gf_bs_write_u8(bs, sampling);
+	gf_bs_write_u8(bs, ileave);
+	gf_bs_write_u8(bs, block_size);
+	gf_bs_write_int(bs, is_10_bps ? 1 : 0, 1); //out 10 bits formats are LE
+	gf_bs_write_int(bs, block_pad_lsb, 1);
+	gf_bs_write_int(bs, block_le, 1);
+	gf_bs_write_int(bs, block_reversed, 1);
+	gf_bs_write_int(bs, 1, 1); //pad unknown
+	gf_bs_write_int(bs, 0, 3);
+	gf_bs_write_u32(bs, 0);
+	gf_bs_write_u32(bs, 0);
+	gf_bs_write_u32(bs, 0);
+	gf_bs_write_u32(bs, 0);
+	gf_bs_write_u32(bs, 0);
+
+done:
+	end =(u32) gf_bs_get_position(bs);
+	gf_bs_seek(bs, pos);
+	gf_bs_write_u32(bs, end-pos);
+	gf_bs_seek(bs, end);
+	gf_bs_get_content(bs, dsi, dsi_size);
+	gf_bs_del(bs);
+	return GF_TRUE;
+}
+
+GF_EXPORT
+const char *gf_format_duration(u64 dur, u32 timescale, char szDur[100])
+{
+	u64 h;
+	u32 m, s, ms;
+	szDur[0] = 0;
+	szDur[99] = 0;
+	if (!timescale) timescale = 1;
+	dur = gf_timestamp_rescale(dur, timescale, 1000);
+	h = (dur / 3600000);
+	dur -= h*3600000;
+	m = (u32) (dur / 60000);
+	dur -= m*60000;
+	s = (u32) (dur/1000);
+	dur -= s*1000;
+	ms = (u32) (dur);
+
+	if (h<=24) {
+		snprintf(szDur, 99, "%02d:%02d:%02d.%03d", (u32) h, m, s, ms);
+	} else {
+		u32 d = (u32) (h / 24);
+		h = (u32) (h-24*d);
+		if (d<=365) {
+			snprintf(szDur, 99, "%d Days, %02d:%02d:%02d.%03d", d, (u32) h, m, s, ms);
+		} else {
+			u32 y=0;
+			while (d>365) {
+				y++;
+				d-=365;
+				if (y%4) d--;
+			}
+			snprintf(szDur, 99, "%d Years %d Days, %02d:%02d:%02d.%03d", y, d, (u32) h, m, s, ms);
+		}
+	}
+	return szDur;
+}
+
+GF_EXPORT
+const char* gf_format_timecode(GF_TimeCode *tc, char szTimecode[100])
+{
+	int frame_digits = (tc->max_fps >= 100.0) ? 3 : 2;
+	snprintf(szTimecode, 99, "%02d:%02d:%02d%c%0*d", tc->hours, tc->minutes, tc->seconds, tc->drop_frame ? ';' : '.', frame_digits, tc->n_frames);
+	return szTimecode;
+}
+
+GF_EXPORT
+u64 gf_timecode_to_timestamp(GF_TimeCode *tc, u32 timescale)
+{
+	if (!timescale) timescale = 1;
+	u64 res = (u64) tc->hours * 3600 + (u64) tc->minutes * 60 + (u64) tc->seconds;
+	res *= timescale;
+	res += gf_timestamp_rescale(tc->n_frames, (u64) gf_ceil(tc->max_fps), timescale);
+	return res;
+}
+
+#define TIMECODE_COMPARE(_op) \
+	if (value1->hours != value2->hours) return value1->hours _op value2->hours; \
+	if (value1->minutes != value2->minutes) return value1->minutes _op value2->minutes; \
+	if (value1->seconds != value2->seconds) return value1->seconds _op value2->seconds; \
+	return value1->n_frames _op value2->n_frames;
+
+GF_EXPORT
+Bool gf_timecode_less(GF_TimeCode *value1, GF_TimeCode *value2)
+{
+	TIMECODE_COMPARE(<)
+}
+
+GF_EXPORT
+Bool gf_timecode_less_or_equal(GF_TimeCode *value1, GF_TimeCode *value2)
+{
+	TIMECODE_COMPARE(<=)
+}
+
+GF_EXPORT
+Bool gf_timecode_greater(GF_TimeCode *value1, GF_TimeCode *value2)
+{
+	TIMECODE_COMPARE(>)
+}
+
+GF_EXPORT
+Bool gf_timecode_greater_or_equal(GF_TimeCode *value1, GF_TimeCode *value2)
+{
+	TIMECODE_COMPARE(>=)
+}
+
+GF_EXPORT
+Bool gf_timecode_equal(GF_TimeCode *value1, GF_TimeCode *value2)
+{
+	TIMECODE_COMPARE(==)
+}
+
+GF_EXPORT
+u8 gf_cenc_key_info_get_iv_size(const u8 *key_info, u32 key_info_size, u32 idx, u8 *const_iv_size, const u8 **const_iv)
+{
+	u32 i=0, kpos=3;
+	if (const_iv_size) *const_iv_size = 0;
+	if (const_iv) *const_iv = NULL;
+
+	if (!key_info || !key_info_size)
+		return 0;
+
+	while (1) {
+		u8 civ_size=0;
+		const u8 *civ = NULL;
+		u8 iv_size = key_info[kpos];
+		kpos += 17;
+
+		if (!iv_size) {
+			if (kpos>key_info_size)
+				break;
+			civ_size = key_info[kpos];
+			civ = key_info + kpos + 1;
+			kpos += 1 + civ_size;
+		}
+
+		if (kpos>key_info_size)
+			break;
+
+		if (i+1==idx) {
+			if (const_iv_size) *const_iv_size = civ_size;
+			if (const_iv) *const_iv = civ;
+			return iv_size;
+		}
+		i++;
+		if (kpos==key_info_size)
+			break;
+	}
+	return 0;
 }

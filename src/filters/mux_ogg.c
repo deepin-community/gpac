@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2022
+ *			Copyright (c) Telecom ParisTech 2022-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / OGG muxer filter
@@ -69,6 +69,7 @@ typedef struct
 	u32 seg_num, next_seg_num;
 	Bool wait_dash, copy_props;
 	u64 seg_start, seg_size;
+	Bool cdur_overwrite;
 
 	Bool force_seg_sync;
 	u32 packets_pending;
@@ -241,6 +242,14 @@ static GF_Err oggmux_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is
 
 	if (!ctx->opid) {
 		ctx->opid = gf_filter_pid_new(filter);
+
+		if (!ctx->cdur_overwrite) {
+			p = gf_filter_pid_get_property(pid, GF_PROP_PID_DASH_FDUR);
+			if (p && p->value.frac.den) {
+				ctx->cdur = p->value.frac;
+				ctx->cdur_overwrite = GF_TRUE;
+			}
+		}
 	}
 	gf_filter_pid_copy_properties(ctx->opid, pid);
 	gf_filter_pid_set_name(ctx->opid, "ogg_mux");
@@ -320,7 +329,7 @@ static GF_Err oggmux_process(GF_Filter *filter)
 {
 	u32 nb_skip=0;
 	OGGMuxCtx *ctx = (OGGMuxCtx *) gf_filter_get_udta(filter);
-	u32 i, nb_done = 0, count = gf_list_count(ctx->streams), nb_dash_done = 0;;
+	u32 i, nb_done = 0, count = gf_list_count(ctx->streams), nb_dash_done = 0;
 
 	for (i=0; i<count; i++) {
 		const u8 *data=NULL;
@@ -393,7 +402,7 @@ static GF_Err oggmux_process(GF_Filter *filter)
 		pctx->op.packetno ++;
 
 		if (pctx->theora_kgs) {
-            Bool is_sap = (data[0] & 0x40) ? 0 : 1;
+			Bool is_sap = (data[0] & 0x40) ? 0 : 1;
 			if (is_sap) {
 				pctx->nb_i += pctx->nb_p;
 				pctx->nb_p = 0;
@@ -547,7 +556,7 @@ GF_FilterRegister OGGMuxRegister = {
 	GF_FS_SET_DESCRIPTION("OGG multiplexer")
 	GF_FS_SET_HELP("This filter multiplexes audio and video to produce an OGG stream.\n"
 		"\n"
-		"The [-cdur]() option allows specifiying the interleaving duration (max time difference between consecutive packets of different streams). \n"
+		"The [-cdur]() option allows specifying the interleaving duration (max time difference between consecutive packets of different streams). \n"
 	)
 	.private_size = sizeof(OGGMuxCtx),
 	.max_extra_pids = -1,
@@ -558,11 +567,12 @@ GF_FilterRegister OGGMuxRegister = {
 	.configure_pid = oggmux_configure_pid,
 	.process = oggmux_process,
 	.process_event = oggmux_process_event,
+	.hint_class_type = GF_FS_CLASS_MULTIPLEXER
 };
 
 #endif
 
-const GF_FilterRegister *oggmux_register(GF_FilterSession *session)
+const GF_FilterRegister *oggmx_register(GF_FilterSession *session)
 {
 #ifndef GPAC_DISABLE_OGG
 	return &OGGMuxRegister;

@@ -1,4 +1,15 @@
-gpac (2.2.1+dfsg1-3) unstable; urgency=medium
+gpac (26.02.0+dfsg1-1deepin1) unstable; urgency=medium
+
+  * Upgrade to upstream version 26.02.0
+  * Fixes multiple CVEs including:
+    - CVE-2025-7797, CVE-2025-25723, CVE-2025-70298, CVE-2025-70299
+    - CVE-2025-70302, CVE-2025-70303, CVE-2025-70304, CVE-2025-70305
+    - CVE-2025-70307, CVE-2025-70308, CVE-2025-70309, CVE-2025-70310
+    - CVE-2026-1415, CVE-2026-1416, CVE-2026-1417, CVE-2026-1418
+    - CVE-2026-4015, CVE-2026-4016, CVE-2026-27821, CVE-2026-33144
+
+ -- deepin-ci-robot <packages@deepin.org>  Thu, 17 Apr 2026 01:18:00 +0800
+
 
   * QA upload.
   * Backport patch for bigendian

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2022
+ *			Copyright (c) Telecom ParisTech 2022-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / TTML to SRT converter filter
@@ -32,7 +32,7 @@
 #include <gpac/xml.h>
 
 
-#if !defined(GPAC_DISABLE_ISOM_WRITE)
+#if !defined(GPAC_DISABLE_ISOM_WRITE) && !defined(GPAC_DISABLE_TTMLCONV)
 
 typedef struct
 {
@@ -45,6 +45,7 @@ typedef struct
 	u8 *buf;
 	u32 buf_alloc;
 	u64 last_end_ts;
+	s64 delay;
 
 	Bool srt_conv;
 } TTMLConvCtx;
@@ -77,6 +78,10 @@ GF_Err ttmlconv_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remo
 
 	const GF_PropertyValue *p = gf_filter_pid_get_property(pid, GF_PROP_PID_TIMESCALE);
 	ctx->timescale = p ? p->value.uint : 1000;
+
+	p = gf_filter_pid_get_property(pid, GF_PROP_PID_DELAY);
+	ctx->delay = p ? p->value.longsint : 0;
+	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_DELAY, NULL);
 	return GF_OK;
 }
 
@@ -102,7 +107,7 @@ static void ttmlconv_dump_node(TTMLConvCtx *ctx, GF_XMLNode *p, FILE *dump)
 	while ( (att = gf_list_enum(p->attributes, &i)) ) {
 		const char *sep = strchr(att->name, ':');
 		const char *name  = sep ? sep+1 : att->name;
-		if (!name) continue;;
+		if (!name) continue;
 		if (!strcmp(name, "fontStyle") && (!strcmp(att->value, "italic") || !strcmp(att->value, "oblique")))
 			needs_italic = GF_TRUE;
 		if (!strcmp(name, "textDecoration") && !strcmp(att->value, "underlined"))
@@ -174,6 +179,11 @@ GF_Err ttmlconv_process(GF_Filter *filter)
 	start_ts = gf_filter_pck_get_cts(pck);
 	end_ts = start_ts + gf_filter_pck_get_duration(pck);
 
+	if ((s64) start_ts > -ctx->delay) start_ts += ctx->delay;
+	else start_ts = 0;
+	if ((s64) end_ts > -ctx->delay) end_ts += ctx->delay;
+	else end_ts = 0;
+
 	start_ts = gf_timestamp_rescale(start_ts, ctx->timescale, 1000);
 	end_ts = gf_timestamp_rescale(end_ts, ctx->timescale, 1000);
 
@@ -215,7 +225,6 @@ GF_Err ttmlconv_process(GF_Filter *filter)
 	e = ttml_parse_root(root, &lang, &tick_rate, &ttml_fps_num, &ttml_fps_den, &ttml_sfps);
 	if (e) goto exit;
 
-	u32 div_idx=0;
 	body = ttml_get_body(root);
 	nb_children = body ? gf_list_count(body->content) : 0;
 	for (i=0; i<nb_children; i++) {
@@ -223,7 +232,6 @@ GF_Err ttmlconv_process(GF_Filter *filter)
 		if (div->type) continue;
 		if (strcmp(div->name, "div")) continue;
 
-		div_idx++;
 //		div_reg = ttml_get_attr(div, "region");
 
 		j=0;
@@ -305,7 +313,7 @@ static const GF_FilterCapability TTMLConvCaps[] =
 GF_FilterRegister TTMLConvRegister = {
 	.name = "ttml2vtt",
 	GF_FS_SET_DESCRIPTION("TTML to WebVTT")
-	GF_FS_SET_HELP("This filter converts TTML frames to unframed WebVTT\n."
+	GF_FS_SET_HELP("This filter converts TTML frames to unframed WebVTT.\n"
 	"\n"
 	"Conversion is quite limited: only the first div is analyzed and only basic styling is implemented.\n"
 	)
@@ -315,11 +323,12 @@ GF_FilterRegister TTMLConvRegister = {
 	.configure_pid = ttmlconv_configure_pid,
 	.process = ttmlconv_process,
 	//lower priority so that we always favor ttml2srt when converting ttml to tx3g
-	.priority = 128
+	.priority = 128,
+	.hint_class_type = GF_FS_CLASS_SUBTITLE
 };
 
 
-const GF_FilterRegister *ttmlconv_register(GF_FilterSession *session)
+const GF_FilterRegister *ttml2vtt_register(GF_FilterSession *session)
 {
 	return &TTMLConvRegister;
 }
@@ -346,7 +355,7 @@ static const GF_FilterCapability TTMLConv2Caps[] =
 GF_FilterRegister TTMLConv2Register = {
 	.name = "ttml2srt",
 	GF_FS_SET_DESCRIPTION("TTML to SRT")
-	GF_FS_SET_HELP("This filter converts TTML frames to unframed SRT\n."
+	GF_FS_SET_HELP("This filter converts TTML frames to unframed SRT.\n"
 	"\n"
 	"Conversion is quite limited: only the first div is analyzed and only basic styling is implemented.\n"
 	)
@@ -355,25 +364,26 @@ GF_FilterRegister TTMLConv2Register = {
 	.finalize = ttmlconv_finalize,
 	SETCAPS(TTMLConv2Caps),
 	.configure_pid = ttmlconv_configure_pid,
-	.process = ttmlconv_process
+	.process = ttmlconv_process,
+	.hint_class_type = GF_FS_CLASS_SUBTITLE
 };
 
 
-const GF_FilterRegister *ttmlconv2_register(GF_FilterSession *session)
+const GF_FilterRegister *ttml2srt_register(GF_FilterSession *session)
 {
 	return &TTMLConv2Register;
 }
 
 #else
 
-const GF_FilterRegister *ttmlconv_register(GF_FilterSession *session)
+const GF_FilterRegister *ttml2vtt_register(GF_FilterSession *session)
 {
 	return NULL;
 }
 
-const GF_FilterRegister *ttmlconv2_register(GF_FilterSession *session)
+const GF_FilterRegister *ttml2srt_register(GF_FilterSession *session)
 {
 	return NULL;
 }
 
-#endif //#if !defined(GPAC_DISABLE_ISOM_WRITE) 
+#endif //#if !defined(GPAC_DISABLE_ISOM_WRITE) && !defined(GPAC_DISABLE_TTMLCONV)

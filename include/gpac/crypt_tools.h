@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / Media Tools sub-project
@@ -113,6 +113,14 @@ typedef struct
 	u8 IV_size;
 	/*! constant IV size */
 	u8 constant_IV_size;
+
+
+	/*! DASH representation ID or NULL */
+	char *repID;
+	/*! DASH period ID or NULL */
+	char *periodID;
+	/*! DASH adaptationSet ID or NULL */
+	u32 ASID;
 } GF_CryptKeyInfo;
 
 /*! key roll modes*/
@@ -129,6 +137,17 @@ typedef enum
 	/*! change keys every keyRoll periods*/
 	GF_KEYROLL_PERIODS,
 } GF_KeyRollType;
+
+/*! non-VCL crypt modes (for avc1 CTR CENC edition 1) */
+typedef enum
+{
+	/*! all encrypted (except nal header) */
+	GF_CRYPT_NONVCL_CLEAR_NONE = 0,
+	/*! keep SEI and AUD in clear */
+	GF_CRYPT_NONVCL_CLEAR_SEI_AUD,
+	/*! all clear */
+	GF_CRYPT_NONVCL_CLEAR_ALL,
+} GF_CryptNonVCL;
 
 /*! Crypto information for one media stream*/
 typedef struct
@@ -154,7 +173,7 @@ typedef struct
 		THIS IS DEPRECATED IN GPAC
 	*/
 	u32 ipmp_desc_id;
-	/*! type of box where sample auxiliary informations is saved, either "senc" or "PSEC" (PIFF)*/
+	/*! type of box where sample auxiliary information is saved, either "senc" or "PSEC" (PIFF)*/
 	u32 sai_saved_box_type;
 
 	/*! OMA encryption type: 0: none, 1: AES CBC, 2: AES CTR*/
@@ -183,10 +202,14 @@ typedef struct
 	u32 clear_bytes;
 
 	/*! CENS/CBCS pattern */
-	u8 crypt_byte_block, skip_byte_block;
+	u32 crypt_byte_block, skip_byte_block;
+	/*! forces a minimum clear range for subsamples (ignored otherwise) - the final offset is at least the slice header size*/
+	u32 crypt_byte_offset;
 
-	/* ! for avc1 ctr CENC edition 1 */
+	/*! for avc1 CTR CENC edition 1 */
 	Bool allow_encrypted_slice_header;
+	/*! encrypt non-VCL NALUs - made to refine avc1 CTR CENC edition 1 support */
+	GF_CryptNonVCL allow_encrypted_nonVCLs;
 	/*! force cenc and cbc1: 0: default, 1: no block alignment of encrypted data, 2: always block align even if producing non encrypted samples*/
 	u32 block_align;
 
@@ -232,7 +255,7 @@ typedef struct
 	GF_Err last_parse_error;
 } GF_CryptInfo;
 
-/*! loads a given crypto configuration file. Full doc is available at https://gpac.wp.imt.fr/mp4box/encryption/common-encryption/
+/*! loads a given crypto configuration file. Full doc is available at https://gpac.io/mp4box/encryption/common-encryption/
 \param file name of the crypt XML file
 \param out_err set to return error
 \return the crypt info

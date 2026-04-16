@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2010-2022
+ *			Copyright (c) Telecom ParisTech 2010-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / OpenHEVC decoder filter
@@ -43,7 +43,7 @@
 typedef struct
 {
 	GF_FilterPid *ipid;
-	u32 cfg_crc;
+	u32 cfg_crc, enh_cfg_crc;
 	u32 id;
 	u32 dep_id;
 	u32 codec_id;
@@ -312,9 +312,13 @@ static void ohevc_set_out_props(GF_OHEVCDecCtx *ctx)
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_SAR, &PROP_FRAC(ctx->sar) );
 }
 
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+Bool gf_filter_on_main_thread(GF_Filter *filter);
+#endif
+
 static GF_Err ohevcdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remove)
 {
-	u32 i, dep_id=0, id=0, cfg_crc=0, codecid;
+	u32 i, dep_id=0, id=0, cfg_crc=0, enh_cfg_crc=0, codecid;
 	Bool has_scalable = GF_FALSE;
 	Bool is_sublayer = GF_FALSE;
 	u8 *patched_dsi=NULL;
@@ -375,12 +379,16 @@ static GF_Err ohevcdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool 
 		cfg_crc = gf_crc_32(dsi->value.data.ptr, dsi->value.data.size);
 	}
 	dsi_enh = gf_filter_pid_get_property(pid, GF_PROP_PID_DECODER_CONFIG_ENHANCEMENT);
+	if (dsi_enh && dsi_enh->value.data.ptr && dsi_enh->value.data.size) {
+		enh_cfg_crc = gf_crc_32(dsi_enh->value.data.ptr, dsi_enh->value.data.size);
+	}
 
 	stream = NULL;
 	//check if this is an update
 	for (i=0; i<ctx->nb_streams; i++) {
 		if (ctx->streams[i].ipid == pid) {
-			if (ctx->streams[i].cfg_crc == cfg_crc) return GF_OK;
+			if ((ctx->streams[i].cfg_crc == cfg_crc) && (ctx->streams[i].enh_cfg_crc == enh_cfg_crc))
+				return GF_OK;
 			if (ctx->codec && (ctx->streams[i].codec_id != codecid)) {
 				//we are already instantiated, flush all frames and reconfig
 				ctx->reconfig_pending = GF_TRUE;
@@ -388,6 +396,7 @@ static GF_Err ohevcdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool 
 			}
 			ctx->streams[i].codec_id = codecid;
 			ctx->streams[i].cfg_crc = cfg_crc;
+			ctx->streams[i].enh_cfg_crc = enh_cfg_crc;
 			stream = &ctx->streams[i];
 			break;
 		}
@@ -477,18 +486,22 @@ static GF_Err ohevcdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool 
 #ifdef  OPENHEVC_HAS_AVC_BASE
 		if (codecid==GF_CODECID_AVC) {
 			GF_AVCConfig *avcc = NULL;
-			AVCState avc;
-			memset(&avc, 0, sizeof(AVCState));
+			AVCState *avc_state;
+			GF_SAFEALLOC(avc_state, AVCState);
+			if (!avc_state) return GF_OUT_OF_MEM;
 
 			avcc = gf_odf_avc_cfg_read(dsi->value.data.ptr, dsi->value.data.size);
-			if (!avcc) return GF_NON_COMPLIANT_BITSTREAM;
+			if (!avcc) {
+				gf_free(avc_state);
+				return GF_NON_COMPLIANT_BITSTREAM;
+			}
 			ctx->avc_nalu_size_length = avcc->nal_unit_size;
 
 			for (i=0; i< gf_list_count(avcc->sequenceParameterSets); i++) {
 				GF_NALUFFParam *sl = (GF_NALUFFParam *)gf_list_get(avcc->sequenceParameterSets, i);
-				s32 idx = gf_avc_read_sps(sl->data, sl->size, &avc, 0, NULL);
-				ctx->width = MAX(avc.sps[idx].width, ctx->width);
-				ctx->height = MAX(avc.sps[idx].height, ctx->height);
+				s32 idx = gf_avc_read_sps(sl->data, sl->size, avc_state, 0, NULL);
+				ctx->width = MAX(avc_state->sps[idx].width, ctx->width);
+				ctx->height = MAX(avc_state->sps[idx].height, ctx->height);
 				ctx->luma_bpp = avcc->luma_bit_depth;
 				ctx->chroma_bpp = avcc->chroma_bit_depth;
 				ctx->chroma_format_idc = avcc->chroma_format;
@@ -506,20 +519,25 @@ static GF_Err ohevcdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool 
 				}
 			}
 			gf_odf_avc_cfg_del(avcc);
+			gf_free(avc_state);
 		} else
 
 #endif
 		{
 			GF_HEVCConfig *hvcc = NULL;
 			GF_HEVCConfig *hvcc_enh = NULL;
-			HEVCState hevc;
+			HEVCState *hvc_state;
 			u32 j;
 			GF_List *SPSs=NULL, *PPSs=NULL, *VPSs=NULL;
-			memset(&hevc, 0, sizeof(HEVCState));
+
+			GF_SAFEALLOC(hvc_state, HEVCState);
+			if (!hvc_state) return GF_OUT_OF_MEM;
 
 			hvcc = gf_odf_hevc_cfg_read(dsi->value.data.ptr, dsi->value.data.size, GF_FALSE);
-			if (!hvcc) return GF_NON_COMPLIANT_BITSTREAM;
-
+			if (!hvcc) {
+				gf_free(hvc_state);
+				return GF_NON_COMPLIANT_BITSTREAM;
+			}
 			ctx->hevc_nalu_size_length = hvcc->nal_unit_size;
 
 			if (dsi_enh) {
@@ -542,12 +560,12 @@ static GF_Err ohevcdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool 
 					u16 hdr = sl->data[0] << 8 | sl->data[1];
 
 					if (ar->type==GF_HEVC_NALU_SEQ_PARAM) {
-						idx = gf_hevc_read_sps(sl->data, sl->size, &hevc);
-						ctx->width = MAX(hevc.sps[idx].width, ctx->width);
-						ctx->height = MAX(hevc.sps[idx].height, ctx->height);
-						ctx->luma_bpp = MAX(hevc.sps[idx].bit_depth_luma, ctx->luma_bpp);
-						ctx->chroma_bpp = MAX(hevc.sps[idx].bit_depth_chroma, ctx->chroma_bpp);
-						ctx->chroma_format_idc  = hevc.sps[idx].chroma_format_idc;
+						idx = gf_hevc_read_sps(sl->data, sl->size, hvc_state);
+						ctx->width = MAX(hvc_state->sps[idx].width, ctx->width);
+						ctx->height = MAX(hvc_state->sps[idx].height, ctx->height);
+						ctx->luma_bpp = MAX(hvc_state->sps[idx].bit_depth_luma, ctx->luma_bpp);
+						ctx->chroma_bpp = MAX(hvc_state->sps[idx].bit_depth_chroma, ctx->chroma_bpp);
+						ctx->chroma_format_idc  = hvc_state->sps[idx].chroma_format_idc;
 
 						if (hdr & 0x1f8) {
 							ctx->nb_layers ++;
@@ -555,15 +573,15 @@ static GF_Err ohevcdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool 
 						SPSs = ar->nalus;
 					}
 					else if (ar->type==GF_HEVC_NALU_VID_PARAM) {
-						s32 vps_id = gf_hevc_read_vps(sl->data, sl->size, &hevc);
+						s32 vps_id = gf_hevc_read_vps(sl->data, sl->size, hvc_state);
 						//multiview
-						if ((vps_id>=0) && (hevc.vps[vps_id].scalability_mask[1])) {
+						if ((vps_id>=0) && (hvc_state->vps[vps_id].scalability_mask[1])) {
 							ctx->is_multiview = GF_TRUE;
 						}
 						VPSs = ar->nalus;
 					}
 					else if (ar->type==GF_HEVC_NALU_PIC_PARAM) {
-						gf_hevc_read_pps(sl->data, sl->size, &hevc);
+						gf_hevc_read_pps(sl->data, sl->size, hvc_state);
 						PPSs = ar->nalus;
 					}
 				}
@@ -583,8 +601,18 @@ static GF_Err ohevcdec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool 
 				gf_odf_hevc_cfg_write(hvcc, &patched_dsi, &patched_dsi_size);
 			}
 			gf_odf_hevc_cfg_del(hvcc);
+			gf_free(hvc_state);
 		}
 	}
+
+
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+	//disable threading if running on main thread
+	if (gf_filter_on_main_thread(filter)) {
+		ctx->nb_threads = 0;
+		GF_LOG(GF_LOG_INFO, GF_LOG_CODEC, ("[OpenHEVCDec] Running on main thread, disabling threads\n"));
+	}
+#endif
 
 	if (!ctx->codec) {
 #ifdef  OPENHEVC_HAS_AVC_BASE
@@ -1081,7 +1109,7 @@ static GF_Err ohevcdec_process(GF_Filter *filter)
 	u64 min_dts = GF_FILTER_NO_TS;
 	u64 min_cts = GF_FILTER_NO_TS;
 	u32 idx, nb_eos=0;
-	u32 data_size, nbpck;
+	u32 data_size;
 	char *data;
 	Bool has_pic = GF_FALSE;
 	GF_FilterPacket *pck_ref = NULL;
@@ -1239,7 +1267,6 @@ static GF_Err ohevcdec_process(GF_Filter *filter)
 	ctx->dec_frames++;
 	got_pic = 0;
 	ctx->reaggregation_size = 0;
-	nbpck = 0;
 
 	for (idx=0; idx<ctx->nb_streams; idx++) {
 		u64 dts, cts;
@@ -1312,7 +1339,6 @@ static GF_Err ohevcdec_process(GF_Filter *filter)
 			has_pic = GF_TRUE;
 
 		gf_filter_pid_drop_packet(ctx->streams[idx].ipid);
-		nbpck++;
 	}
 
 	if (ctx->reaggregation_size) {
@@ -1407,9 +1433,11 @@ GF_FilterRegister OHEVCDecRegister = {
 	.configure_pid = ohevcdec_configure_pid,
 	.process = ohevcdec_process,
 	.process_event = ohevcdec_process_event,
+	.flags = GF_FS_REG_BLOCK_MAIN,
 	.max_extra_pids = (HEVC_MAX_STREAMS-1),
-	//by default take over FFMPEG
-	.priority = 100
+	//by default take over FFmpeg
+	.priority = 100,
+	.hint_class_type = GF_FS_CLASS_DECODER
 };
 
 #endif // defined(GPAC_HAS_OPENHEVC) && !defined(GPAC_DISABLE_AV_PARSERS)

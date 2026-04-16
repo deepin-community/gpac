@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2018-2022
+ *			Copyright (c) Telecom ParisTech 2018-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / AVI output filter
@@ -188,13 +188,13 @@ static GF_Err avimux_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is
 
 		if (type==GF_STREAM_VISUAL) {
 			if (pf != GF_PIXEL_BGR) {
-				gf_filter_pid_negociate_property(pid, GF_PROP_PID_PIXFMT, &PROP_UINT(GF_PIXEL_BGR));
+				gf_filter_pid_negotiate_property(pid, GF_PROP_PID_PIXFMT, &PROP_UINT(GF_PIXEL_BGR));
 				return GF_OK;
 			}
 		} else if (type==GF_STREAM_AUDIO) {
 			p = gf_filter_pid_get_property(pid, GF_PROP_PID_AUDIO_FORMAT);
 			if (!p || (p->value.uint != GF_AUDIO_FMT_S16) ) {
-				gf_filter_pid_negociate_property(pid, GF_PROP_PID_AUDIO_FORMAT, &PROP_UINT(GF_AUDIO_FMT_S16));
+				gf_filter_pid_negotiate_property(pid, GF_PROP_PID_AUDIO_FORMAT, &PROP_UINT(GF_AUDIO_FMT_S16));
 				return GF_OK;
 			}
 			wfmt = WAVE_FORMAT_PCM;
@@ -660,7 +660,8 @@ GF_FilterRegister AVIMuxRegister = {
 	.finalize = avimux_finalize,
 	.configure_pid = avimux_configure_pid,
 	.process = avimux_process,
-	.flags = GF_FS_REG_TEMP_INIT
+	.flags = GF_FS_REG_TEMP_INIT,
+	.hint_class_type = GF_FS_CLASS_MULTIPLEXER
 };
 
 static GF_Err avimux_initialize(GF_Filter *filter)
@@ -691,7 +692,7 @@ static GF_Err avimux_initialize(GF_Filter *filter)
 
 #endif
 
-const GF_FilterRegister *avimux_register(GF_FilterSession *session)
+const GF_FilterRegister *avimx_register(GF_FilterSession *session)
 {
 #ifndef GPAC_DISABLE_AVILIB
 	return &AVIMuxRegister;
