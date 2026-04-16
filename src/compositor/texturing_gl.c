@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -29,6 +29,7 @@
 #include "nodes_stacks.h"
 #include "gl_inc.h"
 
+#if !defined(GPAC_DISABLE_COMPOSITOR)
 
 
 /*tx flags*/
@@ -198,13 +199,11 @@ void gf_sc_texture_cleanup_hw(GF_Compositor *compositor)
 
 GF_Err gf_sc_texture_set_data(GF_TextureHandler *txh)
 {
-#ifndef GPAC_DISABLE_3D
+#if !defined(GPAC_DISABLE_3D) && !defined(GPAC_USE_TINYGL) && !defined(GPAC_USE_GLES1X) && !defined(GPAC_USE_GLES2)
 	u8 *data=NULL;
 	GF_FilterFrameInterface *fifce = txh->frame_ifce;
-#endif
 	txh->tx_io->flags |= TX_NEEDS_RASTER_LOAD | TX_NEEDS_HW_LOAD;
 
-#ifndef GPAC_DISABLE_3D
 	data = txh->data;
 	//10->8 bit conversion
 	if (txh->flags & TX_CONV_8BITS) {
@@ -240,10 +239,7 @@ GF_Err gf_sc_texture_set_data(GF_TextureHandler *txh)
 		fifce = NULL;
 		data = dst.video_buffer;
 	}
-#endif
 
-
-#if !defined(GPAC_DISABLE_3D) && !defined(GPAC_USE_TINYGL) && !defined(GPAC_USE_GLES1X) && !defined(GPAC_USE_GLES2)
 	//PBO mode: start pushing the texture
 	if (data && !fifce && (txh->tx_io->tx.pbo_state!=GF_GL_PBO_NONE)) {
 		txh->tx_io->tx.pbo_state = GF_GL_PBO_PUSH;
@@ -397,8 +393,11 @@ Bool tx_can_use_rect_ext(GF_Compositor *compositor, GF_TextureHandler *txh)
 
 static Bool tx_setup_format(GF_TextureHandler *txh)
 {
+#ifndef GPAC_USE_GLES2
 	u32 npow_w, npow_h;
-	Bool is_pow2, use_rect, flip;
+	Bool is_pow2;
+#endif
+	Bool use_rect, flip;
 	GF_Compositor *compositor = (GF_Compositor *)txh->compositor;
 
 	/*first setup, this will force recompute bounds in case used with bitmap - we could refine and only
@@ -406,11 +405,12 @@ static Bool tx_setup_format(GF_TextureHandler *txh)
 	if (txh->owner)
 		gf_node_dirty_set(txh->owner, 0, 1);
 
+	flip = (txh->tx_io->flags & TX_IS_FLIPPED);
+#ifndef GPAC_USE_GLES2
 	npow_w = gf_get_next_pow2(txh->width);
 	npow_h = gf_get_next_pow2(txh->height);
-
-	flip = (txh->tx_io->flags & TX_IS_FLIPPED);
 	is_pow2 = ((npow_w==txh->width) && (npow_h==txh->height)) ? 1 : 0;
+#endif
 	txh->tx_io->flags = 0;
 	txh->tx_io->gl_type = GL_TEXTURE_2D;
 
@@ -469,7 +469,7 @@ static Bool tx_setup_format(GF_TextureHandler *txh)
     case GF_PIXEL_YUV_10:
 	case GF_PIXEL_YUV422:
 	case GF_PIXEL_YUV422_10:
-	case GF_PIXEL_YUV444:		
+	case GF_PIXEL_YUV444:
 	case GF_PIXEL_YUV444_10:
 	case GF_PIXEL_NV21:
 	case GF_PIXEL_NV21_10:
@@ -480,6 +480,7 @@ static Bool tx_setup_format(GF_TextureHandler *txh)
 	case GF_PIXEL_VYUY:
 	case GF_PIXEL_UYVY:
 	case GF_PIXEL_GL_EXTERNAL:
+	case GF_PIXEL_YUV444_PACK:
 	case GF_PIXEL_YUV444_10_PACK:
 	case GF_PIXEL_V210:
 #if !defined(GPAC_USE_TINYGL) && !defined(GPAC_USE_GLES1X)
@@ -529,7 +530,7 @@ static Bool tx_setup_format(GF_TextureHandler *txh)
 			p = gf_filter_pid_get_property(txh->stream->odm->pid, GF_PROP_PID_COLR_MX);
 			if (p) cmx = p->value.uint;
 		}
-		
+
 		txh->tx_io->tx.pbo_state = (txh->compositor->gl_caps.pbo && txh->compositor->pbo) ? GF_GL_PBO_BOTH : GF_GL_PBO_NONE;
 		if (txh->tx_io->conv_format) {
 			stride = txh->tx_io->conv_stride;
@@ -601,8 +602,7 @@ common:
 			txh->tx_io->conv_data = gf_malloc(sizeof(char)*txh->stride*txh->height);
 			txh->tx_io->conv_format = txh->pixelformat;
 		}
-		assert(txh->tx_io->conv_data );
-		assert(txh->data );
+		if (!txh->tx_io->conv_data || txh->data) return 0;
 		/*if texture is using RECT extension, flip image manually because
 				texture transforms are not supported in this case ...*/
 		for (i=0; i<txh->height; i++) {
@@ -616,7 +616,7 @@ common:
 	case GF_PIXEL_YUV_10:
 	case GF_PIXEL_YUV422:
 	case GF_PIXEL_YUV422_10:
-	case GF_PIXEL_YUV444:		
+	case GF_PIXEL_YUV444:
     case GF_PIXEL_YUV444_10:
 	case GF_PIXEL_NV12:
 	case GF_PIXEL_NV12_10:
@@ -677,7 +677,7 @@ common:
 	case GF_PIXEL_YUV_10:
 	case GF_PIXEL_YUV422:
 	case GF_PIXEL_YUV422_10:
-	case GF_PIXEL_YUV444:		
+	case GF_PIXEL_YUV444:
     case GF_PIXEL_YUV444_10:
 	case GF_PIXEL_NV21:
 	case GF_PIXEL_NV12:
@@ -780,8 +780,13 @@ Bool gf_sc_texture_push_image(GF_TextureHandler *txh, Bool generate_mipmaps, Boo
 				}
 			}
 			if (!pData) {
-				if (!txh->compositor->last_error)
+				if (!txh->compositor->last_error) {
 					txh->compositor->last_error = GF_NOT_SUPPORTED;
+					if (!txh->compositor->player) {
+						gf_filter_abort(txh->compositor->filter);
+						GF_LOG(GF_LOG_ERROR, GF_LOG_COMPOSE, ("[Compositor] Failed to fetch hardware texture data - try specifying `:drv=yes`\n"));
+					}
+				}
 				return 0;
 			}
 
@@ -866,7 +871,7 @@ Bool gf_sc_texture_push_image(GF_TextureHandler *txh, Bool generate_mipmaps, Boo
 	GL_CHECK_ERR()
 	gf_gl_txw_upload(&txh->tx_io->tx, data, txh->frame_ifce);
 	GL_CHECK_ERR()
-	
+
 #endif
 
 	push_time = gf_sys_clock() - push_time;
@@ -1222,17 +1227,14 @@ u32 gf_sc_texture_enable_ex(GF_TextureHandler *txh, GF_Node *tx_transform, GF_Re
 		return 0;
 
 	if (!txh->stream || txh->data || txh->frame_ifce) {
-		gf_rmt_begin_gl(gf_sc_texture_push_image);
 		glGetError();
 		res = gf_sc_texture_push_image(txh, 0, 0);
-		gf_rmt_end_gl();
 		glGetError();
 		if (!res) return 0;
 	}
 
 skip_push:
 
-	gf_rmt_begin_gl(gf_sc_texture_enable);
 	glGetError();
 
 	if (bounds && txh->compute_gradient_matrix) {
@@ -1264,7 +1266,6 @@ skip_push:
 		tx_bind(txh);
 	}
 
-	gf_rmt_end_gl();
 	glGetError();
 	return 1;
 
@@ -1315,3 +1316,4 @@ void gf_sc_texture_check_pause_on_first_load(GF_TextureHandler *txh, Bool do_fre
 	}
 }
 
+#endif //!defined(GPAC_DISABLE_COMPOSITOR)

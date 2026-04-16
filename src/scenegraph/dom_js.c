@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2007-2022
+ *			Copyright (c) Telecom ParisTech 2007-2025
  *			All rights reserved
  *
  *  This file is part of GPAC / Scene Graph sub-project
@@ -258,14 +258,16 @@ static void define_dom_exception(JSContext *c, JSValue global)
 
 GF_Node *dom_get_node(JSValue obj)
 {
-	GF_Node *n = (GF_Node *) JS_GetOpaque_Nocheck(obj);
+	JSClassID _classID;
+	GF_Node *n = (GF_Node *) JS_GetAnyOpaque(obj, &_classID);
 	if (n && n->sgprivate) return n;
 	return NULL;
 }
 
 GF_Node *dom_get_element(JSContext *c, JSValue obj)
 {
-	GF_Node *n = (GF_Node *) JS_GetOpaque_Nocheck(obj);
+	JSClassID _classID;
+	GF_Node *n = (GF_Node *) JS_GetAnyOpaque(obj, &_classID);
 	if (!n || !n->sgprivate) return NULL;
 	if (n->sgprivate->tag==TAG_DOMText) return NULL;
 	return n;
@@ -273,7 +275,8 @@ GF_Node *dom_get_element(JSContext *c, JSValue obj)
 
 GF_SceneGraph *dom_get_doc(JSContext *c, JSValue obj)
 {
-	GF_SceneGraph *sg = (GF_SceneGraph *) JS_GetOpaque_Nocheck(obj);
+	JSClassID _classID;
+	GF_SceneGraph *sg = (GF_SceneGraph *) JS_GetAnyOpaque(obj, &_classID);
 	if (sg && !sg->__reserved_null) return sg;
 	return NULL;
 }
@@ -654,9 +657,11 @@ static void sg_js_get_event_target(JSContext *c, JSValue obj, GF_EventType evtTy
 			*target = (*n)->sgprivate->interact->dom_evt;
 		}
 	} else {
+#if !defined(GPAC_DISABLE_SVG) && defined(GPAC_USE_DOWNLOADER)
 		void xhr_get_event_target(JSContext *c, JSValue obj, GF_SceneGraph **sg, GF_DOMEventTarget **target);
 
 		xhr_get_event_target(c, obj, sg, target);
+#endif
 	}
 }
 
@@ -776,7 +781,7 @@ static GF_Node *create_listener(GF_SceneGraph *sg, GF_EventType evtType, GF_Node
 #endif
 
 	if (vrml_node) {
-		assert(handler->js_data);
+		gf_assert(handler->js_data);
 		handler->js_data->ctx = c;
 #ifndef GPAC_DISABLE_VRML
 		if (vrml_node->sgprivate->tag <= GF_NODE_RANGE_LAST_VRML)
@@ -905,7 +910,8 @@ JSValue dom_event_remove_listener(JSContext *c, JSValueConst obj, int argc, JSVa
 /*dom3 node*/
 static void dom_node_finalize(JSRuntime *rt, JSValue obj)
 {
-	GF_Node *n = (GF_Node *) JS_GetOpaque_Nocheck(obj);
+	JSClassID _classID;
+	GF_Node *n = (GF_Node *) JS_GetAnyOpaque(obj, &_classID);
 	/*the JS proto of the svgClass or a destroyed object*/
 	if (!n) return;
 	if (!n->sgprivate) return;
@@ -1440,7 +1446,8 @@ fortunately a sg cannot be created like that...*/
 void dom_document_finalize(JSRuntime *rt, JSValue obj)
 {
 	GF_SceneGraph *sg;
-	sg = (GF_SceneGraph*) JS_GetOpaque_Nocheck(obj);
+	JSClassID _classID;
+	sg = (GF_SceneGraph*) JS_GetAnyOpaque(obj, &_classID);
 	/*the JS proto of the svgClass or a destroyed object*/
 	if (!sg) return;
 
@@ -1898,7 +1905,10 @@ static void gf_dom_add_handler_listener(GF_Node *n, u32 evtType, char *handlerCo
 		/* found a listener for this event, override the handler
 		TODO: FIX this, there may be a listener/handler already set with JS, why overriding ? */
 		gf_node_get_attribute_by_tag(listen, TAG_XMLEV_ATT_handler, GF_FALSE, GF_FALSE, &info);
-		assert(info.far_ptr);
+		if (!info.far_ptr) {
+			gf_assert(0);
+			return;
+		}
 		handler = (SVG_handlerElement *) ((XMLRI*)info.far_ptr)->target;
 		text = (GF_DOMText*)handler->children->node;
 		if (text->sgprivate->tag==TAG_DOMText) {
@@ -1919,13 +1929,15 @@ static void gf_dom_full_set_attribute(GF_DOMFullNode *node, char *attribute_name
 	GF_DOMFullAttribute *att = (GF_DOMFullAttribute*)node->attributes;
 	while (att) {
 		if ((att->tag==TAG_DOM_ATT_any) && !strcmp(att->name, attribute_name)) {
-			DOM_String *s;
-			assert(att->data_type == DOM_String_datatype);
-			assert(att->data);
-			s = (DOM_String *) att->data;
-			if ( *s ) gf_free( *s);
-			*s = gf_strdup(attribute_content);
-			dom_node_changed((GF_Node *)node, GF_FALSE, NULL);
+			if ((att->data_type == DOM_String_datatype) && att->data) {
+				DOM_String *s;
+				s = (DOM_String *) att->data;
+				if ( *s ) gf_free( *s);
+				*s = gf_strdup(attribute_content);
+				dom_node_changed((GF_Node *)node, GF_FALSE, NULL);
+			} else {
+				gf_assert(0);
+			}
 			return;
 		}
 		prev = att;
@@ -2683,7 +2695,8 @@ static const JSCFunctionListEntry nodeList_Funcs[] =
 void domDocument_gc_mark(JSRuntime *rt, JSValueConst obj, JS_MarkFunc *mark_func)
 {
 	GF_SceneGraph *sg;
-	sg = (GF_SceneGraph*) JS_GetOpaque_Nocheck(obj);
+	JSClassID _classID;
+	sg = (GF_SceneGraph*) JS_GetAnyOpaque(obj, &_classID);
 	/*the JS proto of the svgClass or a destroyed object*/
 	if (!sg || !sg->js_data) return;
 	if (!JS_IsUndefined(sg->js_data->document))
@@ -2691,7 +2704,8 @@ void domDocument_gc_mark(JSRuntime *rt, JSValueConst obj, JS_MarkFunc *mark_func
 }
 void domElement_gc_mark(JSRuntime *rt, JSValueConst obj, JS_MarkFunc *mark_func)
 {
-	GF_Node *n = (GF_Node *) JS_GetOpaque_Nocheck(obj);
+	JSClassID _classID;
+	GF_Node *n = (GF_Node *) JS_GetAnyOpaque(obj, &_classID);
 	/*the JS proto of the svgClass or a destroyed object*/
 	if (!n) return;
 	if (!n->sgprivate || !n->sgprivate->interact || !n->sgprivate->interact->js_binding) return;

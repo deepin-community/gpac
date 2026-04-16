@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2018-2021
+ *			Copyright (c) Telecom ParisTech 2018-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / video cropping filter
@@ -27,6 +27,8 @@
 #include <gpac/list.h>
 #include <gpac/constants.h>
 #include <gpac/network.h>
+
+#ifndef GPAC_DISABLE_VCROP
 
 typedef struct
 {
@@ -84,7 +86,7 @@ void vcrop_packet_destruct(GF_Filter *filter, GF_FilterPid *pid, GF_FilterPacket
 	GF_FilterFrameInterface *frame_ifce = gf_filter_pck_get_frame_interface(pck);
 	if (!frame_ifce) return;
 	vframe = frame_ifce->user_data;
-	assert(vframe->pck);
+	gf_assert(vframe->pck);
 	gf_filter_pck_unref(vframe->pck);
 	vframe->pck = NULL;
 	gf_list_add(vframe->ctx->frames_res, vframe);
@@ -481,7 +483,7 @@ static GF_Err vcrop_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_
 	p = gf_filter_pid_get_property(pid, GF_PROP_PID_PIXFMT);
 	if (p) pfmt = p->value.uint;
 	p = gf_filter_pid_get_property(pid, GF_PROP_PID_SAR);
-	if (p) sar = p->value.frac;
+	if (p && (p->value.frac.num>0)) sar = p->value.frac;
 	else sar.den = sar.num = 1;
 
 	if (!w || !h || !pfmt) {
@@ -609,7 +611,7 @@ static const GF_FilterCapability VCropCaps[] =
 
 GF_FilterRegister VCropRegister = {
 	.name = "vcrop",
-	GF_FS_SET_DESCRIPTION("Video crop")
+	GF_FS_SET_DESCRIPTION("Video cropper")
 	GF_FS_SET_HELP("This filter is used to crop raw video data.")
 	.private_size = sizeof(GF_VCropCtx),
 	.flags = GF_FS_REG_EXPLICIT_ONLY|GF_FS_REG_ALLOW_CYCLIC,
@@ -618,6 +620,7 @@ GF_FilterRegister VCropRegister = {
 	SETCAPS(VCropCaps),
 	.process = vcrop_process,
 	.finalize = vcrop_finalize,
+	.hint_class_type = GF_FS_CLASS_AV
 };
 
 
@@ -626,3 +629,11 @@ const GF_FilterRegister *vcrop_register(GF_FilterSession *session)
 {
 	return &VCropRegister;
 }
+#else
+const GF_FilterRegister *vcrop_register(GF_FilterSession *session)
+{
+	return NULL;
+}
+#endif //#ifndef GPAC_DISABLE_VCROP
+
+

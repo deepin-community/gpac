@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2020-2021
+ *			Copyright (c) Telecom ParisTech 2020-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / MHAS write filter
@@ -26,6 +26,8 @@
 #include <gpac/filters.h>
 #include <gpac/constants.h>
 #include <gpac/bitstream.h>
+
+#ifndef GPAC_DISABLE_UFMHAS
 
 #include <gpac/avparse.h>
 
@@ -253,14 +255,14 @@ static const GF_FilterCapability MHASMxCaps[] =
 #define OFFS(_n)	#_n, offsetof(GF_MHASMxCtx, _n)
 static const GF_FilterArgs MHASMxArgs[] =
 {
-	{ OFFS(syncp), "if set, insert sync packet at each frame, otherwise only at SAP", GF_PROP_BOOL, "yes", NULL, GF_FS_ARG_HINT_ADVANCED},
+	{ OFFS(syncp), "if set, insert sync packet at each frame, otherwise only at SAP", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{0}
 };
 
 
 GF_FilterRegister MHASMxRegister = {
 	.name = "ufmhas",
-	GF_FS_SET_DESCRIPTION("MHAS writer")
+	GF_FS_SET_DESCRIPTION("MHAS rewriter")
 	GF_FS_SET_HELP("This filter converts MPEG-H Audio streams into MHAS encapsulated data.")
 	.private_size = sizeof(GF_MHASMxCtx),
 	.args = MHASMxArgs,
@@ -268,12 +270,19 @@ GF_FilterRegister MHASMxRegister = {
 	.finalize = mhasmx_finalize,
 	SETCAPS(MHASMxCaps),
 	.configure_pid = mhasmx_configure_pid,
-	.process = mhasmx_process
+	.process = mhasmx_process,
+	.hint_class_type = GF_FS_CLASS_FRAMING
 };
 
 
-const GF_FilterRegister *mhasmx_register(GF_FilterSession *session)
+const GF_FilterRegister *ufmhas_register(GF_FilterSession *session)
 {
 	return &MHASMxRegister;
 }
+#else
+const GF_FilterRegister *ufmhas_register(GF_FilterSession *session)
+{
+	return NULL;
+}
+#endif //#ifndef GPAC_DISABLE_UFMHAS
 

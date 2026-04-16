@@ -229,7 +229,6 @@ struct _gf_vrml_script_priv
 *********************************************/
 
 /*provided by JSFilter only*/
-struct __gf_download_manager *jsf_get_download_manager(JSContext *c);
 struct _gf_ft_mgr *jsf_get_font_manager(JSContext *c);
 GF_Err jsf_request_opengl(JSContext *c);
 GF_Err jsf_set_gl_active(JSContext *c, Bool do_activate);
@@ -244,7 +243,7 @@ void qjs_module_init_xhr_global(JSContext *c, JSValue global);
 
 void qjs_init_all_modules(JSContext *ctx, Bool no_webgl, Bool for_vrml);
 
-Bool gs_js_context_is_valid(JSContext *ctx);
+Bool gf_js_context_is_valid(JSContext *ctx);
 JSRuntime *gf_js_get_rt();
 
 const char *jsf_get_script_filename(JSContext *c);

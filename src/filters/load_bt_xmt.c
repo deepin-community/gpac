@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Context loader filter
@@ -29,7 +29,7 @@
 #include <gpac/network.h>
 #include <gpac/nodes_mpeg4.h>
 
-#if !defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_SCENEGRAPH)
+#if !defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_SCENEGRAPH) && !defined(GPAC_DISABLE_COMPOSITOR) && !defined(GPAC_DISABLE_SMGR)
 
 typedef struct
 {
@@ -60,11 +60,17 @@ typedef struct
 	u64 pck_time;
 	const char *service_url;
 	Bool is_playing;
+
+	GF_FileIO *fio;
+	Bool load_file;
+	GF_FilterPacket *pck_ref;
 } CTXLoadPriv;
 
-
+#ifndef GPAC_DISABLE_COMPOSITOR
 void ODS_SetupOD(GF_Scene *scene, GF_ObjectDescriptor *od);
-
+#else
+#define ODS_SetupOD(_scene, _od)
+#endif
 
 static void CTXLoad_ExecuteConditional(M_Conditional *c, GF_Scene *scene)
 {
@@ -169,7 +175,10 @@ GF_Err ctxload_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remov
 	//we must have a file path
 	prop = gf_filter_pid_get_property(pid, GF_PROP_PID_FILEPATH);
 	if (!prop || ! prop->value.string) {
-		return GF_NOT_SUPPORTED;
+		if (!priv->load_file) {
+			gf_filter_pid_set_framing_mode(pid, GF_TRUE);
+			priv->load_file = GF_TRUE;
+		}
 	}
 
 	if (!priv->in_pid) {
@@ -188,12 +197,14 @@ GF_Err ctxload_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remov
 			return GF_REQUIRES_NEW_INSTANCE;
 		}
 		//update of PID filename
-		if (!prop->value.string || !priv->file_name || strcmp(prop->value.string, priv->file_name))
-			return GF_NOT_SUPPORTED;
+		if (prop) {
+			if (!prop->value.string || !priv->file_name || strcmp(prop->value.string, priv->file_name))
+				return GF_NOT_SUPPORTED;
+		}
 		return GF_OK;
 	}
 
-	priv->file_name = prop->value.string;
+	priv->file_name = prop ? prop->value.string : NULL;
 	priv->nb_streams = 1;
 
 	//declare a new output PID of type scene, codecid RAW
@@ -374,6 +385,27 @@ static GF_Err ctxload_process(GF_Filter *filter)
 			return GF_EOS;
 		}
 		return GF_OK;
+	}
+
+	if (priv->load_file) {
+		const GF_PropertyValue *p;
+		pck = gf_filter_pid_get_packet(priv->in_pid);
+		const u8 *data;
+		u32 size;
+		if (!pck) return GF_OK;
+		data = gf_filter_pck_get_data(pck, &size);
+		if (priv->fio) {
+			gf_fclose((FILE*)priv->fio);
+			gf_filter_pck_unref(priv->pck_ref);
+		}
+		p = gf_filter_pid_get_property(priv->in_pid, GF_PROP_PID_URL);
+		priv->fio = gf_fileio_from_mem(p ? p->value.string : NULL, data, size);
+		priv->file_name = gf_fileio_url(priv->fio);
+		priv->pck_ref = pck;
+		gf_filter_pck_ref(&priv->pck_ref);
+		e = ctxload_configure_pid(filter, priv->in_pid, GF_FALSE);
+		priv->load_file = GF_FALSE;
+		if (e) return e;
 	}
 
 	/*something failed*/
@@ -617,7 +649,18 @@ static GF_Err ctxload_process(GF_Filter *filter)
 							esd = (GF_ESD*)gf_list_get(od->ESDescriptors, 0);
 							if (!esd) {
 								if (od->URLString) {
-									ODS_SetupOD(priv->scene, od);
+
+									switch (od->tag) {
+										case GF_ODF_IOD_TAG:
+										case GF_ODF_OD_TAG:
+										case GF_ODF_ISOM_IOD_TAG:
+										case GF_ODF_ISOM_OD_TAG:
+											ODS_SetupOD(priv->scene, od);
+											break;
+										default:
+											break;
+									}
+
 								}
 								gf_odf_desc_del((GF_Descriptor *) od);
 								continue;
@@ -761,6 +804,13 @@ static GF_Err ctxload_process(GF_Filter *filter)
 
 	if ((priv->load_flags==2) && !updates_pending) {
 		gf_filter_pid_set_eos(priv->out_pid);
+
+		if (priv->fio) {
+			gf_fclose((FILE*)priv->fio);
+			priv->fio = NULL;
+			gf_filter_pck_unref(priv->pck_ref);
+			priv->pck_ref = NULL;
+		}
 		return GF_EOS;
 	}
 	if (!min_next_time_ms) min_next_time_ms = 1;
@@ -779,6 +829,11 @@ static void ctxload_finalize(GF_Filter *filter)
 
 	if (priv->ctx) gf_sm_del(priv->ctx);
 	if (priv->files_to_delete) gf_list_del(priv->files_to_delete);
+
+	if (priv->fio) {
+		gf_fclose((FILE*)priv->fio);
+		gf_filter_pck_unref(priv->pck_ref);
+	}
 }
 
 #include <gpac/utf.h>
@@ -787,6 +842,7 @@ static const char *ctxload_probe_data(const u8 *probe_data, u32 size, GF_FilterP
 	const char *mime_type = NULL;
 	char *dst = NULL;
 	GF_Err e;
+	u32 probe_size=size;
 	char *res=NULL;
 
 	/* check gzip magic header */
@@ -795,63 +851,62 @@ static const char *ctxload_probe_data(const u8 *probe_data, u32 size, GF_FilterP
 		return "btz|bt.gz|xmt.gz|xmtz|wrl.gz|x3dv.gz|x3dvz|x3d.gz|x3dz";
 	}
 
-	e = gf_utf_get_utf8_string_from_bom(probe_data, size, &dst, &res);
+	e = gf_utf_get_string_from_bom(probe_data, size, &dst, &res, &probe_size);
 	if (e) return NULL;
 	probe_data = res;
 
 	//strip all spaces and \r\n
-	while (probe_data[0] && strchr("\n\r\t ", (char) probe_data[0]))
+	while (probe_size && probe_data[0] && strchr("\n\r\t ", (char) probe_data[0])) {
 		probe_data ++;
+		probe_size--;
+	}
 
 	//for XML, strip doctype, <?xml and comments
 	while (1) {
+		char *search=NULL;
 		if (!strncmp(probe_data, "<!DOCTYPE", 9)) {
-			probe_data = strchr(probe_data, '>');
-			if (!probe_data) goto exit;
-			probe_data++;
-			while (probe_data[0] && strchr("\n\r\t ", (char) probe_data[0]))
-				probe_data ++;
+			search = ">";
 		}
 		//for XML, strip xml header
 		else if (!strncmp(probe_data, "<?xml", 5)) {
-			probe_data = strstr(probe_data, "?>");
-			if (!probe_data) goto exit;
-
-			probe_data += 2;
-			while (probe_data[0] && strchr("\n\r\t ", (char) probe_data[0]))
-				probe_data ++;
+			search = "?>";
 		}
 		else if (!strncmp(probe_data, "<!--", 4)) {
-			probe_data = strstr(probe_data, "-->");
-			if (!probe_data) goto exit;
-			probe_data += 3;
-			while (probe_data[0] && strchr("\n\r\t ", (char) probe_data[0]))
-				probe_data ++;
+			search = "-->";
 		} else {
 			break;
+		}
+		const char *res = gf_strmemstr(probe_data, probe_size, search);
+		if (!res) goto exit;
+		res += strlen(search);
+		probe_size -= (u32) (res - (char*)probe_data);
+		probe_data = res;
+		while (probe_size && probe_data[0] && strchr("\n\r\t ", (char) probe_data[0])) {
+			probe_data ++;
+			probe_size--;
 		}
 	}
 	//probe_data is now the first element of the document, if XML
 	//we should refine by getting the xmlns attribute value rather than searching for its value...
 
-	if (strstr(probe_data, "http://www.w3.org/1999/XSL/Transform")
+	if (gf_strmemstr(probe_data, probe_size, "http://www.w3.org/1999/XSL/Transform")
 	) {
 	} else if (!strncmp(probe_data, "<XMT-A", strlen("<XMT-A"))
-		|| strstr(probe_data, "urn:mpeg:mpeg4:xmta:schema:2002")
+		|| gf_strmemstr(probe_data, probe_size, "urn:mpeg:mpeg4:xmta:schema:2002")
 	) {
 		mime_type = "application/x-xmt";
-	} else if (strstr(probe_data, "<X3D")
-		|| strstr(probe_data, "http://www.web3d.org/specifications/x3d-3.0.xsd")
+	} else if (gf_strmemstr(probe_data, probe_size, "<X3D")
+		|| gf_strmemstr(probe_data, probe_size, "http://www.web3d.org/specifications/x3d-3.0.xsd")
 	) {
 		mime_type = "model/x3d+xml";
-	} else if (strstr(probe_data, "<saf")
-		|| strstr(probe_data, "urn:mpeg:mpeg4:SAF:2005")
-		|| strstr(probe_data, "urn:mpeg:mpeg4:LASeR:2005")
+	} else if (gf_strmemstr(probe_data, probe_size, "<saf")
+		|| gf_strmemstr(probe_data, probe_size, "urn:mpeg:mpeg4:SAF:2005")
+		|| gf_strmemstr(probe_data, probe_size, "urn:mpeg:mpeg4:LASeR:2005")
 	) {
 		mime_type = "application/x-LASeR+xml";
 	} else if (!strncmp(probe_data, "<DIMSStream", strlen("<DIMSStream") ) ) {
 		mime_type = "application/dims";
-	} else if (!strncmp(probe_data, "<svg", 4) || strstr(probe_data, "http://www.w3.org/2000/svg") ) {
+	} else if (!strncmp(probe_data, "<svg", 4) || gf_strmemstr(probe_data, probe_size, "http://www.w3.org/2000/svg") ) {
 		mime_type = "image/svg+xml";
 	} else if (!strncmp(probe_data, "<widget", strlen("<widget") ) ) {
 		mime_type = "application/widget";
@@ -867,8 +922,11 @@ static const char *ctxload_probe_data(const u8 *probe_data, u32 size, GF_FilterP
 		//get first keyword
 		while (1) {
 			//strip all spaces and \r\n
-			while (probe_data[0] && strchr("\n\r\t ", (char) probe_data[0]))
+			while (probe_size && probe_data[0] && strchr("\n\r\t ", (char) probe_data[0])) {
 				probe_data ++;
+				probe_size--;
+			}
+			if (!probe_size) goto exit;
 
 			//VRML / XRDV files
 			if (!strncmp(probe_data, "#VRML V2.0", strlen("#VRML V2.0"))) {
@@ -891,10 +949,12 @@ static const char *ctxload_probe_data(const u8 *probe_data, u32 size, GF_FilterP
 				break;
 			}
 			//skip line and go one
-			probe_data = strchr(probe_data, '\n');
-			if (!probe_data) goto exit;
+			const char *next = gf_strmemstr(probe_data, probe_size, "\n");
+			if (!next) goto exit;
+			probe_size -= (u32) (next - (char*)probe_data);
+			probe_data = next;
 		}
-		
+
 		if (!strncmp(probe_data, "InitialObjectDescriptor", strlen("InitialObjectDescriptor"))
 			|| !strncmp(probe_data, "EXTERNPROTO", strlen("EXTERNPROTO"))
 			|| !strncmp(probe_data, "PROTO", strlen("PROTO"))
@@ -903,11 +963,10 @@ static const char *ctxload_probe_data(const u8 *probe_data, u32 size, GF_FilterP
 			|| !strncmp(probe_data, "Layer2D", strlen("Layer2D"))
 			|| !strncmp(probe_data, "Layer3D", strlen("Layer3D"))
 		) {
-			if (strstr(probe_data, "children"))
+			if (gf_strmemstr(probe_data, probe_size, "children"))
 				mime_type = "application/x-bt";
 		}
 	}
-
 
 exit:
 
@@ -941,10 +1000,10 @@ static const GF_FilterArgs CTXLoadArgs[] =
 
 GF_FilterRegister CTXLoadRegister = {
 	.name = "btplay",
-	GF_FS_SET_DESCRIPTION("BT/XMT/X3D loader")
+	GF_FS_SET_DESCRIPTION("BT/XMT/X3D decoder")
 	GF_FS_SET_HELP("This filter parses MPEG-4 BIFS (BT and XMT), VRML97 and X3D (wrl and XML) files directly into the scene graph of the compositor.\n"
 	"\n"
-	"When [-sax_dur=N]() is set, the filter will do a progressive load of the source and cancel current loading when processing time is higher than `N`.\n")
+	"When [-sax_dur]() is set to `N`, the filter will do a progressive load of the source and cancel current loading when processing time is higher than `N`.\n")
 	.private_size = sizeof(CTXLoadPriv),
 	.flags = GF_FS_REG_MAIN_THREAD,
 	.args = CTXLoadArgs,
@@ -954,18 +1013,17 @@ GF_FilterRegister CTXLoadRegister = {
 	.configure_pid = ctxload_configure_pid,
 	.process_event = ctxload_process_event,
 	.probe_data = ctxload_probe_data,
+	.hint_class_type = GF_FS_CLASS_DECODER
 };
 
 #endif //defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_SCENEGRAPH)
 
 
-const GF_FilterRegister *ctxload_register(GF_FilterSession *session)
+const GF_FilterRegister *btplay_register(GF_FilterSession *session)
 {
-#if !defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_SCENEGRAPH)
+#if !defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_SCENEGRAPH) && !defined(GPAC_DISABLE_COMPOSITOR)  && !defined(GPAC_DISABLE_SMGR)
 	return &CTXLoadRegister;
 #else
 	return NULL;
 #endif
 }
-
-

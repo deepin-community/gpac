@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -235,7 +235,7 @@ void visual_3d_set_scissor(GF_VisualManager *visual, GF_Rect *vp);
 /*setup rectangular cliper (clip: top-left, width, height)
 NOTE: 2D clippers can only be set from a 2D context, and will always use glScissor.
 In order to allow multiple Layer2D in Layer2D, THERE IS ALWAYS AT MOST ONE 2D CLIPPER USED AT ANY TIME,
-it is the caller responsability to restore previous 2D clipers
+it is the caller responsibility to restore previous 2D clipers
 
 the matrix is not copied, care should be taken to keep it unmodified until the cliper is reset (unless desired otherwise)
 if NULL, no specific clipping transform will be used*/
@@ -290,7 +290,7 @@ void visual_3d_has_inactive_light(GF_VisualManager *visual);
 
 /*set fog*/
 void visual_3d_set_fog(GF_VisualManager *visual, const char *type, SFColor color, Fixed density, Fixed visibility);
-/*fill given rect with given color (used for text hilighting only) - context shall not be altered*/
+/*fill given rect with given color (used for text highlighting only) - context shall not be altered*/
 void visual_3d_fill_rect(GF_VisualManager *visual, GF_Rect rc, SFColorRGBA color);
 
 void visual_3d_point_sprite(GF_VisualManager *visual, Drawable *stack, GF_TextureHandler *txh, GF_TraverseState *tr_state);

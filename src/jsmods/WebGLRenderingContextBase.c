@@ -496,6 +496,8 @@ static JSValue wgl_deleteBuffer(JSContext *ctx, JSValueConst this_val, int argc,
 	JS_FreeValue(ctx, glo->obj);
 	glo->obj = JS_UNDEFINED;
 	gf_list_del_item(glo->par_ctx->all_objects, glo);
+	gf_free(glo);
+	JS_SetOpaque(argv[0], NULL);
 	}
 	}
 	return ret_val_js;
@@ -516,6 +518,8 @@ static JSValue wgl_deleteFramebuffer(JSContext *ctx, JSValueConst this_val, int 
 	JS_FreeValue(ctx, glo->obj);
 	glo->obj = JS_UNDEFINED;
 	gf_list_del_item(glo->par_ctx->all_objects, glo);
+	gf_free(glo);
+	JS_SetOpaque(argv[0], NULL);
 	}
 	}
 	return ret_val_js;
@@ -536,6 +540,8 @@ static JSValue wgl_deleteProgram(JSContext *ctx, JSValueConst this_val, int argc
 	JS_FreeValue(ctx, glo->obj);
 	glo->obj = JS_UNDEFINED;
 	gf_list_del_item(glo->par_ctx->all_objects, glo);
+	gf_free(glo);
+	JS_SetOpaque(argv[0], NULL);
 	}
 	}
 	return ret_val_js;
@@ -556,6 +562,8 @@ static JSValue wgl_deleteRenderbuffer(JSContext *ctx, JSValueConst this_val, int
 	JS_FreeValue(ctx, glo->obj);
 	glo->obj = JS_UNDEFINED;
 	gf_list_del_item(glo->par_ctx->all_objects, glo);
+	gf_free(glo);
+	JS_SetOpaque(argv[0], NULL);
 	}
 	}
 	return ret_val_js;
@@ -576,6 +584,8 @@ static JSValue wgl_deleteShader(JSContext *ctx, JSValueConst this_val, int argc,
 	JS_FreeValue(ctx, glo->obj);
 	glo->obj = JS_UNDEFINED;
 	gf_list_del_item(glo->par_ctx->all_objects, glo);
+	gf_free(glo);
+	JS_SetOpaque(argv[0], NULL);
 	}
 	}
 	return ret_val_js;
@@ -596,6 +606,8 @@ static JSValue wgl_deleteTexture(JSContext *ctx, JSValueConst this_val, int argc
 	JS_FreeValue(ctx, glo->obj);
 	glo->obj = JS_UNDEFINED;
 	gf_list_del_item(glo->par_ctx->all_objects, glo);
+	gf_free(glo);
+	JS_SetOpaque(argv[0], NULL);
 	}
 	}
 	return ret_val_js;
@@ -1249,7 +1261,7 @@ static JSValue wgl_uniform1iv(JSContext *ctx, JSValueConst this_val, int argc, J
 	WGL_CHECK_CONTEXT
 	if (argc<2) return js_throw_err(ctx, WGL_INVALID_VALUE);
 	WGL_GET_GLID(location, argv[0], WebGLUniformLocation_class_id);
-	if (!WGL_LOAD_INT32_VEC(ctx, argv[1], (s32 **) &v, &v_size, 1)) return js_throw_err(ctx, WGL_INVALID_VALUE);;
+	if (!WGL_LOAD_INT32_VEC(ctx, argv[1], (s32 **) &v, &v_size, 1)) return js_throw_err(ctx, WGL_INVALID_VALUE);
 	/*hack for GPAC textures, we create uniforms with loc -2 for such textures*/
 	if ((s32) location>=0)
 		glUniform1iv(location, v_size, v);
@@ -1317,7 +1329,7 @@ static JSValue wgl_uniform2iv(JSContext *ctx, JSValueConst this_val, int argc, J
 	WGL_CHECK_CONTEXT
 	if (argc<2) return js_throw_err(ctx, WGL_INVALID_VALUE);
 	WGL_GET_GLID(location, argv[0], WebGLUniformLocation_class_id);
-	if (!WGL_LOAD_INT32_VEC(ctx, argv[1], (s32 **) &v, &v_size, 1)) return js_throw_err(ctx, WGL_INVALID_VALUE);;
+	if (!WGL_LOAD_INT32_VEC(ctx, argv[1], (s32 **) &v, &v_size, 1)) return js_throw_err(ctx, WGL_INVALID_VALUE);
 	/*hack for GPAC textures, we create uniforms with loc -2 for such textures*/
 	if ((s32) location>=0)
 		glUniform2iv(location, v_size, v);
@@ -1389,7 +1401,7 @@ static JSValue wgl_uniform3iv(JSContext *ctx, JSValueConst this_val, int argc, J
 	WGL_CHECK_CONTEXT
 	if (argc<2) return js_throw_err(ctx, WGL_INVALID_VALUE);
 	WGL_GET_GLID(location, argv[0], WebGLUniformLocation_class_id);
-	if (!WGL_LOAD_INT32_VEC(ctx, argv[1], (s32 **) &v, &v_size, 1)) return js_throw_err(ctx, WGL_INVALID_VALUE);;
+	if (!WGL_LOAD_INT32_VEC(ctx, argv[1], (s32 **) &v, &v_size, 1)) return js_throw_err(ctx, WGL_INVALID_VALUE);
 	/*hack for GPAC textures, we create uniforms with loc -2 for such textures*/
 	if ((s32) location>=0)
 		glUniform3iv(location, v_size, v);
@@ -1465,7 +1477,7 @@ static JSValue wgl_uniform4iv(JSContext *ctx, JSValueConst this_val, int argc, J
 	WGL_CHECK_CONTEXT
 	if (argc<2) return js_throw_err(ctx, WGL_INVALID_VALUE);
 	WGL_GET_GLID(location, argv[0], WebGLUniformLocation_class_id);
-	if (!WGL_LOAD_INT32_VEC(ctx, argv[1], (s32 **) &v, &v_size, 1)) return js_throw_err(ctx, WGL_INVALID_VALUE);;
+	if (!WGL_LOAD_INT32_VEC(ctx, argv[1], (s32 **) &v, &v_size, 1)) return js_throw_err(ctx, WGL_INVALID_VALUE);
 	/*hack for GPAC textures, we create uniforms with loc -2 for such textures*/
 	if ((s32) location>=0)
 		glUniform4iv(location, v_size, v);

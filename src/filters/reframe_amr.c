@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / AMR&EVRC&SMV reframer filter
@@ -25,6 +25,8 @@
 
 #include <gpac/filters.h>
 #include <gpac/constants.h>
+
+#ifndef GPAC_DISABLE_RFAMR
 
 typedef struct
 {
@@ -366,7 +368,7 @@ GF_Err amrdmx_process(GF_Filter *filter)
 		if (gf_filter_pid_is_eos(ctx->ipid)) {
 			if (ctx->opid)
 				gf_filter_pid_set_eos(ctx->opid);
-			assert(ctx->remaining == 0);
+			gf_assert(ctx->remaining == 0);
 			return GF_EOS;
 		}
 		return GF_OK;
@@ -516,7 +518,12 @@ GF_Err amrdmx_process(GF_Filter *filter)
 
 			gf_filter_pck_set_cts(dst_pck, ctx->cts);
 			gf_filter_pck_set_sap(dst_pck, GF_FILTER_SAP_1);
-			gf_filter_pck_set_duration(dst_pck, ctx->block_size);
+			if (ctx->timescale && (ctx->timescale!=ctx->sample_rate))
+				gf_filter_pck_set_duration(dst_pck, (u32) gf_timestamp_rescale(ctx->block_size, ctx->sample_rate, ctx->timescale) );
+			else
+				gf_filter_pck_set_duration(dst_pck, ctx->block_size);
+
+
 			gf_filter_pck_set_framing(dst_pck, GF_TRUE, ctx->remaining ? GF_FALSE : GF_TRUE);
 
 			if (byte_offset != GF_FILTER_NO_BO) {
@@ -534,7 +541,7 @@ GF_Err amrdmx_process(GF_Filter *filter)
 		if (ctx->remaining) break;
 		amrdmx_update_cts(ctx);
 
-		//don't demux too much of input, abort when we would block. This avoid dispatching
+		//don't demux too much of input, abort when we would block. This avoids dispatching
 		//a huge number of frames in a single call
 		if (gf_filter_pid_would_block(ctx->opid)) {
 			ctx->resume_from = (u32) ( (char *)start -  (char *)data);
@@ -613,12 +620,19 @@ GF_FilterRegister AMRDmxRegister = {
 	.configure_pid = amrdmx_configure_pid,
 	.process = amrdmx_process,
 	.probe_data = amrdmx_probe_data,
-	.process_event = amrdmx_process_event
+	.process_event = amrdmx_process_event,
+	.hint_class_type = GF_FS_CLASS_FRAMING
 };
 
 
-const GF_FilterRegister *amrdmx_register(GF_FilterSession *session)
+const GF_FilterRegister *rfamr_register(GF_FilterSession *session)
 {
 	return &AMRDmxRegister;
 }
+#else
+const GF_FilterRegister *rfamr_register(GF_FilterSession *session)
+{
+	return NULL;
+}
+#endif //#ifndef GPAC_DISABLE_RFAMR
 

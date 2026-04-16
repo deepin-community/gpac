@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2022
+ *			Copyright (c) Telecom ParisTech 2022-2025
  *					All rights reserved
  *
  *  This file is part of GPAC / TX3G to SRT/VTT/TTML convert filter
@@ -32,6 +32,7 @@
 
 #if !defined(GPAC_DISABLE_ISOM_DUMP) && !defined(GPAC_DISABLE_ISOM)
 
+#define TTML_NAMESPACE "http://www.w3.org/ns/ttml"
 
 typedef struct
 {
@@ -47,6 +48,7 @@ typedef struct
 	u32 codecid;
 
 	GF_Fraction64 duration;
+	s64 delay;
 
 	GF_TextConfig *cfg;
 	u32 dsi_crc;
@@ -105,6 +107,10 @@ GF_Err tx3gmx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remove
 		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_UNFRAMED, &PROP_BOOL(GF_TRUE) );
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_DECODER_CONFIG, NULL );
 
+	if (ctx->dump_type==3) {
+		gf_filter_pid_set_property_str(ctx->opid, "meta:xmlns", &PROP_STRING(TTML_NAMESPACE) );
+	}
+
 	ctx->ipid = pid;
 
 	//decoder config may be not ready yet
@@ -146,6 +152,11 @@ GF_Err tx3gmx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remove
 
 	if (!ctx->dump_type)
 		tx3gmx_write_config(ctx);
+
+
+	p = gf_filter_pid_get_property(pid, GF_PROP_PID_DELAY);
+	ctx->delay = p ? p->value.longsint : 0;
+	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_DELAY, NULL);
 
 	return GF_OK;
 }
@@ -246,7 +257,7 @@ static GF_Err dump_ttxt_sample_ttml(TX3GMxCtx *ctx, FILE *dump, GF_TextSample *t
 	if (txtd->font_table && txtd->font_table->entry_count && txtd->font_table->fonts[0].fontName)
 		gf_fprintf(dump, " tts:fontFamily=\"%s\"", txtd->font_table->fonts[0].fontName);
 
-	gf_fprintf(dump, "/>\n  </layout>\n </head>\n <body>\n  <div>\n");
+	gf_fprintf(dump, "/>\n  </layout>\n </head>\n <body region=\"Default\">\n  <div>\n");
 
 	tx3g_format_time(start_ts, 1000, szTime, GF_FALSE);
 	gf_fprintf(dump, "  <p begin=\"%s\"", szTime);
@@ -270,7 +281,7 @@ static GF_Err dump_ttxt_sample_ttml(TX3GMxCtx *ctx, FILE *dump, GF_TextSample *t
 		len = txt->len;
 	} else {
 		u8 *str = (u8 *) (txt->text);
-		len = gf_utf8_mbstowcs(utf16Line, 10000, (const char **) &str);
+		len = gf_utf8_mbstowcs(utf16Line, txt->len+1, (const char **) &str);
 		if (len == GF_UTF8_FAIL) return GF_NON_COMPLIANT_BITSTREAM;
 		utf16Line[len] = 0;
 	}
@@ -304,7 +315,15 @@ static GF_Err dump_ttxt_sample_ttml(TX3GMxCtx *ctx, FILE *dump, GF_TextSample *t
 	//end of <p>
 	gf_fprintf(dump, ">");
 
+	Bool needs_new_line = GF_FALSE;
 	for (j=0; j<len; j++) {
+		if (needs_new_line) {
+			//safety check for weird files using CR but no LF
+			if (utf16Line[j]=='\r') continue;
+			if (utf16Line[j]!='\n')
+				gf_fprintf(dump, "<br/>");
+			needs_new_line = GF_FALSE;
+		}
 		if (!single_style) {
 			if (txt->styles) {
 				new_styles = txtd->default_style.style_flags;
@@ -321,12 +340,9 @@ static GF_Err dump_ttxt_sample_ttml(TX3GMxCtx *ctx, FILE *dump, GF_TextSample *t
 				}
 			}
 
-			Bool needs_bold=GF_FALSE;
-			Bool needs_italic=GF_FALSE;
-			Bool needs_underlined=GF_FALSE;
-			Bool needs_strikethrough=GF_FALSE;
 			Bool needs_color=GF_FALSE;
 			Bool close_span=GF_FALSE;
+			Bool needs_span=GF_FALSE;
 
 			if (new_color != color) {
 				close_span = GF_TRUE;
@@ -336,11 +352,21 @@ static GF_Err dump_ttxt_sample_ttml(TX3GMxCtx *ctx, FILE *dump, GF_TextSample *t
 				styles = txtd->default_style.style_flags;
 			}
 
+			//check each style:
+			//- if set but not previously set, needs a new span
+			//- if not set but previously set, needs to close span
 			if (new_styles != styles) {
-				if ((new_styles & GF_TXT_STYLE_BOLD) && !(styles & GF_TXT_STYLE_BOLD)) needs_bold = GF_TRUE;
-				if ((new_styles & GF_TXT_STYLE_ITALIC) && !(styles & GF_TXT_STYLE_ITALIC)) needs_italic = GF_TRUE;
-				if ((new_styles & GF_TXT_STYLE_UNDERLINED) && !(styles & GF_TXT_STYLE_UNDERLINED)) needs_underlined = GF_TRUE;
-				if ((new_styles & GF_TXT_STYLE_STRIKETHROUGH) && !(styles & GF_TXT_STYLE_STRIKETHROUGH)) needs_strikethrough = GF_TRUE;
+				if ((new_styles & GF_TXT_STYLE_BOLD) && !(styles & GF_TXT_STYLE_BOLD)) needs_span = GF_TRUE;
+				else if ((styles & GF_TXT_STYLE_BOLD) && !(new_styles & GF_TXT_STYLE_BOLD)) close_span = GF_TRUE;
+
+				if ((new_styles & GF_TXT_STYLE_ITALIC) && !(styles & GF_TXT_STYLE_ITALIC)) needs_span = GF_TRUE;
+				else if ((styles & GF_TXT_STYLE_ITALIC) && !(new_styles & GF_TXT_STYLE_ITALIC)) close_span = GF_TRUE;
+
+				if ((new_styles & GF_TXT_STYLE_UNDERLINED) && !(styles & GF_TXT_STYLE_UNDERLINED)) needs_span = GF_TRUE;
+				if ((styles & GF_TXT_STYLE_UNDERLINED) && !(new_styles & GF_TXT_STYLE_UNDERLINED)) close_span = GF_TRUE;
+
+				if ((new_styles & GF_TXT_STYLE_STRIKETHROUGH) && !(styles & GF_TXT_STYLE_STRIKETHROUGH)) needs_span = GF_TRUE;
+				else if ((styles & GF_TXT_STYLE_STRIKETHROUGH) && !(new_styles & GF_TXT_STYLE_STRIKETHROUGH)) close_span = GF_TRUE;
 
 				styles = new_styles;
 			}
@@ -349,13 +375,13 @@ static GF_Err dump_ttxt_sample_ttml(TX3GMxCtx *ctx, FILE *dump, GF_TextSample *t
 				gf_fprintf(dump, "</span>");
 				has_span = GF_FALSE;
 			}
-			if (needs_bold || needs_italic || needs_underlined || needs_strikethrough || needs_color) {
+			if (needs_span) {
 				has_span = GF_TRUE;
 				gf_fprintf(dump, "<span");
-				if (needs_italic) gf_fprintf(dump, " tts:fontStyle=\"italic\"");
-				if (needs_bold) gf_fprintf(dump, " tts:fontWeight=\"bold\"");
-				if (needs_underlined) gf_fprintf(dump, " tts:textDecoration=\"underline\"");
-				if (needs_strikethrough) gf_fprintf(dump, " tts:textDecoration=\"lineThrough\"");
+				if (styles & GF_TXT_STYLE_ITALIC) gf_fprintf(dump, " tts:fontStyle=\"italic\"");
+				if (styles & GF_TXT_STYLE_BOLD) gf_fprintf(dump, " tts:fontWeight=\"bold\"");
+				if (styles & GF_TXT_STYLE_UNDERLINED) gf_fprintf(dump, " tts:textDecoration=\"underline\"");
+				if (styles & GF_TXT_STYLE_STRIKETHROUGH) gf_fprintf(dump, " tts:textDecoration=\"lineThrough\"");
 
 				if (needs_color) gf_fprintf(dump, " tts:color=\"%s\"", gf_color_get_name(color));
 
@@ -364,7 +390,7 @@ static GF_Err dump_ttxt_sample_ttml(TX3GMxCtx *ctx, FILE *dump, GF_TextSample *t
 		}
 
 		if (utf16Line[j]=='\r') {
-
+			needs_new_line = GF_TRUE;
 		} else if (utf16Line[j]=='\n') {
 			gf_fprintf(dump, "<br/>");
 		} else {
@@ -399,8 +425,10 @@ GF_Err tx3gmx_process(GF_Filter *filter)
 	TX3GMxCtx *ctx = gf_filter_get_udta(filter);
 	GF_FilterPacket *pck, *dst_pck;
 	u8 *data, *output;
-	u64 start_ts, end_ts;
+	u64 start_ts, end_ts, o_start_ts;
 	u32 pck_size, timescale;
+	Bool forced = GF_FALSE;
+	const GF_PropertyValue *p;
 	FILE *dump=NULL;
 	pck = gf_filter_pid_get_packet(ctx->ipid);
 	if (!pck) {
@@ -414,7 +442,8 @@ GF_Err tx3gmx_process(GF_Filter *filter)
 	data = (char *) gf_filter_pck_get_data(pck, &pck_size);
 	if (pck_size<=1) {
 		gf_filter_pid_drop_packet(ctx->ipid);
-		return GF_NON_COMPLIANT_BITSTREAM;
+		//we consider a 0 packet size not an error
+		return pck_size ? GF_NON_COMPLIANT_BITSTREAM : GF_OK;
 	}
 	if (ctx->dump_type && (pck_size<=2)) {
 		gf_filter_pid_drop_packet(ctx->ipid);
@@ -427,9 +456,21 @@ GF_Err tx3gmx_process(GF_Filter *filter)
 	start_ts = gf_filter_pck_get_cts(pck);
 	end_ts = start_ts + gf_filter_pck_get_duration(pck);
 
+	if ((s64) start_ts > -ctx->delay) start_ts += ctx->delay;
+	else start_ts = 0;
+	o_start_ts = start_ts;
+	if ((s64) end_ts > -ctx->delay) end_ts += ctx->delay;
+	else end_ts = 0;
+
+	p = gf_filter_pck_get_property(pck, GF_PROP_PCK_FORCED_SUB);
+	if (p && p->value.boolean) forced = GF_TRUE;
+	if (!forced) {
+		p = gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_FORCED_SUB);
+		if (p && (p->value.uint==2)) forced = GF_TRUE;
+	}
+
 	start_ts = gf_timestamp_rescale(start_ts, timescale, 1000);
 	end_ts = gf_timestamp_rescale(end_ts, timescale, 1000);
-
 
 	gf_bs_reassign_buffer(ctx->bs_r, data, pck_size);
 
@@ -472,6 +513,10 @@ GF_Err tx3gmx_process(GF_Filter *filter)
 				GF_FontTableBox font_ent;
 
 				tx3gmx_get_stsd(ent, &txtd, &font_ent);
+
+				if (txt->is_forced || (txtd.displayFlags & GF_TXT_ALL_SAMPLES_FORCED))
+					forced = GF_TRUE;
+
 				if (ctx->dump_type<3) {
 					dump_ttxt_sample_srt(dump, txt, &txtd, (ctx->dump_type==2) ? GF_TRUE : GF_FALSE);
 				} else {
@@ -479,7 +524,7 @@ GF_Err tx3gmx_process(GF_Filter *filter)
 				}
 			}
 		} else {
-			dump_ttxt_sample(dump, txt, gf_filter_pck_get_cts(pck), gf_filter_pck_get_timescale(pck), sample_index, GF_FALSE);
+			dump_ttxt_sample(dump, txt, o_start_ts, gf_filter_pck_get_timescale(pck), sample_index, GF_FALSE);
 		}
 
 		gf_isom_delete_text_sample(txt);
@@ -503,6 +548,11 @@ GF_Err tx3gmx_process(GF_Filter *filter)
 		gf_filter_pck_set_byte_offset(dst_pck, GF_FILTER_NO_BO);
 		gf_filter_pck_set_framing(dst_pck, GF_TRUE, GF_TRUE);
 		gf_filter_pck_set_sap(dst_pck, GF_FILTER_SAP_1);
+		gf_filter_pck_set_cts(dst_pck, o_start_ts);
+		gf_filter_pck_set_dts(dst_pck, o_start_ts);
+		if (forced) {
+			gf_filter_pck_set_property(dst_pck, GF_PROP_PCK_FORCED_SUB, &PROP_BOOL(GF_TRUE));
+		}
 
 		gf_filter_pck_send(dst_pck);
 	}
@@ -555,7 +605,7 @@ static const GF_FilterArgs TX3GMxArgs[] =
 
 GF_FilterRegister TTXTMxRegister = {
 	.name = "ufttxt",
-	GF_FS_SET_DESCRIPTION("TX3G unframer")
+	GF_FS_SET_DESCRIPTION("TX3G rewriter")
 	GF_FS_SET_HELP("This filter converts a single ISOBMFF TX3G stream to TTXT (xml format) unframed stream.")
 	.private_size = sizeof(TX3GMxCtx),
 	.args = TX3GMxArgs,
@@ -563,10 +613,11 @@ GF_FilterRegister TTXTMxRegister = {
 	.finalize = tx3gmx_finalize,
 	SETCAPS(TX3GMxCaps),
 	.configure_pid = tx3gmx_configure_pid,
-	.process = tx3gmx_process
+	.process = tx3gmx_process,
+	.hint_class_type = GF_FS_CLASS_FRAMING
 };
 
-const GF_FilterRegister *ttxtuf_register(GF_FilterSession *session)
+const GF_FilterRegister *ufttxt_register(GF_FilterSession *session)
 {
 	return &TTXTMxRegister;
 }
@@ -601,7 +652,8 @@ GF_FilterRegister TX3G2SRTRegister = {
 	.finalize = tx3gmx_finalize,
 	SETCAPS(TX3G2SRTCaps),
 	.configure_pid = tx3gmx_configure_pid,
-	.process = tx3gmx_process
+	.process = tx3gmx_process,
+	.hint_class_type = GF_FS_CLASS_SUBTITLE
 };
 
 const GF_FilterRegister *tx3g2srt_register(GF_FilterSession *session)
@@ -640,7 +692,8 @@ GF_FilterRegister TTX2VTTRegister = {
 	.finalize = tx3gmx_finalize,
 	SETCAPS(TX3G2VTTCaps),
 	.configure_pid = tx3gmx_configure_pid,
-	.process = tx3gmx_process
+	.process = tx3gmx_process,
+	.hint_class_type = GF_FS_CLASS_SUBTITLE
 };
 
 const GF_FilterRegister *tx3g2vtt_register(GF_FilterSession *session)
@@ -680,7 +733,8 @@ GF_FilterRegister TX3G2TTMLRegister = {
 	.finalize = tx3gmx_finalize,
 	SETCAPS(TX3G2TTMLCaps),
 	.configure_pid = tx3gmx_configure_pid,
-	.process = tx3gmx_process
+	.process = tx3gmx_process,
+	.hint_class_type = GF_FS_CLASS_SUBTITLE
 };
 
 
@@ -690,7 +744,7 @@ const GF_FilterRegister *tx3g2ttml_register(GF_FilterSession *session)
 }
 
 #else
-const GF_FilterRegister *ttxtuf_register(GF_FilterSession *session)
+const GF_FilterRegister *ufttxt_register(GF_FilterSession *session)
 {
 	return NULL;
 }

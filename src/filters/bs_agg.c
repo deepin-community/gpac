@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2022
+ *			Copyright (c) Telecom ParisTech 2022-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / compressed split bitstream aggregator filter
@@ -28,6 +28,8 @@
 #include <gpac/internal/media_dev.h>
 #include <gpac/mpeg4_odf.h>
 
+#ifndef GPAC_DISABLE_BSAGG
+
 #define MAX_LID	64
 #define MAX_TID	7
 
@@ -36,6 +38,13 @@ typedef struct
 	u8 *data;
 	u32 size, alloc_size, lid, tid;
 } NALStore;
+
+
+typedef struct
+{
+	u32 layer_id_plus_one;
+	u32 min_temporal_id, max_temporal_id;
+} LHVCLayerInfo;
 
 typedef struct _bs_agg_ctx BSAggCtx;
 typedef struct _bs_agg_pid BSAggOut;
@@ -54,6 +63,8 @@ struct _bs_agg_pid
 	GF_List *nal_stores;
 
 	GF_List *ipids;
+
+	LHVCLayerInfo linf[64];
 };
 
 struct _bs_agg_ctx
@@ -180,6 +191,7 @@ reparse:
 
 		gf_filter_pid_set_property(pctx->opid, GF_PROP_PID_CODECID, &PROP_UINT(GF_CODECID_AVC));
 		gf_filter_pid_set_property(pctx->opid, GF_PROP_PID_ISOM_STSD_TEMPLATE, NULL);
+		gf_filter_pid_set_property(pctx->opid, GF_PROP_PID_ISOM_STSD_ALL_TEMPLATES, NULL);
 		gf_filter_pid_set_property(pctx->opid, GF_PROP_PID_BITRATE, NULL);
 
 		u8 *data;
@@ -249,13 +261,11 @@ static GF_Err bsagg_transfer_param_array(GF_List *array_out, GF_List *array_in)
 
 static GF_Err vvc_hevc_rewrite_pid_config(BSAggCtx *ctx, BSAggOut *pctx)
 {
-	GF_Err e;
+	GF_Err e = GF_OK;
 	u32 i, count;
 	Bool is_vvc = GF_FALSE;
-#ifndef GPAC_DISABLE_HEVC
 	GF_HEVCConfig *hvcc_out = NULL;
 	GF_HEVCConfig *hvcc_enh_out = NULL;
-#endif
 	GF_VVCConfig *vvcc_out = NULL;
 	GF_FilterPid *base = NULL;
 	const GF_PropertyValue *dv_cfg = NULL;
@@ -265,10 +275,8 @@ static GF_Err vvc_hevc_rewrite_pid_config(BSAggCtx *ctx, BSAggOut *pctx)
 		vvcc_out = gf_odf_vvc_cfg_new();
 		if (!vvcc_out) return GF_OUT_OF_MEM;
 	} else {
-#ifndef GPAC_DISABLE_HEVC
 		hvcc_out = gf_odf_hevc_cfg_new();
 		if (!hvcc_out) return GF_OUT_OF_MEM;
-#endif
 	}
 
 #define GOTO_ERR(_e) { e = _e; goto err_exit; }
@@ -323,7 +331,6 @@ static GF_Err vvc_hevc_rewrite_pid_config(BSAggCtx *ctx, BSAggOut *pctx)
 				if (e) goto err_exit;
 			}
 		} else {
-#ifndef GPAC_DISABLE_HEVC
 			GF_HEVCConfig *hvcc = NULL;
 			Bool dsi_lhvc=GF_FALSE;
 			if ((pctx->codec_id==GF_CODECID_LHVC) && !dsi_enh) dsi_lhvc=GF_TRUE;
@@ -366,7 +373,6 @@ static GF_Err vvc_hevc_rewrite_pid_config(BSAggCtx *ctx, BSAggOut *pctx)
 				gf_odf_hevc_cfg_del(hvcc);
 				if (e) goto err_exit;
 			}
-#endif
 		}
 	}
 
@@ -376,6 +382,7 @@ static GF_Err vvc_hevc_rewrite_pid_config(BSAggCtx *ctx, BSAggOut *pctx)
 
 		gf_filter_pid_set_property(pctx->opid, GF_PROP_PID_CODECID, &PROP_UINT(GF_CODECID_HEVC));
 		gf_filter_pid_set_property(pctx->opid, GF_PROP_PID_ISOM_STSD_TEMPLATE, NULL);
+		gf_filter_pid_set_property(pctx->opid, GF_PROP_PID_ISOM_STSD_ALL_TEMPLATES, NULL);
 		gf_filter_pid_set_property(pctx->opid, GF_PROP_PID_BITRATE, NULL);
 
 		if (dv_cfg)
@@ -390,7 +397,6 @@ static GF_Err vvc_hevc_rewrite_pid_config(BSAggCtx *ctx, BSAggOut *pctx)
 			gf_filter_pid_set_property(pctx->opid, GF_PROP_PID_DECODER_CONFIG, &PROP_DATA_NO_COPY(data, size) );
 			gf_filter_pid_set_property(pctx->opid, GF_PROP_PID_DECODER_CONFIG_ENHANCEMENT, NULL);
 		}
-#ifndef GPAC_DISABLE_HEVC
 		if (hvcc_out) {
 			hvcc_out->nal_unit_size = 4;
 			hvcc_out->is_lhvc = GF_FALSE;
@@ -405,16 +411,13 @@ static GF_Err vvc_hevc_rewrite_pid_config(BSAggCtx *ctx, BSAggOut *pctx)
 				gf_filter_pid_set_property(pctx->opid, GF_PROP_PID_DECODER_CONFIG_ENHANCEMENT, NULL);
 			}
 		}
-#endif
 	}
 
 
 err_exit:
 
-#ifndef GPAC_DISABLE_HEVC
 	if (hvcc_out) gf_odf_hevc_cfg_del(hvcc_out);
 	if (hvcc_enh_out) gf_odf_hevc_cfg_del(hvcc_enh_out);
-#endif
 	if (vvcc_out) gf_odf_vvc_cfg_del(vvcc_out);
 	return e;
 }
@@ -445,6 +448,51 @@ static GF_Err none_process(BSAggCtx *ctx, BSAggOut *c_opid)
 		if (e) return e;
 	}
 	return GF_OK;
+}
+
+static Bool bsagg_filter_prop(void *cbk, u32 prop_4cc, const char *prop_name, const GF_PropertyValue *src_prop)
+{
+
+	if (!prop_name) return GF_TRUE;
+	if (!strncmp(prop_name, "grp_linf", 8))
+		return GF_FALSE;
+	return GF_TRUE;
+}
+
+static void bsagg_set_linf(BSAggOut *pctx)
+{
+	u32 i, nb_layers=0, nb_sublayers=0;
+	u8 *data;
+	u32 data_size;
+	GF_BitStream *bs;
+	if (pctx->codec_id!=GF_CODECID_HEVC)
+		return;
+
+	for (i=0; i<64; i++) {
+		if (pctx->linf[i].layer_id_plus_one) nb_layers++;
+		if (pctx->linf[i].min_temporal_id != pctx->linf[i].max_temporal_id) nb_sublayers++;
+	}
+	//only set linf if more than one layer
+	if ((nb_layers<=1) && !nb_sublayers)
+		return;
+
+	bs = gf_bs_new(NULL, 0, GF_BITSTREAM_WRITE);
+
+	gf_bs_write_int(bs, 0, 2);
+	gf_bs_write_int(bs, nb_layers, 6);
+	for (i=0; i<nb_layers; i++) {
+		if (! pctx->linf[i].layer_id_plus_one) continue;
+		gf_bs_write_int(bs, 0, 4);
+		gf_bs_write_int(bs, pctx->linf[i].layer_id_plus_one - 1, 6);
+		gf_bs_write_int(bs, pctx->linf[i].min_temporal_id, 3);
+		gf_bs_write_int(bs, pctx->linf[i].max_temporal_id, 3);
+		gf_bs_write_int(bs, 0, 1);
+		gf_bs_write_int(bs, 0xFF, 7);
+
+	}
+	gf_bs_get_content(bs, &data, &data_size);
+	gf_bs_del(bs);
+	gf_filter_pid_set_info_str(pctx->opid, "hevc:linf", &PROP_DATA_NO_COPY(data, data_size) );
 }
 
 static GF_Err nalu_process(BSAggCtx *ctx, BSAggOut *pctx, u32 codec_type)
@@ -486,6 +534,7 @@ static GF_Err nalu_process(BSAggCtx *ctx, BSAggOut *pctx, u32 codec_type)
 		}
 	}
 	if (nb_done==count) {
+		bsagg_set_linf(pctx);
 		gf_filter_pid_set_eos(pctx->opid);
 		return GF_EOS;
 	}
@@ -679,7 +728,7 @@ static GF_Err nalu_process(BSAggCtx *ctx, BSAggOut *pctx, u32 codec_type)
 				e = GF_OUT_OF_MEM;
 				break;
 			}
-			gf_filter_pck_merge_properties(pck, pctx->pck);
+			gf_filter_pck_merge_properties_filter(pck, pctx->pck, bsagg_filter_prop, ctx);
 		}
 		//drop packet
 		gf_filter_pid_drop_packet(pid);
@@ -696,7 +745,16 @@ static GF_Err nalu_process(BSAggCtx *ctx, BSAggOut *pctx, u32 codec_type)
 	for (u32 j=0; j<nal_count; j++) {
 		NALStore *ns = gf_list_get(pctx->nal_stores, j);
 		if (!ns->size) continue;
+		if (ns->lid<64) {
+			LHVCLayerInfo *linf = &pctx->linf[ns->lid];
 
+			linf->layer_id_plus_one = ns->lid + 1;
+			if (!linf->min_temporal_id || (linf->min_temporal_id > ns->tid))
+				linf->min_temporal_id = ns->tid;
+
+			if (linf->max_temporal_id < ns->tid)
+				linf->max_temporal_id = ns->tid;
+		}
 		memcpy(output, ns->data, ns->size);
 		output+= ns->size;
 		ns->size = 0;
@@ -729,7 +787,7 @@ static Bool bs_agg_is_base(BSAggOut *pctx, u32 codec_id, u32 dep_id, u32 rec_lev
 		const GF_PropertyValue *p = gf_filter_pid_get_property(ipid, GF_PROP_PID_ID);
 		if (p && (p->value.uint==dep_id)) return GF_TRUE;
 		p = gf_filter_pid_get_property(ipid, GF_PROP_PID_DEPENDENCY_ID);
-		if (!p || !p->value.uint) continue;;
+		if (!p || !p->value.uint) continue;
 
 		if (bs_agg_is_base(pctx, codec_id, p->value.uint, rec_level+1))
 			return GF_TRUE;
@@ -814,14 +872,12 @@ static GF_Err bs_agg_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is
 		pctx->rewrite_pid_config = avc_rewrite_pid_config;
 		pctx->agg_process = avc_process;
 		break;
-#ifndef GPAC_DISABLE_HEVC
 	case GF_CODECID_HEVC:
 	case GF_CODECID_LHVC:
 		codec_id = GF_CODECID_HEVC;
 		pctx->rewrite_pid_config = vvc_hevc_rewrite_pid_config;
 		pctx->agg_process = hevc_process;
 		break;
-#endif
 	case GF_CODECID_VVC:
 		pctx->rewrite_pid_config = vvc_hevc_rewrite_pid_config;
 		pctx->agg_process = vvc_process;
@@ -905,7 +961,7 @@ static const GF_FilterCapability BSAggCaps[] =
 
 GF_FilterRegister BSAggRegister = {
 	.name = "bsagg",
-	GF_FS_SET_DESCRIPTION("Compressed layered bitstream aggregator")
+	GF_FS_SET_DESCRIPTION("Layered bitstream aggregator")
 	GF_FS_SET_HELP("This filter aggregates layers and sublayers into a single output PID.\n"
 	"\n"
 	"The filter supports AVC|H264, HEVC and VVC stream reconstruction, and is passthrough for other codec types.\n"
@@ -925,10 +981,17 @@ GF_FilterRegister BSAggRegister = {
 	.initialize = bs_agg_initialize,
 	.finalize = bs_agg_finalize,
 	.configure_pid = bs_agg_configure_pid,
-	.process = bs_agg_process
+	.process = bs_agg_process,
+	.hint_class_type = GF_FS_CLASS_STREAM
 };
 
-const GF_FilterRegister *bs_agg_register(GF_FilterSession *session)
+const GF_FilterRegister *bsagg_register(GF_FilterSession *session)
 {
 	return (const GF_FilterRegister *) &BSAggRegister;
 }
+#else
+const GF_FilterRegister *bsagg_register(GF_FilterSession *session)
+{
+	return NULL;
+}
+#endif

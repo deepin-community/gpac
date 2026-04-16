@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2005-2022
+ *			Copyright (c) Telecom ParisTech 2005-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / AVI demuxer filter
@@ -81,6 +81,7 @@ static void avidmx_setup(GF_Filter *filter, GF_AVIDmxCtx *ctx)
 	if (ctx->use_file_fps) {
 		Double fps = AVI_frame_rate(ctx->avi);
 		gf_media_get_video_timing(fps, &ctx->fps.num, &ctx->fps.den);
+		if (!ctx->fps.num) ctx->fps.num = ctx->fps.den = 1000;
 	}
 
 	dur.den = ctx->fps.num;
@@ -278,12 +279,15 @@ static void avidmx_setup(GF_Filter *filter, GF_AVIDmxCtx *ctx)
 			st->audio_done = GF_FALSE;
 
 			if (codecid==GF_CODECID_MPEG_AUDIO) {
-				u32 cid;
+				u32 cid=0;
 				char data[8];
 				AVI_set_audio_track(ctx->avi, i);
-				AVI_read_audio(ctx->avi, data, 8, (int*)&cid);
-				u32 hdr = GF_4CC(data[0], data[1], data[2], data[3]);
-				cid = gf_mp3_object_type_indication(hdr);
+				if (AVI_read_audio(ctx->avi, data, 8, (int*)&cid)) {
+#ifndef GPAC_DISABLE_AV_PARSERS
+					u32 hdr = GF_4CC(data[0], data[1], data[2], data[3]);
+					cid = gf_mp3_object_type_indication(hdr);
+#endif
+				}
 				AVI_set_audio_position(ctx->avi, 0);
 				if (cid) codecid = cid;
 			}
@@ -549,7 +553,7 @@ GF_Err avidmx_process(GF_Filter *filter)
 			ctx->video_done = GF_TRUE;
 		}
 	}
-	
+
 	nb_done = 0;
 	count = gf_list_count(ctx->audios);
 	for (i=0; i<count; i++) {
@@ -594,7 +598,7 @@ restart:
 			u64 file_offset;
 			GF_FilterPacket *dst_pck = gf_filter_pck_new_alloc(st->opid, size, &pck_data);
 			if (!dst_pck) return GF_OUT_OF_MEM;
-			
+
 			file_offset = gf_ftell(ctx->avi->fdes);
 			AVI_read_audio(ctx->avi, pck_data, size, (int*)&continuous);
 
@@ -602,7 +606,7 @@ restart:
 				pc = (u32) ( file_offset * 100  / ctx->file_size);
 			}
 
-			if (st->audio_bps) {
+			if (st->audio_bps && st->nb_channels && (size < GF_INT_MAX/8)) {
 				u32 nb_samples = (8*size) / (st->audio_bps * st->nb_channels);
 				gf_filter_pck_set_cts(dst_pck, st->audio_ts);
 				gf_filter_pck_set_sap(dst_pck, GF_FILTER_SAP_1);
@@ -630,7 +634,7 @@ restart:
 	if (gf_filter_reporting_enabled(filter)) {
 		char szStatus[1024];
 		u32 v_pc=0;
-		if (ctx->v_in_use) {
+		if (ctx->v_in_use && ctx->nb_frames) {
 			v_pc = ctx->cur_frame * 100;
 			v_pc /= ctx->nb_frames;
 		}
@@ -698,6 +702,8 @@ static const GF_FilterCapability AVIDmxCaps[] =
 	CAP_UINT(GF_CAPS_INPUT, GF_PROP_PID_STREAM_TYPE, GF_STREAM_FILE),
 	CAP_STRING(GF_CAPS_INPUT, GF_PROP_PID_FILE_EXT, "avi"),
 	CAP_STRING(GF_CAPS_INPUT, GF_PROP_PID_MIME, "video/avi|video/x-avi"),
+	//we need a file for this demuxer
+	CAP_STRING(GF_CAPS_INPUT, GF_PROP_PID_FILEPATH, "*"),
 	CAP_UINT(GF_CAPS_OUTPUT, GF_PROP_PID_STREAM_TYPE, GF_STREAM_AUDIO),
 	CAP_UINT(GF_CAPS_OUTPUT, GF_PROP_PID_STREAM_TYPE, GF_STREAM_VISUAL),
 };
@@ -718,6 +724,7 @@ GF_FilterRegister AVIDmxRegister = {
 	GF_FS_SET_DESCRIPTION("AVI demultiplexer")
 	GF_FS_SET_HELP("This filter demultiplexes AVI files to produce media PIDs and frames.")
 	.private_size = sizeof(GF_AVIDmxCtx),
+	.flags = GF_FS_REG_USE_SYNC_READ,
 	.initialize = avidmx_initialize,
 	.finalize = avidmx_finalize,
 	.args = AVIDmxArgs,
@@ -726,6 +733,7 @@ GF_FilterRegister AVIDmxRegister = {
 	.process = avidmx_process,
 	.process_event = avidmx_process_event,
 	.probe_data = avidmx_probe_data,
+	.hint_class_type = GF_FS_CLASS_DEMULTIPLEXER
 };
 
 #endif // GPAC_DISABLE_AVILIB
@@ -738,4 +746,3 @@ const GF_FilterRegister *avidmx_register(GF_FilterSession *session)
 	return NULL;
 #endif
 }
-

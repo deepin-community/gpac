@@ -75,7 +75,7 @@ void rtpin_rtsp_process_commands(GF_RTPInRTSP *sess)
 			sess->command_time = 0;
 		} else {
 			u32 time_out = gf_opts_get_int("core", "req-timeout");
-			if (!time_out) time_out = 10000;
+			if (!time_out) return;
 
 			/*evaluate timeout*/
 			time = gf_sys_clock() - sess->command_time;
@@ -109,7 +109,7 @@ void rtpin_rtsp_process_commands(GF_RTPInRTSP *sess)
 
 #ifdef GPAC_HAS_SSL
 				if (gf_rtsp_session_needs_ssl(sess->session) ) {
-					gf_rtsp_set_ssl_ctx(sess->session, gf_dm_ssl_init(sess->rtpin->dm, 0) );
+					gf_rtsp_set_ssl_ctx(sess->session, gf_dm_ssl_init(sess->rtpin->dm, GF_TRUE) );
 				}
 #endif
 				return;
@@ -226,6 +226,8 @@ GF_RTPInRTSP *rtpin_rtsp_check(GF_RTPIn *rtp, char *control)
 	if (!control) return NULL;
 
 	if (!strcmp(control, "*")) control = (char *) rtp->src;
+	if (!control) return NULL;
+
 	if (gf_rtsp_is_my_session(rtp->session->session, control)) return rtp->session;
 	return NULL;
 }
@@ -257,6 +259,7 @@ GF_RTPInRTSP *rtpin_rtsp_new(GF_RTPIn *rtp, char *session_control)
 	gf_free(szCtrl);
 
 	if (!rtsp) return NULL;
+	gf_rtsp_session_set_netcap_id(rtsp, gf_filter_get_netcap_id(rtp->filter));
 
 	GF_SAFEALLOC(tmp, GF_RTPInRTSP);
 	if (!tmp) return NULL;
@@ -344,8 +347,11 @@ GF_Err rtpin_add_stream(GF_RTPIn *rtp, GF_RTPInStream *stream, char *session_con
 		if (has_aggregated_control)
 			in_session->flags |= RTSP_AGG_CONTROL;
 	} else if (stream->control) {
+		GF_LOG(GF_LOG_ERROR, GF_LOG_RTP, ("[RTSP] Cannot locate session by control string %s\n", stream->control));
 		gf_free(stream->control);
 		stream->control = NULL;
+		stream->status = RTP_Unavailable;
+		return GF_NON_COMPLIANT_BITSTREAM;
 	}
 	stream->rtsp = in_session;
 	gf_list_add(rtp->streams, stream);

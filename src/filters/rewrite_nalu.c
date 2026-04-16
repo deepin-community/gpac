@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2017-2022
+ *			Copyright (c) Telecom ParisTech 2017-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / NALU video AnnexB write filter
@@ -28,6 +28,8 @@
 #include <gpac/bitstream.h>
 #include <gpac/internal/media_dev.h>
 
+#ifndef GPAC_DISABLE_UFNALU
+
 enum
 {
 	UFNAL_AVC,
@@ -38,8 +40,8 @@ enum
 typedef struct
 {
 	//opts
-	Bool rcfg, delim, pps_inband;
-	u32 extract;
+	Bool rcfg, pps_inband;
+	u32 extract, delim;
 
 	//only one input pid declared
 	GF_FilterPid *ipid;
@@ -55,6 +57,12 @@ typedef struct
 	GF_BitStream *bs_w, *bs_r;
 	u32 nb_nalu, nb_nalu_in_hdr, nb_nalu_in_hdr_non_rap;
 	u32 width, height;
+
+#ifndef GPAC_DISABLE_AV_PARSERS
+	HEVCState *hevc_state;
+	VVCState *vvc_state;
+#endif
+	Bool passthrough;
 } GF_NALUMxCtx;
 
 
@@ -71,6 +79,17 @@ static void nalumx_write_ps_list(GF_NALUMxCtx *ctx, GF_BitStream *bs, GF_List *l
 			ctx->nb_nalu_in_hdr_non_rap++;
 		else
 			ctx->nb_nalu_in_hdr++;
+
+#ifndef GPAC_DISABLE_AV_PARSERS
+		if (ctx->vtype==UFNAL_HEVC) {
+			u8 nut, tid, lid;
+			gf_hevc_parse_nalu(sl->data, sl->size, ctx->hevc_state, &nut, &tid, &lid);
+		}
+		else if (ctx->vtype==UFNAL_VVC) {
+			u8 nut, tid, lid;
+			gf_vvc_parse_nalu(sl->data, sl->size, ctx->vvc_state, &nut, &tid, &lid);
+		}
+#endif
 	}
 }
 
@@ -103,16 +122,39 @@ static GF_Err nalumx_make_inband_header(GF_NALUMxCtx *ctx, char *dsi, u32 dsi_le
 	GF_VVCConfig *vvcc = NULL;
 	GF_VVCConfig *s_vvcc = NULL;
 
+#ifndef GPAC_DISABLE_AV_PARSERS
+	if (ctx->hevc_state) {
+		gf_free(ctx->hevc_state);
+		ctx->hevc_state = NULL;
+	}
+	if (ctx->vvc_state) {
+		gf_free(ctx->vvc_state);
+		ctx->vvc_state = NULL;
+	}
+#endif
+
 	if (ctx->vtype==UFNAL_HEVC) {
 		if (dsi) hvcc = gf_odf_hevc_cfg_read(dsi, dsi_len, GF_FALSE);
 		if (dsi_enh) lvcc = gf_odf_hevc_cfg_read(dsi_enh, dsi_enh_len, GF_TRUE);
 		if (!hvcc && !lvcc) return GF_NON_COMPLIANT_BITSTREAM;
 		ctx->nal_hdr_size = hvcc ? hvcc->nal_unit_size : lvcc->nal_unit_size;
+
+#ifndef GPAC_DISABLE_AV_PARSERS
+		if (hvcc) {
+			GF_SAFEALLOC(ctx->hevc_state, HEVCState);
+		}
+#endif
 	} else if (ctx->vtype==UFNAL_VVC) {
 		if (dsi) vvcc = gf_odf_vvc_cfg_read(dsi, dsi_len);
 		if (dsi_enh) s_vvcc = gf_odf_vvc_cfg_read(dsi_enh, dsi_enh_len);
 		if (!vvcc && !s_vvcc) return GF_NON_COMPLIANT_BITSTREAM;
 		ctx->nal_hdr_size = vvcc ? vvcc->nal_unit_size : s_vvcc->nal_unit_size;
+
+#ifndef GPAC_DISABLE_AV_PARSERS
+		if (vvcc) {
+			GF_SAFEALLOC(ctx->vvc_state, VVCState);
+		}
+#endif
 	} else {
 		if (dsi) avcc = gf_odf_avc_cfg_read(dsi, dsi_len);
 		if (dsi_enh) svcc = gf_odf_avc_cfg_read(dsi_enh, dsi_enh_len);
@@ -229,6 +271,9 @@ GF_Err nalumx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remove
 	}
 	ctx->crc = crc;
 	ctx->crc_enh = crc_enh;
+	ctx->passthrough = GF_FALSE;
+	p =  gf_filter_pid_get_property_str(pid, "nodata");
+	if (p && p->value.boolean) ctx->passthrough = GF_TRUE;
 
 	if ((codecid==GF_CODECID_HEVC) || (codecid==GF_CODECID_LHVC)) {
 		ctx->vtype = UFNAL_HEVC;
@@ -265,8 +310,9 @@ GF_Err nalumx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remove
 }
 
 
-static Bool nalumx_is_nal_skip(GF_NALUMxCtx *ctx, u8 *data, u32 pos, Bool *has_nal_delim, u32 *out_temporal_id, u32 *out_layer_id, u8 *avc_hdr)
+static Bool nalumx_is_nal_skip(GF_NALUMxCtx *ctx, u8 *data, u32 pos, u32 nal_size, Bool *has_nal_delim, u32 *out_temporal_id, u32 *out_layer_id, u8 *avc_hdr, u32 *delim_flags, Bool *is_sap)
 {
+	*is_sap = GF_FALSE;
 	Bool is_layer = GF_FALSE;
 	if (ctx->vtype==UFNAL_HEVC) {
 		u8 nal_type = (data[pos] & 0x7E) >> 1;
@@ -285,6 +331,24 @@ static Bool nalumx_is_nal_skip(GF_NALUMxCtx *ctx, u8 *data, u32 pos, Bool *has_n
 			break;
 		default:
 			if (layer_id) is_layer = GF_TRUE;
+#ifndef GPAC_DISABLE_AV_PARSERS
+			if (nal_size && (*delim_flags != 3) && (nal_type<=GF_HEVC_NALU_SLICE_CRA) && ctx->hevc_state) {
+				u8 nut, tid, lid;
+				s32 ret = gf_hevc_parse_nalu(data+pos, nal_size, ctx->hevc_state, &nut, &tid, &lid);
+				if (ret) break;
+				u32 flags=0;
+
+				switch (ctx->hevc_state->s_info.slice_type) {
+				case GF_HEVC_SLICE_TYPE_P: flags|=1; break;
+				case GF_HEVC_SLICE_TYPE_B: flags|=2; break;
+				case GF_HEVC_SLICE_TYPE_I: break;
+				}
+				*delim_flags |= flags;
+			}
+#endif
+			if ((nal_type>=GF_HEVC_NALU_SLICE_BLA_W_LP) && (nal_type<=GF_HEVC_NALU_SLICE_CRA))
+				*is_sap = GF_TRUE;
+
 			break;
 		}
 	} else if (ctx->vtype==UFNAL_VVC) {
@@ -302,6 +366,23 @@ static Bool nalumx_is_nal_skip(GF_NALUMxCtx *ctx, u8 *data, u32 pos, Bool *has_n
 			break;
 		default:
 			if (layer_id) is_layer = GF_TRUE;
+#ifndef GPAC_DISABLE_AV_PARSERS
+			if (nal_size && (*delim_flags != 3) && (nal_type<=GF_VVC_NALU_SLICE_GDR)) {
+				u8 nut, tid, lid;
+				gf_vvc_parse_nalu(data+pos, nal_size, ctx->vvc_state, &nut, &tid, &lid);
+				u32 flags=0;
+
+				switch (ctx->vvc_state->s_info.slice_type) {
+				case GF_VVC_SLICE_TYPE_P: flags|=1; break;
+				case GF_VVC_SLICE_TYPE_B: flags|=2; break;
+				case GF_VVC_SLICE_TYPE_I: break;
+				}
+				*delim_flags |= flags;
+			}
+#endif
+			if ((nal_type>=GF_VVC_NALU_SLICE_IDR_W_RADL) && (nal_type<GF_VVC_NALU_SLICE_GDR))
+				*is_sap = GF_TRUE;
+
 			break;
 		}
 	} else {
@@ -319,6 +400,9 @@ static Bool nalumx_is_nal_skip(GF_NALUMxCtx *ctx, u8 *data, u32 pos, Bool *has_n
 		case GF_AVC_NALU_ACCESS_UNIT:
 			*has_nal_delim = GF_TRUE;
 			break;
+		case GF_AVC_NALU_IDR_SLICE:
+			*is_sap = GF_TRUE;
+			//fallthrough
 		default:
 			if (! (*avc_hdr))
 				(*avc_hdr) = data[pos];
@@ -338,9 +422,11 @@ GF_Err nalumx_process(GF_Filter *filter)
 	u32 pck_size, size, sap=0, temporal_id, layer_id;
 	u8 avc_hdr;
 	u8 *dsi_buf = NULL;
-	u32 dsi_buf_size = 0, dsi_nb_nal = 0;
+	u32 dsi_buf_size = 0, dsi_nb_nal = 0, delim_flags=0;
 
 	Bool has_nalu_delim = GF_FALSE;
+
+	if (ctx->delim==2) delim_flags = 3;
 
 	pck = gf_filter_pid_get_packet(ctx->ipid);
 	if (!pck) {
@@ -357,6 +443,11 @@ GF_Err nalumx_process(GF_Filter *filter)
 			gf_filter_pid_set_eos(ctx->opid);
 			return GF_EOS;
 		}
+		return GF_OK;
+	}
+	if (ctx->passthrough) {
+		gf_filter_pck_forward(pck, ctx->opid);
+		gf_filter_pid_drop_packet(ctx->ipid);
 		return GF_OK;
 	}
 
@@ -382,9 +473,18 @@ GF_Err nalumx_process(GF_Filter *filter)
 	temporal_id = layer_id = 0;
 	avc_hdr = 0;
 
+#ifndef GPAC_DISABLE_AV_PARSERS
+	if (ctx->hevc_state) ctx->hevc_state->s_info.slice_type = 0;
+	if (ctx->vvc_state) ctx->vvc_state->s_info.slice_type = 0;
+#endif
+
+	u32 nb_nalsize_zero=0;
+	Bool has_sap = GF_FALSE;
+
 	while (gf_bs_available((ctx->bs_r))) {
 		Bool skip_nal = GF_FALSE;
 		Bool is_nalu_delim = GF_FALSE;
+		Bool is_sap = GF_FALSE;
 		u32 pos;
 		u32 nal_size = gf_bs_read_int(ctx->bs_r, 8*ctx->nal_hdr_size);
 		if (nal_size > gf_bs_available(ctx->bs_r) ) {
@@ -392,11 +492,19 @@ GF_Err nalumx_process(GF_Filter *filter)
 			return GF_NON_COMPLIANT_BITSTREAM;
 		}
 		//we allow nal_size=0 for incomplete files, abort as soon as we see one to avoid parsing thousands of 0 bytes
-		if (!nal_size) break;
+		if (!nal_size) {
+			if (nb_nalsize_zero) break;
+			nb_nalsize_zero++;
+		} else {
+			nb_nalsize_zero=0;
+		}
+
+		if (!gf_bs_available(ctx->bs_r))
+			break;
 
 		pos = (u32) gf_bs_get_position(ctx->bs_r);
 		//even if not filtering, parse to check for AU delim
-		skip_nal = nalumx_is_nal_skip(ctx, data, pos, &is_nalu_delim, &layer_id, &temporal_id, &avc_hdr);
+		skip_nal = nalumx_is_nal_skip(ctx, data, pos, nal_size, &is_nalu_delim, &layer_id, &temporal_id, &avc_hdr, &delim_flags, &is_sap);
 		if (!ctx->extract) {
 			skip_nal = GF_FALSE;
 		}
@@ -409,6 +517,7 @@ GF_Err nalumx_process(GF_Filter *filter)
 			size += nal_size + 4;
 		}
 		gf_bs_skip_bytes(ctx->bs_r, nal_size);
+		if (is_sap) has_sap = GF_TRUE;
 	}
 	gf_bs_seek(ctx->bs_r, 0);
 
@@ -433,7 +542,8 @@ GF_Err nalumx_process(GF_Filter *filter)
 		if (sap && (sap <= GF_FILTER_SAP_3) ) {
 			insert_dsi = GF_TRUE;
 		}
-		if (!insert_dsi) {
+		//have only limited trust in dependency flags , some streams always use dependsOn=2 which would inject SPS/PPS at each frame
+		if (!insert_dsi && has_sap) {
 			u8 flags = gf_filter_pck_get_dependency_flags(pck);
 			//get dependsOn
 			if (flags) {
@@ -463,22 +573,23 @@ GF_Err nalumx_process(GF_Filter *filter)
 
 	// nalu delimiter is not present, write it first
 	if (!has_nalu_delim) {
+		//move from flags to final value 0: I only, 1: I,P, 2: I,P or B
+		if (delim_flags==3) delim_flags = 2;
+
 		gf_bs_write_u32(ctx->bs_w, 1);
 		if (ctx->vtype==UFNAL_HEVC) {
 			if (!layer_id)
 				layer_id=1;
 			if (!temporal_id)
 				temporal_id=1;
-#ifndef GPAC_DISABLE_HEVC
 			gf_bs_write_int(ctx->bs_w, 0, 1);
 			gf_bs_write_int(ctx->bs_w, GF_HEVC_NALU_ACCESS_UNIT, 6);
 			gf_bs_write_int(ctx->bs_w, layer_id-1, 6);
 			gf_bs_write_int(ctx->bs_w, temporal_id, 3);
-			/*pic-type - by default we signal all slice types possible*/
-			gf_bs_write_int(ctx->bs_w, 2, 3);
+			/*pic-type*/
+			gf_bs_write_int(ctx->bs_w, delim_flags, 3);
 			gf_bs_write_int(ctx->bs_w, 1, 1); //stop bit
 			gf_bs_write_int(ctx->bs_w, 0, 4); //4 bits to 0
-#endif
 		} else if (ctx->vtype==UFNAL_VVC) {
 			gf_bs_write_int(ctx->bs_w, 0, 1);
 			gf_bs_write_int(ctx->bs_w, 0, 1);
@@ -486,8 +597,8 @@ GF_Err nalumx_process(GF_Filter *filter)
 			gf_bs_write_int(ctx->bs_w, GF_VVC_NALU_ACCESS_UNIT, 5);
 			gf_bs_write_int(ctx->bs_w, temporal_id+1, 3);
 			gf_bs_write_int(ctx->bs_w, sap ? 1 : 0, 1);
-			/*pic-type - by default we signal all slice types possible*/
-			gf_bs_write_int(ctx->bs_w, 2, 3);
+			/*pic-type*/
+			gf_bs_write_int(ctx->bs_w, delim_flags, 3);
 
 			gf_bs_write_int(ctx->bs_w, 1, 1); //stop bit
 			gf_bs_write_int(ctx->bs_w, 0, 3); //3 bits to 0
@@ -510,7 +621,7 @@ GF_Err nalumx_process(GF_Filter *filter)
 		pos = (u32) gf_bs_get_position(ctx->bs_r);
 		if (!nal_size) continue;
 
-		skip_nal = nalumx_is_nal_skip(ctx, data, pos, &is_nalu_delim, &layer_id, &temporal_id, &avc_hdr);
+		skip_nal = nalumx_is_nal_skip(ctx, data, pos, 0, &is_nalu_delim, &layer_id, &temporal_id, &avc_hdr, NULL, &has_sap);
 		if (!ctx->extract) {
 			skip_nal = GF_FALSE;
 		}
@@ -554,13 +665,26 @@ GF_Err nalumx_process(GF_Filter *filter)
 	if (gf_filter_reporting_enabled(filter)) {
 		char szStatus[1024];
 
-		sprintf(szStatus, "%s Annex-B %dx%d % 10d NALU", (ctx->vtype==UFNAL_HEVC) ? "HEVC" : ((ctx->vtype==UFNAL_VVC) ? "VVC" : "AVC|H264"), ctx->width, ctx->height, ctx->nb_nalu);
+		snprintf(szStatus, sizeof(szStatus), "%s Annex-B %dx%d % 10d NALU", (ctx->vtype==UFNAL_HEVC) ? "HEVC" : ((ctx->vtype==UFNAL_VVC) ? "VVC" : "AVC|H264"), ctx->width, ctx->height, ctx->nb_nalu);
 		gf_filter_update_status(filter, -1, szStatus);
 
 	}
 	return GF_OK;
 }
 
+static GF_Err nalumx_initialize(GF_Filter *filter)
+{
+	GF_NALUMxCtx *ctx = gf_filter_get_udta(filter);
+#ifdef GPAC_DISABLE_AV_PARSERS
+	if (ctx->delim)
+		ctx->delim=2;
+	else
+#endif
+	if (ctx->delim && gf_sys_old_arch_compat())
+		ctx->delim = 2;
+
+	return GF_OK;
+}
 static void nalumx_finalize(GF_Filter *filter)
 {
 	GF_NALUMxCtx *ctx = gf_filter_get_udta(filter);
@@ -568,6 +692,10 @@ static void nalumx_finalize(GF_Filter *filter)
 	if (ctx->bs_w) gf_bs_del(ctx->bs_w);
 	if (ctx->dsi) gf_free(ctx->dsi);
 	if (ctx->dsi_non_rap) gf_free(ctx->dsi_non_rap);
+#ifndef GPAC_DISABLE_AV_PARSERS
+	if (ctx->hevc_state) gf_free(ctx->hevc_state);
+	if (ctx->vvc_state) gf_free(ctx->vvc_state);
+#endif
 }
 
 static const GF_FilterCapability NALUMxCaps[] =
@@ -629,18 +757,26 @@ static const GF_FilterArgs NALUMxArgs[] =
 
 GF_FilterRegister NALUMxRegister = {
 	.name = "ufnalu",
-	GF_FS_SET_DESCRIPTION("AVC/HEVC to AnnexB writer")
+	GF_FS_SET_DESCRIPTION("AVC/HEVC to AnnexB rewriter")
 	GF_FS_SET_HELP("This filter converts AVC|H264 and HEVC streams into AnnexB format, with inband parameter sets and start codes.")
 	.private_size = sizeof(GF_NALUMxCtx),
 	.args = NALUMxArgs,
 	.finalize = nalumx_finalize,
+	.initialize = nalumx_initialize,
 	SETCAPS(NALUMxCaps),
 	.configure_pid = nalumx_configure_pid,
-	.process = nalumx_process
+	.process = nalumx_process,
+	.hint_class_type = GF_FS_CLASS_FRAMING
 };
 
 
-const GF_FilterRegister *nalumx_register(GF_FilterSession *session)
+const GF_FilterRegister *ufnalu_register(GF_FilterSession *session)
 {
 	return &NALUMxRegister;
 }
+#else
+const GF_FilterRegister *ufnalu_register(GF_FilterSession *session)
+{
+	return NULL;
+}
+#endif //#ifndef GPAC_DISABLE_UFNALU

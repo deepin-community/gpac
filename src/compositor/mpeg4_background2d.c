@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -29,7 +29,7 @@
 #include "texturing.h"
 #include "nodes_stacks.h"
 
-#ifndef GPAC_DISABLE_VRML
+#if !defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_COMPOSITOR)
 
 
 #define B2D_PLANE_HSIZE		FLT2FIX(0.5025f)
@@ -343,8 +343,8 @@ static void TraverseBackground2D(GF_Node *node, void *rs, Bool is_destroy)
 		M_Background2D *top_bck;
 
 		gf_list_add(tr_state->backgrounds, node);
-		assert(gf_list_find(stack->reg_stacks, tr_state->backgrounds)==-1);
-		gf_list_add(stack->reg_stacks, tr_state->backgrounds);
+		if (gf_list_find(stack->reg_stacks, tr_state->backgrounds)<0)
+			gf_list_add(stack->reg_stacks, tr_state->backgrounds);
 		b2D_new_status(stack, bck);
 
 		/*only bound if we're on top*/
@@ -525,4 +525,5 @@ Bool compositor_background_transparent(GF_Node *node)
 #endif
 
 
-#endif /*GPAC_DISABLE_VRML*/
+#endif //!defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_COMPOSITOR)
+

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -26,7 +26,7 @@
 
 #include "nodes_stacks.h"
 
-#ifndef GPAC_DISABLE_VRML
+#if !defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_COMPOSITOR)
 
 
 static void audioclip_activate(AudioClipStack *st, M_AudioClip *ac)
@@ -464,7 +464,7 @@ static u8 *audiobuffer_fetch_frame(void *callback, u32 *size, u32 *planar_stride
 			written = gf_mixer_get_output(st->am, st->buffer + st->write_pos, st->buffer_size - st->write_pos, 0);
 			if (!written) break;
 			st->write_pos += written;
-			assert(st->write_pos<=st->buffer_size);
+			gf_fatal_assert(st->write_pos<=st->buffer_size);
 		}
 	}
 	/*not playing*/
@@ -477,7 +477,7 @@ static void audiobuffer_release_frame(void *callback, u32 nb_bytes)
 {
 	AudioBufferStack *st = (AudioBufferStack *) gf_node_get_private( ((GF_AudioInput *) callback)->owner);
 	st->read_pos += nb_bytes;
-	assert(st->read_pos<=st->write_pos);
+	gf_fatal_assert(st->read_pos<=st->write_pos);
 	if (st->read_pos==st->write_pos) {
 		if (st->write_pos<st->buffer_size) {
 			/*reading faster than buffering - let's still attempt to fill the buffer*/
@@ -541,9 +541,11 @@ static Bool audiobuffer_get_config(GF_AudioInterface *aifc, Bool for_reconf)
 			aifc->afmt = GF_AUDIO_FMT_S16;
 			break;
 		case GF_AUDIO_FMT_S24P:
+		case GF_AUDIO_FMT_S24_BE:
 			aifc->afmt = GF_AUDIO_FMT_S24;
 			break;
 		case GF_AUDIO_FMT_S32P:
+		case GF_AUDIO_FMT_S32_BE:
 			aifc->afmt = GF_AUDIO_FMT_S32;
 			break;
 		case GF_AUDIO_FMT_FLTP:
@@ -560,7 +562,7 @@ static Bool audiobuffer_get_config(GF_AudioInterface *aifc, Bool for_reconf)
 			gf_mixer_set_config(st->am, aifc->samplerate, aifc->chan, aifc->afmt, aifc->ch_layout);
 		}
 		st->is_init = (aifc->samplerate && aifc->chan && aifc->afmt) ? GF_TRUE : GF_FALSE;
-		assert(st->is_init);
+		gf_assert(st->is_init);
 		if (!st->is_init) {
 			aifc->samplerate = aifc->chan = aifc->afmt = 0;
 			aifc->ch_layout = 0;
@@ -641,4 +643,5 @@ void compositor_audiobuffer_modified(GF_Node *node)
 		st->time_handle.needs_unregister = GF_FALSE;
 }
 
-#endif /*GPAC_DISABLE_VRML*/
+#endif //!defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_COMPOSITOR)
+

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2018-2022
+ *			Copyright (c) Telecom ParisTech 2018-2025
  *					All rights reserved
  *
  *  This file is part of GPAC / video output filter
@@ -29,7 +29,7 @@
 #include <gpac/modules/video_out.h>
 #include <gpac/color.h>
 
-#ifndef GPAC_DISABLE_PLAYER
+#ifndef GPAC_DISABLE_VOUT
 
 //#define GPAC_DISABLE_3D
 
@@ -41,9 +41,6 @@
 
 #define DEL_SHADER(_a) if (_a) { glDeleteShader(_a); _a = 0; }
 #define DEL_PROGRAM(_a) if (_a) { glDeleteProgram(_a); _a = 0; }
-
-
-#define TEXTURE_TYPE GL_TEXTURE_2D
 
 
 #if defined( _LP64 ) && defined(CONFIG_DARWIN_GL)
@@ -72,23 +69,21 @@ static char *default_glsl_vertex = "\
 
 #endif
 
-typedef enum
-{
+GF_OPT_ENUM (GF_VideoOutMode,
 	MODE_GL,
 	MODE_GL_PBO,
 	MODE_2D,
 	MODE_2D_SOFT,
-} GF_VideoOutMode;
+);
 
 
-enum
-{
+GF_OPT_ENUM (GF_VideoFlipMode,
 	FLIP_NO,
 	FLIP_VERT,
 	FLIP_HORIZ,
 	FLIP_BOTH,
 	FLIP_BOTH2,
-};
+);
 
 static u32 nb_vout_inst=0;
 
@@ -100,7 +95,8 @@ typedef struct
 	Bool vsync, linear, fullscreen, drop, hide, step, vjs, async;
 	GF_Fraction64 dur;
 	Double speed, hold;
-	u32 back, vflip, vrot;
+	u32 back, vrot;
+	GF_VideoFlipMode vflip; 
 	GF_PropVec2i wsize, owsize;
 	GF_PropVec2i wpos;
 	Double start;
@@ -108,6 +104,7 @@ typedef struct
 	GF_Fraction vdelay;
 	const char *out;
 	GF_PropUIntList dumpframes;
+	char *oltxt;
 
 	GF_PropVec4i olwnd;
 	GF_PropVec2i olsize;
@@ -140,7 +137,7 @@ typedef struct
 	//hold the frame until its CTS is reached, triggering drops at capture time
 	u32 raw_grab;
 	GF_DisplayOrientationType screen_orientation;
-	
+
 #ifdef VOUT_USE_OPENGL
 	GLint glsl_program;
 	GF_SHADERID vertex_shader;
@@ -149,6 +146,8 @@ typedef struct
 	GF_GLTextureWrapper tx;
 
 	GLuint overlay_tx;
+
+	GLuint vbo_vx, vbo_tx;
 #endif // VOUT_USE_OPENGL
 
 	u32 num_textures;
@@ -181,7 +180,8 @@ typedef struct
 	u64 rebuffer;
 
 	Bool force_reconfig_pid;
-	u32 pid_vflip, pid_vrot;
+	GF_VideoFlipMode pid_vflip;
+	u32 pid_vrot;
 	Bool too_slow;
 } GF_VideoOutCtx;
 
@@ -236,6 +236,11 @@ static void vout_reset_overlay(GF_Filter *filter, GF_VideoOutCtx *ctx)
 		}
 		glDeleteTextures(1, &ctx->overlay_tx);
 		ctx->overlay_tx = 0;
+
+		if (!ctx->pid) {
+			glClear(GL_COLOR_BUFFER_BIT);
+			ctx->video_out->Flush(ctx->video_out, NULL);
+		}
 		if (filter)
 			gf_filter_lock(filter, GF_FALSE);
 	}
@@ -260,8 +265,8 @@ static void vout_set_caption(GF_VideoOutCtx *ctx)
 		if (!strncmp(evt.caption.caption, "src=", 4)) evt.caption.caption += 4;
 		if (!strncmp(evt.caption.caption, "./", 2)) evt.caption.caption += 2;
 	}
-	char sep_c = gf_filter_get_sep(ctx->filter, GF_FS_SEP_ARGS);
-	char *sep = strchr(evt.caption.caption, sep_c);
+	char *sep = (char *)gf_filter_path_escape_colon(ctx->filter, evt.caption.caption);
+	char sep_c = sep ? sep[0] : 0;
 	if (sep) sep[0] = 0;
 	ctx->video_out->ProcessEvent(ctx->video_out, &evt);
 	if (sep) sep[0] = sep_c;
@@ -368,7 +373,7 @@ static GF_Err vout_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_r
 {
 	GF_Event evt;
 	const GF_PropertyValue *p;
-	u32 w, h, pfmt, stride, stride_uv, timescale, dw, dh, hw, hh;
+	u32 w, h, pfmt, stride, stride_uv, timescale, dw, dh;
 	Bool full_range, check_mx = GF_TRUE;
 	Bool sar_changed = GF_FALSE;
 	s32 cmx;
@@ -383,11 +388,11 @@ static GF_Err vout_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_r
 
 
 	if (is_remove) {
-		assert(ctx->pid==pid);
+		gf_assert(ctx->pid==pid);
 		ctx->pid=NULL;
 		return GF_OK;
 	}
-	assert(!ctx->pid || (ctx->pid==pid));
+	gf_assert(!ctx->pid || (ctx->pid==pid));
 	if (pid && !gf_filter_pid_check_caps(pid))
 		return GF_NOT_SUPPORTED;
 
@@ -411,7 +416,7 @@ static GF_Err vout_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_r
 
 	ctx->sar.num = ctx->sar.den = 1;
 	p = gf_filter_pid_get_property(pid, GF_PROP_PID_SAR);
-	if (p && p->value.frac.den && p->value.frac.num) {
+	if (p && p->value.frac.den && (p->value.frac.num>0)) {
 		if (ctx->sar.num * p->value.frac.den != p->value.frac.num * ctx->sar.den)
 			sar_changed = GF_TRUE;
 		ctx->sar = p->value.frac;
@@ -429,7 +434,7 @@ static GF_Err vout_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_r
 	if (p && p->value.uint) {
 		if (ctx->buffer < p->value.uint) ctx->buffer = p->value.uint;
 	}
-	
+
 	p = gf_filter_pid_get_property(pid, GF_PROP_PID_RAWGRAB);
 	ctx->raw_grab = p ? p->value.uint : 0;
 
@@ -456,7 +461,8 @@ static GF_Err vout_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_r
 	p = gf_filter_pid_get_property(pid, GF_PROP_PID_CLAP_Y);
 	if (p && p->value.frac.den) { ctx->c_y = (Float) p->value.frac.num; ctx->c_y /= p->value.frac.den; }
 
-	if (check_mx) {
+	//decompose matrix unless flip/rot are already set
+	if (check_mx && !ctx->pid_vflip && !ctx->pid_vrot) {
 		GF_Err gf_prop_matrix_decompose(const GF_PropertyValue *p, u32 *flip_mode, u32 *rot_mode);
 
 		p = gf_filter_pid_get_property(pid, GF_PROP_PID_ISOM_TRACK_MATRIX);
@@ -593,11 +599,6 @@ static GF_Err vout_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_r
 		ctx->dump_buffer = NULL;
 	}
 
-	hw = ctx->width/2;
-	if (ctx->width %2) hw++;
-	hh = ctx->height/2;
-	if (ctx->height %2) hh++;
-
 	ctx->is_yuv = GF_FALSE;
 	switch (ctx->pfmt) {
 	case GF_PIXEL_YUV444_10:
@@ -693,6 +694,7 @@ static GF_Err vout_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_r
 	case GF_PIXEL_XRGB:
 	case GF_PIXEL_XBGR:
 	case GF_PIXEL_RGBX:
+	case GF_PIXEL_RGB_332:
 	case GF_PIXEL_RGB_444:
 	case GF_PIXEL_RGB_555:
 	case GF_PIXEL_RGB_565:
@@ -718,6 +720,7 @@ static GF_Err vout_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_r
 	if (ctx->disp<MODE_2D) {
 		char *frag_shader_src = NULL;
 
+		vout_make_gl_current(ctx);
 		GL_CHECK_ERR()
 		ctx->glsl_program = glCreateProgram();
 		ctx->vertex_shader = glCreateShader(GL_VERTEX_SHADER);
@@ -767,12 +770,14 @@ static GF_Err vout_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_r
 		glViewport(0, 0, ctx->width, ctx->height);
 
 		glClear(GL_DEPTH_BUFFER_BIT);
-		glDisable(GL_NORMALIZE);
 		glDisable(GL_DEPTH_TEST);
+#ifndef GPAC_USE_GLES2
+		glDisable(GL_NORMALIZE);
 		glHint(GL_PERSPECTIVE_CORRECTION_HINT, GL_FASTEST);
 		glDisable(GL_LINE_SMOOTH);
 		glDisable(GL_LINE_SMOOTH);
 		glDisable(GL_LIGHTING);
+#endif
 		glDisable(GL_CULL_FACE);
 		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 		if (ctx->has_alpha) {
@@ -808,6 +813,17 @@ static GF_Err vout_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_r
 				ctx->num_textures = 1;
 			}
 			break;
+		}
+		u32 force_pf = ctx->pfmt;
+		if (ctx->is_yuv && ! (ctx->video_out->hw_caps & GF_VIDEO_HW_HAS_YUV)) {
+			force_pf = GF_PIXEL_RGB;
+		}
+		else if (gf_pixel_fmt_is_transparent(ctx->pfmt) && ! (ctx->video_out->hw_caps & GF_VIDEO_HW_HAS_RGBA)) {
+			force_pf = GF_PIXEL_RGB;
+		}
+		if (ctx->pfmt != force_pf) {
+			gf_filter_pid_negotiate_property(pid, GF_PROP_PID_PIXFMT, &PROP_UINT(force_pf) );
+			return GF_OK;
 		}
 	}
 	GF_LOG(GF_LOG_INFO, GF_LOG_MMIO, ("[VideoOut] Reconfig input wsize %d x %d, %d textures\n", ctx->width, ctx->height, ctx->num_textures));
@@ -945,6 +961,12 @@ static GF_Err vout_initialize(GF_Filter *filter)
 	if (!ctx->video_out)
 		ctx->video_out = (GF_VideoOutput *) gf_module_load(GF_VIDEO_OUTPUT_INTERFACE, ctx->drv);
 
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+	if (ctx->video_out) {
+		void gpac_force_step_mode(Bool for_display);
+		gpac_force_step_mode(GF_TRUE);
+	}
+#endif
 
 	if (ctx->dumpframes.nb_items) {
 		ctx->hide = GF_TRUE;
@@ -1052,6 +1074,10 @@ static void vout_finalize(GF_Filter *filter)
 	DEL_SHADER(ctx->fragment_shader);
 	DEL_PROGRAM(ctx->glsl_program );
 	gf_gl_txw_reset(&ctx->tx);
+
+	if (ctx->vbo_tx) glDeleteBuffers(1, &ctx->vbo_tx);
+	if (ctx->vbo_vx) glDeleteBuffers(1, &ctx->vbo_vx);
+
 #endif //VOUT_USE_OPENGL
 
 	/*stop and shutdown*/
@@ -1071,6 +1097,8 @@ static void vout_finalize(GF_Filter *filter)
 
 static void vout_draw_overlay(GF_VideoOutCtx *ctx)
 {
+	//todo add support for overlay in gles2 ?
+#ifndef GPAC_USE_GLES2
 	Float dw, dh, ox, oy;
 
 	dw = ((Float)ctx->olwnd.z) / 2;
@@ -1121,8 +1149,9 @@ static void vout_draw_overlay(GF_VideoOutCtx *ctx)
 	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
 
 	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(TEXTURE_TYPE, 0);
-	glDisable(TEXTURE_TYPE);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glDisable(GL_TEXTURE_2D);
+#endif
 }
 
 static void vout_draw_gl_quad(GF_VideoOutCtx *ctx, Bool flip_texture)
@@ -1134,92 +1163,107 @@ static void vout_draw_gl_quad(GF_VideoOutCtx *ctx, Bool flip_texture)
 
 	gf_gl_txw_bind(&ctx->tx, "maintx", ctx->glsl_program, 0);
 
-	dw = ((Float)ctx->dw) / 2;
-	dh = ((Float)ctx->dh) / 2;
+	if (!ctx->vbo_vx) {
+
+		dw = ((Float)ctx->dw) / 2;
+		dh = ((Float)ctx->dh) / 2;
 
 
-	GLfloat squareVertices[] = {
-		dw, dh,
-		dw, -dh,
-		-dw,  -dh,
-		-dw,  dh,
-	};
+		GLfloat squareVertices[] = {
+			dw, dh,
+			dw, -dh,
+			-dw,  -dh,
+			-dw,  dh,
+		};
 
-	GLfloat textureVertices[] = {
-		1.0f, 0.0f,
-		1.0f, 1.0f,
-		0.0f,  1.0f,
-		0.0f,  0.0f,
-	};
+		GLfloat textureVertices[] = {
+			1.0f, 0.0f,
+			1.0f, 1.0f,
+			0.0f,  1.0f,
+			0.0f,  0.0f,
+		};
 
-	if (flip_texture) {
-		textureVertices[1] = textureVertices[7] = 1.0f;
-		textureVertices[3] = textureVertices[5] = 0.0f;
-	}
-
-	switch (ctx->pid_vflip) {
-	case FLIP_VERT:
-		flip_v = GF_TRUE;
-		break;
-	case FLIP_HORIZ:
-		flip_h = GF_TRUE;
-		break;
-	case FLIP_BOTH:
-	case FLIP_BOTH2:
-		flip_v = GF_TRUE;
-		flip_h = GF_TRUE;
-		break;
-	}
-
-	u32 nb_rot=ctx->pid_vrot;
-	//camera grab and screen orientation is set, rotate video
-	if (ctx->raw_grab && ctx->screen_orientation) {
-		switch (ctx->screen_orientation) {
-		case GF_DISPLAY_MODE_LANDSCAPE_INV: nb_rot+=2; break;
-		case GF_DISPLAY_MODE_LANDSCAPE: break;
-		case GF_DISPLAY_MODE_PORTRAIT: nb_rot+=3; break;
-		case GF_DISPLAY_MODE_PORTRAIT_INV: nb_rot+=1; break;
-		default: break;
+		if (flip_texture) {
+			textureVertices[1] = textureVertices[7] = 1.0f;
+			textureVertices[3] = textureVertices[5] = 0.0f;
 		}
-		//front camera, flip along vertical (auto-mirror mode)
-		if (ctx->raw_grab == 2)
+
+		switch (ctx->pid_vflip) {
+		case FLIP_VERT:
 			flip_v = GF_TRUE;
-	}
+			break;
+		case FLIP_HORIZ:
+			flip_h = GF_TRUE;
+			break;
+		case FLIP_BOTH:
+		case FLIP_BOTH2:
+			flip_v = GF_TRUE;
+			flip_h = GF_TRUE;
+			break;
+		}
 
-	if (flip_h) {
-		GLfloat v = textureVertices[0];
-		textureVertices[0] = textureVertices[2] = textureVertices[4];
-		textureVertices[4] = textureVertices[6] = v;
-	}
-	if (flip_v) {
-		GLfloat v = textureVertices[1];
-		textureVertices[1] = textureVertices[7] = textureVertices[3];
-		textureVertices[3] = textureVertices[5] = v;
-	}
+		u32 nb_rot=ctx->pid_vrot;
+		//camera grab and screen orientation is set, rotate video
+		if (ctx->raw_grab && ctx->screen_orientation) {
+			switch (ctx->screen_orientation) {
+			case GF_DISPLAY_MODE_LANDSCAPE_INV: nb_rot+=2; break;
+			case GF_DISPLAY_MODE_LANDSCAPE: break;
+			case GF_DISPLAY_MODE_PORTRAIT: nb_rot+=3; break;
+			case GF_DISPLAY_MODE_PORTRAIT_INV: nb_rot+=1; break;
+			default: break;
+			}
+			//front camera, flip along vertical (auto-mirror mode)
+			if (ctx->raw_grab == 2)
+				flip_v = GF_TRUE;
+		}
 
-	for (i=0; i < nb_rot; i++)  {
-		GLfloat vx = textureVertices[0];
-		GLfloat vy = textureVertices[1];
+		if (flip_h) {
+			GLfloat v = textureVertices[0];
+			textureVertices[0] = textureVertices[2] = textureVertices[4];
+			textureVertices[4] = textureVertices[6] = v;
+		}
+		if (flip_v) {
+			GLfloat v = textureVertices[1];
+			textureVertices[1] = textureVertices[7] = textureVertices[3];
+			textureVertices[3] = textureVertices[5] = v;
+		}
 
-		textureVertices[0] = textureVertices[2];
-		textureVertices[1] = textureVertices[3];
-		textureVertices[2] = textureVertices[4];
-		textureVertices[3] = textureVertices[5];
-		textureVertices[4] = textureVertices[6];
-		textureVertices[5] = textureVertices[7];
-		textureVertices[6] = vx;
-		textureVertices[7] = vy;
+		for (i=0; i < nb_rot; i++)  {
+			GLfloat vx = textureVertices[0];
+			GLfloat vy = textureVertices[1];
+
+			textureVertices[0] = textureVertices[2];
+			textureVertices[1] = textureVertices[3];
+			textureVertices[2] = textureVertices[4];
+			textureVertices[3] = textureVertices[5];
+			textureVertices[4] = textureVertices[6];
+			textureVertices[5] = textureVertices[7];
+			textureVertices[6] = vx;
+			textureVertices[7] = vy;
+		}
+
+		glGenBuffers(1, &ctx->vbo_vx);
+		glBindBuffer(GL_ARRAY_BUFFER, ctx->vbo_vx);
+		glBufferData(GL_ARRAY_BUFFER, 8 * sizeof(GLfloat), squareVertices, GL_STATIC_DRAW);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+		glGenBuffers(1, &ctx->vbo_tx);
+		glBindBuffer(GL_ARRAY_BUFFER, ctx->vbo_tx);
+		glBufferData(GL_ARRAY_BUFFER, 8 * sizeof(GLfloat), textureVertices, GL_STATIC_DRAW);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
 	}
 
 	int loc = glGetAttribLocation(ctx->glsl_program, "gfVertex");
 	if (loc >= 0) {
-		glVertexAttribPointer(loc, 2, GL_FLOAT, 0, 0, squareVertices);
+		glBindBuffer(GL_ARRAY_BUFFER, ctx->vbo_vx);
+		glVertexAttribPointer(loc, 2, GL_FLOAT, 0, 0, 0);
 		glEnableVertexAttribArray(loc);
 
 		//setup texcoord location
 		int loc2 = glGetAttribLocation(ctx->glsl_program, "gfTexCoord");
 		if (loc2 >= 0) {
-			glVertexAttribPointer(loc2, 2, GL_FLOAT, 0, 0, textureVertices);
+			glBindBuffer(GL_ARRAY_BUFFER, ctx->vbo_tx);
+			glVertexAttribPointer(loc2, 2, GL_FLOAT, 0, 0, 0);
 			glEnableVertexAttribArray(loc2);
 
 			glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
@@ -1233,8 +1277,11 @@ static void vout_draw_gl_quad(GF_VideoOutCtx *ctx, Bool flip_texture)
 	}
 
 	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(TEXTURE_TYPE, 0);
-	glDisable(TEXTURE_TYPE);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+#ifndef GPAC_USE_GLES2
+	glDisable(GL_TEXTURE_2D);
+#endif
 
 	glUseProgram(0);
 
@@ -1274,12 +1321,25 @@ static void vout_draw_gl_hw_textures(GF_VideoOutCtx *ctx, GF_FilterFrameInterfac
 	}
 	ctx->tx.frame_ifce = hwf;
 
+#ifndef GPAC_USE_GLES2
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
-
+#endif
 	//and draw
 	vout_draw_gl_quad(ctx, ctx->tx.flip ? GF_TRUE : GF_FALSE);
 	GL_CHECK_ERR()
+}
+
+static void vbo_changed(GF_VideoOutCtx *ctx)
+{
+	if (ctx->vbo_vx) {
+		glDeleteBuffers(1, &ctx->vbo_vx);
+		ctx->vbo_vx = 0;
+	}
+	if (ctx->vbo_tx) {
+		glDeleteBuffers(1, &ctx->vbo_tx);
+		ctx->vbo_tx = 0;
+	}
 }
 
 static void vout_draw_gl(GF_VideoOutCtx *ctx, GF_FilterPacket *pck)
@@ -1321,6 +1381,11 @@ static void vout_draw_gl(GF_VideoOutCtx *ctx, GF_FilterPacket *pck)
 			}
 		}
 
+		if (!ctx->sar.num || ctx->sar.den) {
+			ctx->sar.num = 1;
+			ctx->sar.den = 1;
+		}
+
 		//if we fill width to display width and height is outside
 		if (ctx->display_width * v_h / v_w > ctx->display_height) {
 			ctx->dw = (Float) (ctx->display_height * v_w / v_h);
@@ -1352,10 +1417,14 @@ static void vout_draw_gl(GF_VideoOutCtx *ctx, GF_FilterPacket *pck)
 
 		ctx->display_changed = GF_FALSE;
 
+#ifndef GPAC_USE_GLES2
 		//also load proj matrix for overlay draw
 		glMatrixMode(GL_PROJECTION);
 		glLoadMatrixf(mx.m);
 		glMatrixMode(GL_MODELVIEW);
+#endif
+
+		vbo_changed(ctx);
 	}
 
 	glViewport(0, 0, ctx->display_width, ctx->display_height);
@@ -1383,7 +1452,9 @@ static void vout_draw_gl(GF_VideoOutCtx *ctx, GF_FilterPacket *pck)
 
 
 	//we are not sure if we are the only ones using the gl context, reset our defaults
+#ifndef GPAC_USE_GLES2
 	glDisable(GL_LIGHTING);
+#endif
 	glDisable(GL_CULL_FACE);
 	glDisable(GL_DEPTH_TEST);
 	if (ctx->has_alpha) {
@@ -1405,12 +1476,13 @@ static void vout_draw_gl(GF_VideoOutCtx *ctx, GF_FilterPacket *pck)
 		vout_draw_gl_hw_textures(ctx, frame_ifce);
 	} else {
 		data = (char*) gf_filter_pck_get_data(pck, &wsize);
+		if ((data && wsize) || frame_ifce) {
+			//upload texture
+			gf_gl_txw_upload(&ctx->tx, data, frame_ifce);
 
-		//upload texture
-		gf_gl_txw_upload(&ctx->tx, data, frame_ifce);
-
-		//and draw
-		vout_draw_gl_quad(ctx, GF_FALSE);
+			//and draw
+			vout_draw_gl_quad(ctx, GF_FALSE);
+		}
 	}
 
 exit:
@@ -1425,13 +1497,13 @@ exit:
 			if (!ctx->overlay_tx) {
 				glGenTextures(1, &ctx->overlay_tx);
 
-				glEnable(GL_TEXTURE_2D);
 #if !defined(GPAC_USE_GLES1X)
 				glBindTexture(GL_TEXTURE_2D, ctx->overlay_tx);
 #if defined(GPAC_USE_GLES2)
 				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 #else
+				glEnable(GL_TEXTURE_2D);
 				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
 				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
 #endif
@@ -1442,7 +1514,9 @@ exit:
 				glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, ctx->olsize.x, ctx->olsize.y, 0, GL_RGBA, GL_UNSIGNED_BYTE, ctx->oldata.ptr);
 				ctx->update_oldata = GF_FALSE;
 			} else if (ctx->update_oldata) {
+#ifndef GPAC_USE_GLES2
 				glEnable(GL_TEXTURE_2D);
+#endif
 				glBindTexture(GL_TEXTURE_2D, ctx->overlay_tx);
 				glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, ctx->olsize.x, ctx->olsize.y, GL_RGBA, GL_UNSIGNED_BYTE, ctx->oldata.ptr);
 				ctx->update_oldata = GF_FALSE;
@@ -1569,6 +1643,27 @@ void vout_draw_2d(GF_VideoOutCtx *ctx, GF_FilterPacket *pck)
 	if (e != GF_OK)
 		return;
 
+	if (ctx->oldata.ptr) {
+		GF_VideoSurface olay;
+		memset(&olay, 0, sizeof(GF_VideoSurface));
+		olay.width = ctx->olsize.x;
+		olay.height = ctx->olsize.y;
+		olay.pixel_format = GF_PIXEL_RGBA;
+		olay.pitch_y = 4*olay.width;
+		olay.video_buffer = ctx->oldata.ptr;
+		dst_wnd.x = (u32) (ctx->dw/2 + ctx->olwnd.x - ctx->olwnd.z/2);
+		dst_wnd.y = (u32) (ctx->dh/2 - ctx->olwnd.y);
+		dst_wnd.w = ctx->olwnd.z;
+		dst_wnd.h = ctx->olwnd.w;
+		e = ctx->video_out->Blit(ctx->video_out, &olay, NULL, &dst_wnd, 0);
+	}
+	else if (ctx->oltxt && ctx->oltxt[0]) {
+		GF_Event evt;
+		memset(&evt, 0, sizeof(GF_Event));
+		evt.type = GF_EVENT_MESSAGE;
+		evt.message.message = ctx->oltxt;
+		ctx->video_out->ProcessEvent(ctx->video_out, &evt);
+	}
 
 	if (ctx->dump_f_idx) {
 		char szFileName[1024];
@@ -1666,22 +1761,32 @@ static GF_Err vout_process(GF_Filter *filter)
 	}
 
 	if (!ctx->pid) {
+		GF_Err ret = GF_OK;
+		u32 resched = 100000;
 		//we don't lock here since we don't access the pointer
 		if (ctx->oldata.ptr && ctx->update_oldata)
 			return vout_draw_frame(ctx);
 
-		if (gf_filter_has_connect_errors(filter))
+		if (gf_filter_has_connect_errors(filter)) {
+			//connection error, abort (no reschedule)
 			return GF_EOS;
-		//when we use vout+aout on audio only, we want the filter to still be active to process events
-		gf_filter_post_process_task(filter);
-		gf_filter_ask_rt_reschedule(filter, 10000);
-
-		return ctx->oldata.ptr ? GF_OK : GF_EOS;
+		}
+		if (gf_filter_all_sinks_done(filter) && !gf_filter_connections_pending(filter)) {
+			//all done, abort (no reschedule)
+			return GF_EOS;
+		}
+		else if (ctx->oldata.ptr) {
+			ret = GF_EOS;
+			resched = 40000;
+		}
+		//we always reschedule when no input to avoid having a non-responding window
+		gf_filter_ask_rt_reschedule(filter, resched);
+		return ret;
 	}
 
 	pck = gf_filter_pid_get_packet(ctx->pid);
 	if (!pck) {
-		if (gf_filter_pid_is_eos(ctx->pid)) {
+		if (gf_filter_pid_is_eos(ctx->pid) && !gf_filter_pid_is_flush_eos(ctx->pid)) {
 			if (!ctx->aborted) {
 				GF_FilterEvent evt;
 				GF_FEVT_INIT(evt, GF_FEVT_STOP, ctx->pid);
@@ -1722,7 +1827,7 @@ static GF_Err vout_process(GF_Filter *filter)
 		}
 		return ctx->aborted ? GF_EOS : GF_OK;
 	}
-	
+
 	if (!ctx->width || !ctx->height) {
 		GF_LOG(GF_LOG_ERROR, GF_LOG_MMIO, ("[VideoOut] pid display wsize unknown, discarding packet\n"));
 		gf_filter_pid_drop_packet(ctx->pid);
@@ -2066,10 +2171,8 @@ static GF_Err vout_draw_frame(GF_VideoOutCtx *ctx)
 	if ((ctx->pfmt && ctx->last_pck) || !ctx->pid || ctx->update_oldata) {
 #ifdef VOUT_USE_OPENGL
 		if (ctx->disp < MODE_2D) {
-			gf_rmt_begin_gl(vout_draw_gl);
 			glGetError();
 			vout_draw_gl(ctx, ctx->last_pck);
-			gf_rmt_end_gl();
 			glGetError();
 		} else
 #endif
@@ -2250,6 +2353,7 @@ static const GF_FilterArgs VideoOutArgs[] =
 		"- 180: rotate 180 degree\n"
 		"- 270: rotate 90 degree clockwise"
 	, GF_PROP_UINT, "0","0|90|180|270", GF_FS_ARG_UPDATE | GF_FS_ARG_HINT_ADVANCED},
+	{ OFFS(oltxt), "overlay text", GF_PROP_STRING, NULL, NULL, GF_ARG_HINT_HIDE|GF_FS_ARG_UPDATE_SYNC},
 	{0}
 };
 
@@ -2282,7 +2386,8 @@ GF_FilterRegister VideoOutRegister = {
 	.configure_pid = vout_configure_pid,
 	.process = vout_process,
 	.process_event = vout_process_event,
-	.update_arg = vout_update_arg
+	.update_arg = vout_update_arg,
+	.hint_class_type = GF_FS_CLASS_MM_IO
 };
 
 const GF_FilterRegister *vout_register(GF_FilterSession *session)
@@ -2294,4 +2399,4 @@ const GF_FilterRegister *vout_register(GF_FilterSession *session)
 {
 	return NULL;
 }
-#endif // GPAC_DISABLE_PLAYER
+#endif // GPAC_DISABLE_VOUT

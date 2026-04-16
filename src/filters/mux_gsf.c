@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2018-2022
+ *			Copyright (c) Telecom ParisTech 2018-2025
  *					All rights reserved
  *
  *  This file is part of GPAC / GPAC stream serializer filter
@@ -29,6 +29,8 @@
 #include <gpac/network.h>
 #include <gpac/internal/media_dev.h>
 #include <gpac/crypt.h>
+
+#ifndef GPAC_DISABLE_GSFMX
 
 typedef struct
 {
@@ -258,7 +260,7 @@ static void gsfmx_send_packets(GSFMxCtx *ctx, GSFStream *gst, GF_GSFPacketType p
 		gsfmx_write_vlen(ctx, to_write);
 
 		hdr_size = (u32) gf_bs_get_position(ctx->bs_w);
-		assert(hdr_size + to_write == osize);
+		gf_assert(hdr_size + to_write == osize);
 		memcpy(output+hdr_size, ctx->buffer + pck_offset, to_write);
 		bytes_remain -= to_write;
 		pck_offset += to_write;
@@ -326,7 +328,10 @@ static Bool gsfmx_can_serialize_prop(const GF_PropertyValue *p, u32 prop_4cc)
 			&& !gf_props_type_is_enum(prop_type)
 			&& (gf_props_get_base_type(prop_type) != gf_props_get_base_type(p->type))
 		) {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[GSFMux] Mismatch between property advertised type (%s) and built-in type (%s) for %s, not serializing !\n\tPlease contact GPAC team or the developers of third-party filters used if any (run with -graph)\n", gf_props_get_type_name(p->type), gf_props_get_type_name(prop_type), gf_props_4cc_get_name(prop_4cc)));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[GSFMux] Mismatch between property advertised type (%s) and built-in "
+				"type (%s) for %s, not serializing !\n\tPlease contact the GPAC team or the developers of third-party filters "
+				"used if any (run with -graph)\n",
+				gf_props_get_type_name(p->type), gf_props_get_type_name(prop_type), gf_props_4cc_get_name(prop_4cc)));
 			return GF_FALSE;
 		}
 	}
@@ -334,7 +339,7 @@ static Bool gsfmx_can_serialize_prop(const GF_PropertyValue *p, u32 prop_4cc)
 	switch (p->type) {
 	case GF_PROP_POINTER:
 		GF_LOG(GF_LOG_DEBUG, GF_LOG_CONTAINER, ("[GSFMux] Cannot serialize pointer property, ignoring !!\n"));
-	case GF_PROP_FORBIDEN:
+	case GF_PROP_FORBIDDEN:
 		return GF_FALSE;
 	default:
 		if (p->type>=GF_PROP_LAST_DEFINED)
@@ -463,6 +468,14 @@ static GFINLINE Bool gsfmx_is_prop_skip(GSFMxCtx *ctx, u32 prop_4cc, const char 
 	if (prop_name && !strcmp(prop_name, "reframer_rem_edits"))
 		return GF_TRUE;
 
+	if (gf_sys_is_test_mode()) {
+		switch (prop_4cc) {
+		case GF_PROP_PID_SEI_LOADED:
+		case GF_PROP_PCK_SEI_LOADED:
+			return GF_TRUE;
+		}
+	}
+
 	if (ctx->minp) {
 		u8 flags;
 		if (prop_name) return GF_TRUE;
@@ -494,6 +507,7 @@ static void gsfmx_write_pid_config(GF_Filter *filter, GSFMxCtx *ctx, GSFStream *
 	const char *force_fext=NULL;
 	const char *force_mime=NULL;
 	const char *force_url=NULL;
+	u32 premux_type=0;
 	u32 nb_4cc_props=0;
 	u32 nb_str_props=0;
 	u32 idx=0;
@@ -508,7 +522,7 @@ static void gsfmx_write_pid_config(GF_Filter *filter, GSFMxCtx *ctx, GSFStream *
 		if ( gsfmx_is_prop_skip(ctx, prop_4cc, prop_name, sep_l) )
 			continue;
 		if (prop_4cc) {
-			if (gf_props_4cc_get_type(prop_4cc) == GF_PROP_FORBIDEN) {
+			if (gf_props_4cc_get_type(prop_4cc) == GF_PROP_FORBIDDEN) {
 				nb_str_props++;
 			}
 			//file, only send mime, url, ext and streamtype
@@ -523,6 +537,7 @@ static void gsfmx_write_pid_config(GF_Filter *filter, GSFMxCtx *ctx, GSFStream *
 
 	//file, send mime, url, ext and streamtype
 	if (gst->is_file) {
+		const GF_PropertyValue *p;
 		GSFMxCtx *alias_ctx = gf_filter_pid_get_alias_udta(gst->pid);
 		if (alias_ctx) {
 			force_fext = gf_file_ext_start(alias_ctx->dst);
@@ -530,7 +545,7 @@ static void gsfmx_write_pid_config(GF_Filter *filter, GSFMxCtx *ctx, GSFStream *
 			force_url = alias_ctx->dst ? alias_ctx->dst : NULL;
 			force_mime = alias_ctx->mime;
 		} else {
-			const GF_PropertyValue *p = gf_filter_pid_get_property(gst->pid, GF_PROP_PID_FILE_EXT);
+			p = gf_filter_pid_get_property(gst->pid, GF_PROP_PID_FILE_EXT);
 			force_fext = (p && p->value.string) ? p->value.string : ctx->ext;
 			p = gf_filter_pid_get_property(gst->pid, GF_PROP_PID_MIME);
 			force_mime = (p && p->value.string) ? p->value.string : ctx->mime;
@@ -544,6 +559,12 @@ static void gsfmx_write_pid_config(GF_Filter *filter, GSFMxCtx *ctx, GSFStream *
 			nb_4cc_props++;
 		if (force_fext)
 			nb_4cc_props++;
+
+		p = gf_filter_pid_get_property(gst->pid, GF_PROP_PID_PREMUX_STREAM_TYPE);
+		if (p) {
+			premux_type = p->value.uint;
+			nb_4cc_props++;
+		}
 	}
 	gf_bs_write_u8(ctx->bs_w, gst->config_version);
 	gsfmx_write_vlen(ctx, nb_4cc_props);
@@ -576,6 +597,12 @@ static void gsfmx_write_pid_config(GF_Filter *filter, GSFMxCtx *ctx, GSFStream *
 			prop.value.string = (char *) force_fext;
 			gsfmx_write_prop(ctx, &prop);
 		}
+		if (premux_type) {
+			gf_bs_write_u32(ctx->bs_w, GF_PROP_PID_PREMUX_STREAM_TYPE);
+			prop.type = GF_PROP_UINT;
+			prop.value.uint = premux_type;
+			gsfmx_write_prop(ctx, &prop);
+		}
 	}
 
 
@@ -588,7 +615,7 @@ static void gsfmx_write_pid_config(GF_Filter *filter, GSFMxCtx *ctx, GSFStream *
 		if (!gsfmx_can_serialize_prop(p, prop_4cc)) continue;
 
 		if (prop_name) continue;
-		if (gf_props_4cc_get_type(prop_4cc) == GF_PROP_FORBIDEN)
+		if (gf_props_4cc_get_type(prop_4cc) == GF_PROP_FORBIDDEN)
 			continue;
 
 		if ( gsfmx_is_prop_skip(ctx, prop_4cc, prop_name, sep_l) )
@@ -619,7 +646,7 @@ static void gsfmx_write_pid_config(GF_Filter *filter, GSFMxCtx *ctx, GSFStream *
 		const GF_PropertyValue *p = gf_filter_pid_enum_properties(gst->pid, &idx, &prop_4cc, &prop_name);
 		if (!p) break;
 		if (!gsfmx_can_serialize_prop(p, prop_4cc)) continue;
-		if (prop_4cc && (gf_props_4cc_get_type(prop_4cc) != GF_PROP_FORBIDEN)) continue;
+		if (prop_4cc && (gf_props_4cc_get_type(prop_4cc) != GF_PROP_FORBIDDEN)) continue;
 
 		if ( gsfmx_is_prop_skip(ctx, prop_4cc, prop_name, sep_l) )
 			continue;
@@ -726,7 +753,7 @@ static void gsfmx_write_data_packet(GSFMxCtx *ctx, GSFStream *gst, GF_FilterPack
 		if (!p) break;
 		if (!gsfmx_can_serialize_prop(p, prop_4cc)) continue;
 		if (prop_4cc) {
-			if (gf_props_4cc_get_type(prop_4cc) == GF_PROP_FORBIDEN)
+			if (gf_props_4cc_get_type(prop_4cc) == GF_PROP_FORBIDDEN)
 				nb_str_props++;
 			else
 				nb_4cc_props++;
@@ -824,7 +851,7 @@ static void gsfmx_write_data_packet(GSFMxCtx *ctx, GSFStream *gst, GF_FilterPack
 	else { tsdiffmode=3; tsdiffmodebits=32; }
 
 
-	assert(tsmodebits<=32);
+	gf_assert(tsmodebits<=32);
 
 	//first flags byte
 	//flags first byte: 1(has_dts) 1(has_cts) 1(has_dur) 1(cts_diff_neg) 2(ts_mode) 2(ts_diff_mode)
@@ -838,8 +865,8 @@ static void gsfmx_write_data_packet(GSFMxCtx *ctx, GSFStream *gst, GF_FilterPack
 	//flags second byte: 3(sap) 2(encrypted) 1(has_sample_deps) 1(has builtin props) 1(has_ext)
 	u8 sap = gf_filter_pck_get_sap(pck);
 	gf_bs_write_int(ctx->bs_w, sap, 3);
-	u8 crypt = gf_filter_pck_get_crypt_flags(pck);
-	gf_bs_write_int(ctx->bs_w, crypt, 2);
+	u8 pck_crypt = gf_filter_pck_get_crypt_flags(pck);
+	gf_bs_write_int(ctx->bs_w, pck_crypt, 2);
 	u8 depflags = gf_filter_pck_get_dependency_flags(pck);
 	gf_bs_write_int(ctx->bs_w, depflags ? 1 : 0, 1);
 	gf_bs_write_int(ctx->bs_w, nb_4cc_props ? 1 : 0, 1);
@@ -922,7 +949,7 @@ static void gsfmx_write_data_packet(GSFMxCtx *ctx, GSFStream *gst, GF_FilterPack
 			if (!p) break;
 			if (!gsfmx_can_serialize_prop(p, prop_4cc)) continue;
 			if (prop_name) continue;
-			if (gf_props_4cc_get_type(prop_4cc) == GF_PROP_FORBIDEN) continue;
+			if (gf_props_4cc_get_type(prop_4cc) == GF_PROP_FORBIDDEN) continue;
 
 			gf_bs_write_u32(ctx->bs_w, prop_4cc);
 
@@ -938,7 +965,7 @@ static void gsfmx_write_data_packet(GSFMxCtx *ctx, GSFStream *gst, GF_FilterPack
 			p = gf_filter_pck_enum_properties(pck, &idx, &prop_4cc, &prop_name);
 			if (!p) break;
 			if (!gsfmx_can_serialize_prop(p, prop_4cc)) continue;
-			if (prop_4cc && (gf_props_4cc_get_type(prop_4cc) != GF_PROP_FORBIDEN)) continue;
+			if (prop_4cc && (gf_props_4cc_get_type(prop_4cc) != GF_PROP_FORBIDDEN)) continue;
 			if (!prop_name) prop_name = gf_4cc_to_str(prop_4cc);
 			len = (u32) strlen(prop_name);
 			gsfmx_write_vlen(ctx, len);
@@ -1266,14 +1293,13 @@ static const GF_FilterArgs GSFMxArgs[] =
 	{ OFFS(dst), "target URL in file mode", GF_PROP_STRING, NULL, NULL, GF_FS_ARG_HINT_EXPERT|GF_FS_ARG_SINK_ALIAS},
 	{ OFFS(mime), "file mime for file mode", GF_PROP_STRING, NULL, NULL, GF_FS_ARG_HINT_HIDE},
 	{ OFFS(mixed), "allow GSF to contain both files and media streams", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_EXPERT|GF_FS_ARG_SINK_ALIAS},
-
 	{0}
 };
 
 
 GF_FilterRegister GSFMxRegister = {
 	.name = "gsfmx",
-	GF_FS_SET_DESCRIPTION("GSF Multiplexer")
+	GF_FS_SET_DESCRIPTION("GSF multiplexer")
 #ifndef GPAC_DISABLE_DOC
 	.help = "This filter provides GSF (__GPAC Serialized Format__) multiplexing.\n"
 			"It serializes the stream states (config/reconfig/info update/remove/eos) and packets of input PIDs. "
@@ -1306,7 +1332,7 @@ GF_FilterRegister GSFMxRegister = {
 			"EX gpac -i source.mp4 gsfmx:dst=manifest.mpd -o dump.gsf\n"
 			"This will DASH the source and store every files produced as PIDs in the GSF mux.\n"
 			"In order to demultiplex such a file, the `gsfdmx`filter will likely need to be explicitly loaded:\n"
-			"EX gpac -i mux.gsf gsfdmx -o dump/$File$:dynext:clone\n"
+			"EX gpac -i mux.gsf gsfdmx -o dump/$File$:dynext\n"
 			"This will extract all files from the GSF mux.\n"
 			"\n"
 			"By default when working in file mode, the filter only accepts PIDs of type `file` as input.\n"
@@ -1325,7 +1351,8 @@ GF_FilterRegister GSFMxRegister = {
 	.configure_pid = gsfmx_configure_pid,
 	.process = gsfmx_process,
 	.process_event = gsfmx_process_event,
-	.use_alias = gsfmx_use_alias
+	.use_alias = gsfmx_use_alias,
+	.hint_class_type = GF_FS_CLASS_MULTIPLEXER
 };
 
 
@@ -1333,3 +1360,10 @@ const GF_FilterRegister *gsfmx_register(GF_FilterSession *session)
 {
 	return &GSFMxRegister;
 }
+#else
+const GF_FilterRegister *gsfmx_register(GF_FilterSession *session)
+{
+	return NULL;
+}
+#endif
+

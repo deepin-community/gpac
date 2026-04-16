@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / BIFS codec sub-project
@@ -172,7 +172,7 @@ static GF_Err BM_ParseGlobalQuantizer(GF_BifsDecoder *codec, GF_BitStream *bs, G
 	if (!node) return GF_NON_COMPLIANT_BITSTREAM;
 
 	/*reset global QP*/
-	if (codec->scenegraph->global_qp) {
+	if (codec->scenegraph->global_qp && codec->scenegraph->global_qp != node) {
 		gf_node_unregister(codec->scenegraph->global_qp, NULL);
 	}
 	codec->ActiveQP = NULL;
@@ -770,6 +770,7 @@ GF_Err BM_ParseIndexValueReplace(GF_BifsDecoder *codec, GF_BitStream *bs, GF_Lis
 		pos = 0;
 		break;
 	case 3:
+		if (!field.far_ptr) return GF_NON_COMPLIANT_BITSTREAM;
 		pos = ((GenMFField *) field.far_ptr)->count - 1;
 		break;
 	default:
@@ -901,6 +902,8 @@ GF_Err BM_ParseCommand(GF_BifsDecoder *codec, GF_BitStream *bs, GF_List *com_lis
 	GF_SceneGraph *cur_graph = codec->current_graph;
 	GF_Proto *cur_proto = codec->pCurrentProto;
 
+	u32 nbBufs = gf_list_count(codec->command_buffers);
+
 	codec->LastError = GF_OK;
 	while (go) {
 		type = gf_bs_read_int(bs, 2);
@@ -923,6 +926,15 @@ GF_Err BM_ParseCommand(GF_BifsDecoder *codec, GF_BitStream *bs, GF_List *com_lis
 	}
 	while (gf_list_count(codec->QPs)) {
 		gf_bifs_dec_qp_remove(codec, GF_TRUE);
+	}
+
+	if (e) {
+		while (gf_list_count(codec->command_buffers) > nbBufs) {
+			CommandBufferItem *cbi;
+			cbi = (CommandBufferItem *)gf_list_pop_back(codec->command_buffers);
+			if (cbi->node) gf_node_unregister(cbi->node, NULL);
+			gf_free(cbi);
+		}
 	}
 
 	codec->current_graph = cur_graph;
@@ -1027,7 +1039,7 @@ GF_Err gf_bifs_decode_command_list(GF_BifsDecoder *codec, u16 ESID, u8 *data, u3
 	if (codec->info->config.elementaryMasks ) return GF_NOT_SUPPORTED;
 
 	/*root parse (not conditionals)*/
-	assert(codec->scenegraph);
+	if (!codec->scenegraph) return GF_BAD_PARAM;
 	/*setup current scene graph*/
 	codec->current_graph = codec->scenegraph;
 
@@ -1062,4 +1074,3 @@ GF_Err gf_bifs_decode_command_list(GF_BifsDecoder *codec, u16 ESID, u8 *data, u3
 }
 
 #endif /*GPAC_DISABLE_BIFS*/
-

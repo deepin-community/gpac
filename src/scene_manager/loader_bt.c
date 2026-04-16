@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Management sub-project
@@ -107,6 +107,7 @@ typedef struct
 
 	u32 def_w, def_h;
 
+	unsigned short line_cache[BT_LINE_SIZE];
 } GF_BTParser;
 
 GF_Err gf_bt_parse_bifs_command(GF_BTParser *parser, char *name, GF_List *cmdList);
@@ -134,7 +135,8 @@ static GF_Err gf_bt_report(GF_BTParser *parser, GF_Err e, char *format, ...)
 
 void gf_bt_check_line(GF_BTParser *parser)
 {
-	while (1) {
+reload_line:
+	while (parser->line_pos < parser->line_size) {
 		switch (parser->line_buffer[parser->line_pos]) {
 		case ' ':
 		case '\t':
@@ -142,16 +144,22 @@ void gf_bt_check_line(GF_BTParser *parser)
 		case '\r':
 			parser->line_pos++;
 			continue;
+		case '\0':
+			parser->line_pos = parser->line_size;
 		default:
 			break;
 		}
 		break;
 	}
 
-	if (parser->line_buffer[parser->line_pos]=='#') {
-		parser->line_size = parser->line_pos;
+	if (parser->line_pos < parser->line_size) {
+		if (parser->line_buffer[parser->line_pos]=='#') {
+			parser->line_size = parser->line_pos;
+		}
+		else if ((parser->line_buffer[parser->line_pos]=='/') && (parser->line_buffer[parser->line_pos+1]=='/') ) {
+			parser->line_size = parser->line_pos;
+		}
 	}
-	else if ((parser->line_buffer[parser->line_pos]=='/') && (parser->line_buffer[parser->line_pos+1]=='/') ) parser->line_size = parser->line_pos;
 
 	if (parser->line_size == parser->line_pos) {
 		/*string based input - done*/
@@ -166,7 +174,7 @@ next_line:
 		if (parser->unicode_type) {
 			u8 c1, c2;
 			unsigned short wchar;
-			unsigned short l[BT_LINE_SIZE];
+			unsigned short *l = parser->line_cache;
 			unsigned short *dst = l;
 			Bool is_ret = 0;
 			u32 last_space_pos, last_space_pos_stream;
@@ -337,7 +345,7 @@ next_line:
 				}
 				if (len) {
 					if (len==1) {
-						if (!strnicmp(parser->line_buffer+parser->line_pos, "0", len)) {
+						if (!strnicmp(parser->line_buffer+parser->line_pos, "0", 1)) {
 							parser->block_comment++;
 						}
 					} else {
@@ -389,12 +397,20 @@ next_line:
 				for (i=0; i<count; i++) {
 					u32 symb_len, val_len, copy_len;
 					BTDefSymbol *def = (BTDefSymbol *)gf_list_get(parser->def_symbols, i);
+					if (!def->name) continue;
 					char *start = strstr(parser->line_buffer, def->name);
 					if (!start) continue;
+
 					symb_len = (u32) strlen(def->name);
 					if (!strchr(" \n\r\t,[]{}\'\"", start[symb_len])) continue;
 					val_len = (u32) strlen(def->value);
+
+					if (val_len >= BT_LINE_SIZE || symb_len >= BT_LINE_SIZE) continue;
+
 					copy_len = (u32) strlen(start + symb_len) + 1;
+
+					if ((start-parser->line_buffer) + val_len + copy_len > BT_LINE_SIZE) continue;
+
 					memmove(start + val_len, start + symb_len, sizeof(char)*copy_len);
 					memcpy(start, def->value, sizeof(char)*val_len);
 					parser->line_size = (u32) strlen(parser->line_buffer);
@@ -405,10 +421,15 @@ next_line:
 		}
 	}
 	if (!parser->line_size) {
-		if (!gf_gzeof(parser->gz_in)) gf_bt_check_line(parser);
-		else parser->done = 1;
+		if (!gf_gzeof(parser->gz_in))
+			//avoid recursion
+			goto reload_line;
+		else
+			parser->done = 1;
 	}
-	else if (!parser->done && (parser->line_size == parser->line_pos)) gf_bt_check_line(parser);
+	else if (!parser->done && (parser->line_size == parser->line_pos))
+		//avoid recursion
+		goto reload_line;
 }
 
 void gf_bt_force_line(GF_BTParser *parser)
@@ -435,12 +456,13 @@ char *gf_bt_get_next(GF_BTParser *parser, Bool point_break)
 	i=0;
 	has_quote = 0;
 	while (go) {
+		if (parser->line_pos+i>=parser->line_size) break;
+		if (i>=GF_ARRAY_LENGTH(parser->cur_buffer)) break;
+
 		if (parser->line_buffer[parser->line_pos + i] == '\"') {
 			if (!has_quote) has_quote = 1;
 			else has_quote = 0;
 			parser->line_pos += 1;
-
-			if (parser->line_pos+i==parser->line_size) break;
 			continue;
 		}
 		if (!has_quote) {
@@ -463,11 +485,13 @@ char *gf_bt_get_next(GF_BTParser *parser, Bool point_break)
 			}
 			if (!go) break;
 		}
+		if (i >= GF_ARRAY_LENGTH(parser->cur_buffer))
+			break;
 		parser->cur_buffer[i] = parser->line_buffer[parser->line_pos + i];
 		i++;
 		if (parser->line_pos+i==parser->line_size) break;
 	}
-	parser->cur_buffer[i] = 0;
+	parser->cur_buffer[MIN(i, GF_ARRAY_LENGTH(parser->cur_buffer)-1)] = 0;
 	parser->line_pos += i;
 	return parser->cur_buffer;
 }
@@ -1609,7 +1633,7 @@ GF_Node *gf_bt_peek_node(GF_BTParser *parser, char *defID)
 
 		if ( (!prev_is_insert && !strcmp(str, "AT")) || !strcmp(str, "PROTO") ) {
 			/*only check in current command (but be aware of conditionals..)*/
-			if (gf_list_find(parser->bifs_au->commands, parser->cur_com)) {
+			if (parser->bifs_au && gf_list_find(parser->bifs_au->commands, parser->cur_com)) {
 				break;
 			}
 			continue;
@@ -1728,6 +1752,7 @@ GF_Err gf_bt_parse_proto(GF_BTParser *parser, char *proto_code, GF_List *proto_l
 	str = gf_bt_get_next(parser, 0);
 	name = gf_strdup(str);
 	if (!gf_bt_check_code(parser, '[')) {
+		gf_free(name);
 		return gf_bt_report(parser, GF_BAD_PARAM, "[ expected in proto declare");
 	}
 	pID = gf_bt_get_next_proto_id(parser);
@@ -2803,7 +2828,7 @@ GF_IPMPX_Data *gf_bt_parse_ipmpx(GF_BTParser *parser, char *name)
 		switch (type) {
 		/*single descriptor*/
 		case GF_ODF_FT_OD:
-			assert(desc->tag==GF_IPMPX_CONNECT_TOOL_TAG);
+			gf_assert(desc->tag==GF_IPMPX_CONNECT_TOOL_TAG);
 			str = gf_bt_get_next(parser, 0);
 			oddesc = gf_bt_parse_descriptor(parser, str);
 			if (!oddesc) {
@@ -2811,12 +2836,12 @@ GF_IPMPX_Data *gf_bt_parse_ipmpx(GF_BTParser *parser, char *name)
 				gf_ipmpx_data_del(desc);
 				return NULL;
 			}
-			assert(oddesc->tag==GF_ODF_IPMP_TAG);
+			gf_assert(oddesc->tag==GF_ODF_IPMP_TAG);
 			((GF_IPMPX_ConnectTool *)desc)->toolDescriptor = (GF_IPMP_Descriptor *)oddesc;
 			break;
 		/*descriptor list*/
 		case GF_ODF_FT_OD_LIST:
-			assert(desc->tag==GF_IPMPX_GET_TOOLS_RESPONSE_TAG);
+			gf_assert(desc->tag==GF_IPMPX_GET_TOOLS_RESPONSE_TAG);
 			if (gf_bt_check_code(parser, '[')) {
 				while (!gf_bt_check_code(parser, ']')) {
 					GF_Descriptor *ipmp_t = gf_bt_parse_descriptor(parser, NULL);
@@ -2825,7 +2850,7 @@ GF_IPMPX_Data *gf_bt_parse_ipmpx(GF_BTParser *parser, char *name)
 						parser->last_error = GF_BAD_PARAM;
 						return NULL;
 					}
-					assert(ipmp_t->tag==GF_ODF_IPMP_TOOL_TAG);
+					gf_assert(ipmp_t->tag==GF_ODF_IPMP_TOOL_TAG);
 					gf_list_add( ((GF_IPMPX_GetToolsResponse *)desc)->ipmp_tools, ipmp_t);
 				}
 			}
@@ -2926,7 +2951,7 @@ GF_Descriptor *gf_bt_parse_descriptor(GF_BTParser *parser, char *name)
 {
 	char *str, field[500];
 	GF_Descriptor *desc, *subdesc;
-	u32 type;
+	GF_ODF_FieldType type;
 	u8 tag;
 	if (name) {
 		str = name;
@@ -3291,8 +3316,12 @@ GF_Err gf_bt_loader_run_intern(GF_BTParser *parser, GF_Command *init_com, Bool i
 		str = gf_bt_get_next(parser, 0);
 		if (parser->done) break;
 
+		if (!strcmp(str, "")) {
+			//empty string, force moving to next char
+			if (parser->line_pos<parser->line_size) parser->line_pos++;
+		}
 		/*X3D specific things (ignored for now)*/
-		if (!strcmp(str, "PROFILE")) gf_bt_force_line(parser);
+		else if (!strcmp(str, "PROFILE")) gf_bt_force_line(parser);
 		else if (!strcmp(str, "COMPONENT")) gf_bt_force_line(parser);
 		else if (!strcmp(str, "META")) gf_bt_force_line(parser);
 		else if (!strcmp(str, "IMPORT") || !strcmp(str, "EXPORT")) {
@@ -3419,7 +3448,7 @@ GF_Err gf_bt_loader_run_intern(GF_BTParser *parser, GF_Command *init_com, Bool i
 			if (!parser->stream_id) parser->stream_id = parser->base_bifs_id;
 			if (!parser->stream_id || (parser->od_es && (parser->stream_id==parser->od_es->ESID)) ) parser->stream_id = parser->base_bifs_id;
 
-			if (parser->bifs_es->ESID != parser->stream_id) {
+			if (parser->bifs_es && parser->bifs_es->ESID != parser->stream_id) {
 				GF_StreamContext *prev = parser->bifs_es;
 				parser->bifs_es = gf_sm_stream_new(parser->load->ctx, (u16) parser->stream_id, GF_STREAM_SCENE, GF_CODECID_BIFS);
 				/*force new AU if stream changed*/
@@ -3428,14 +3457,20 @@ GF_Err gf_bt_loader_run_intern(GF_BTParser *parser, GF_Command *init_com, Bool i
 					parser->bifs_au = NULL;
 				}
 			}
-			if (force_new_com) {
+			if (parser->bifs_es && force_new_com) {
 				force_new_com = 0;
 				parser->bifs_au = gf_list_last(parser->bifs_es->AUs);
 				parser->au_time = (u32) (parser->bifs_au ? parser->bifs_au->timing : 0) + 1;
 				parser->bifs_au = NULL;
 			}
 
-			if (!parser->bifs_au) parser->bifs_au = gf_sm_stream_au_new(parser->bifs_es, parser->au_time, 0, parser->au_is_rap);
+			if (!parser->bifs_au) {
+				if (!parser->bifs_es) {
+					parser->last_error = GF_BAD_PARAM;
+					break;
+				}
+				parser->bifs_au = gf_sm_stream_au_new(parser->bifs_es, parser->au_time, 0, parser->au_is_rap);
+			}
 			gf_bt_parse_bifs_command(parser, str, parser->bifs_au->commands);
 			if (is_base_stream) parser->stream_id= 0;
 		}
@@ -3458,8 +3493,8 @@ GF_Err gf_bt_loader_run_intern(GF_BTParser *parser, GF_Command *init_com, Bool i
 				if (init_com) init_com->node = node;
 				else if (parser->load->flags & GF_SM_LOAD_CONTEXT_READY) {
 					GF_Command *com = gf_sg_command_new(parser->load->scene_graph, GF_SG_SCENE_REPLACE);
-					assert(!parser->bifs_au);
-					assert(parser->bifs_es);
+					gf_assert(!parser->bifs_au);
+					gf_assert(parser->bifs_es);
 					parser->bifs_au = gf_sm_stream_au_new(parser->bifs_es, 0, 0, 1);
 					gf_list_add(parser->bifs_au->commands, com);
 					com->node = node;
@@ -3568,7 +3603,7 @@ static GF_Err gf_sm_load_bt_initialize(GF_SceneLoader *load, const char *str, Bo
 
 	if (input_only) return GF_OK;
 
-	/*initalize default streams in the context*/
+	/*initialize default streams in the context*/
 
 	/*chunk parsing*/
 	if (load->flags & GF_SM_LOAD_CONTEXT_READY) {
@@ -3774,34 +3809,42 @@ GF_Err gf_sm_load_init_bt(GF_SceneLoader *load)
 GF_EXPORT
 GF_List *gf_sm_load_bt_from_string(GF_SceneGraph *in_scene, char *node_str, Bool force_wrl)
 {
-	GF_SceneLoader ctx;
-	GF_BTParser parser;
-	memset(&ctx, 0, sizeof(GF_SceneLoader));
-	ctx.scene_graph = in_scene;
-	memset(&parser, 0, sizeof(GF_BTParser));
-	parser.line_buffer = node_str;
-	parser.line_size = (u32) strlen(node_str);
-	parser.load = &ctx;
-	parser.top_nodes = gf_list_new();
-	parser.undef_nodes = gf_list_new();
-	parser.def_nodes = gf_list_new();
-	parser.peeked_nodes = gf_list_new();
-	parser.is_wrl = force_wrl;
-	gf_bt_loader_run_intern(&parser, NULL, 1);
-	gf_list_del(parser.undef_nodes);
-	gf_list_del(parser.def_nodes);
-	gf_list_del(parser.peeked_nodes);
-	while (gf_list_count(parser.def_symbols)) {
-		BTDefSymbol *d = (BTDefSymbol *)gf_list_get(parser.def_symbols, 0);
-		gf_list_rem(parser.def_symbols, 0);
+	GF_SceneLoader *ctx;
+	GF_BTParser *parser;
+	GF_SAFEALLOC(ctx,  GF_SceneLoader);
+	if (!ctx) return gf_list_new();
+	ctx->scene_graph = in_scene;
+	GF_SAFEALLOC(parser, GF_BTParser);
+	if (!parser) {
+		gf_free(ctx);
+		return gf_list_new();
+	}
+	parser->line_buffer = node_str;
+	parser->line_size = (u32) strlen(node_str);
+	parser->load = ctx;
+	parser->top_nodes = gf_list_new();
+	parser->undef_nodes = gf_list_new();
+	parser->def_nodes = gf_list_new();
+	parser->peeked_nodes = gf_list_new();
+	parser->is_wrl = force_wrl;
+	gf_bt_loader_run_intern(parser, NULL, 1);
+	gf_list_del(parser->undef_nodes);
+	gf_list_del(parser->def_nodes);
+	gf_list_del(parser->peeked_nodes);
+	while (gf_list_count(parser->def_symbols)) {
+		BTDefSymbol *d = (BTDefSymbol *)gf_list_get(parser->def_symbols, 0);
+		gf_list_rem(parser->def_symbols, 0);
 		gf_free(d->name);
 		gf_free(d->value);
 		gf_free(d);
 	}
-	gf_list_del(parser.def_symbols);
-	gf_list_del(parser.scripts);
+	gf_list_del(parser->def_symbols);
+	gf_list_del(parser->scripts);
+	GF_List *result = parser->top_nodes;
+	gf_free(parser);
+	gf_free(ctx);
 
-	return parser.top_nodes;
+	return result;
 }
 
 #endif /*GPAC_DISABLE_LOADER_BT*/

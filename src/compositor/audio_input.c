@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -24,6 +24,8 @@
  */
 
 #include <gpac/internal/compositor_dev.h>
+
+#ifndef GPAC_DISABLE_COMPOSITOR
 
 #define ENABLE_EARLY_FRAME_DETECTION
 
@@ -288,7 +290,7 @@ void gf_sc_audio_stop(GF_AudioInput *ai)
 	/*we must make sure audio mixer is not using the stream otherwise we may leave it dirty (with unrelease frame)*/
 	gf_mixer_lock(ai->compositor->audio_renderer->mixer, GF_TRUE);
 
-	assert(!ai->need_release);
+	gf_assert(!ai->need_release);
 
 	gf_mo_stop(&ai->stream);
 	ai->is_open = 0;
@@ -370,3 +372,4 @@ void gf_sc_audio_unregister(GF_AudioInput *ai)
 	}
 }
 
+#endif //GPAC_DISABLE_COMPOSITOR

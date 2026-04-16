@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -28,6 +28,7 @@
 #include "nodes_stacks.h"
 #include "visual_manager.h"
 
+#if !defined(GPAC_DISABLE_COMPOSITOR)
 Bool compositor_get_2d_plane_intersection(GF_Ray *ray, SFVec3f *res)
 {
 	GF_Plane p;
@@ -341,10 +342,12 @@ Bool rectangle_check_adaptation(GF_Node *node, Drawable *stack, GF_TraverseState
 			gaze_x = tr_state->visual->compositor->gaze_x;
 			gaze_x *= txh->stream->srd_full_w;
 			gaze_x /= tr_state->visual->width;
+			gaze_x += txh->stream->srd_map_ox;
 
 			gaze_y = tr_state->visual->compositor->gaze_y;
 			gaze_y *= txh->stream->srd_full_h;
 			gaze_y /= tr_state->visual->height;
+			gaze_y += txh->stream->srd_map_oy;
 
 			gf_mo_hint_gaze(txh->stream, gaze_x, gaze_y);
 		}
@@ -371,8 +374,8 @@ Bool rectangle_check_adaptation(GF_Node *node, Drawable *stack, GF_TraverseState
 		if (is_visible) {
 			if (!txh->is_open) {
 				GF_LOG(GF_LOG_INFO, GF_LOG_COMPOSE, ("[Compositor] Texture %d stopped on visible partial plane - starting it\n", txh->stream->OD_ID));
-				assert(txh->stream && txh->stream->odm);
-				txh->stream->odm->disable_buffer_at_next_play = GF_TRUE;
+				if (txh->stream->odm)
+					txh->stream->odm->disable_buffer_at_next_play = GF_TRUE;
 
 				gf_sc_texture_play(txh, NULL);
 			}
@@ -817,3 +820,4 @@ void compositor_init_bitwrapper(GF_Compositor *compositor, GF_Node *node)
 
 
 #endif /*GPAC_DISABLE_VRML*/
+#endif //!defined(GPAC_DISABLE_COMPOSITOR)

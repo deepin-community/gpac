@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -30,7 +30,7 @@
 /*for anchor*/
 #include "mpeg4_grouping.h"
 
-#ifndef GPAC_DISABLE_VRML
+#if !defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_COMPOSITOR)
 
 /*for event DOM filtering type ...*/
 #include <gpac/scenegraph_svg.h>
@@ -568,7 +568,7 @@ static Bool OnProximitySensor2D(GF_SensorHandler *sh, Bool is_over, Bool is_canc
 	M_ProximitySensor2D *ps = (M_ProximitySensor2D *)sh->sensor;
 	Prox2DStack *stack = (Prox2DStack *) gf_node_get_private(sh->sensor);
 
-	assert(ps->enabled);
+	gf_assert(ps->enabled);
 
 	if (is_over) {
 		stack->last_time = gf_node_get_scene_time(sh->sensor);
@@ -1634,4 +1634,4 @@ void compositor_init_envtest(GF_Compositor *compositor, GF_Node *node)
 
 
 
-#endif /*GPAC_DISABLE_VRML*/
+#endif //!defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_COMPOSITOR)

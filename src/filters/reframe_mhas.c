@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2020-2022
+ *			Copyright (c) Telecom ParisTech 2020-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / MHAS reframer filter
@@ -27,7 +27,7 @@
 #include <gpac/constants.h>
 #include <gpac/filters.h>
 
-#if !defined(GPAC_DISABLE_AV_PARSERS)
+#if !defined(GPAC_DISABLE_AV_PARSERS) && !defined(GPAC_DISABLE_RFMHAS)
 
 
 static u32 USACSampleRates[] = {96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350, 0, 0,
@@ -323,6 +323,7 @@ static void mhas_dmx_check_pid(GF_Filter *filter, GF_MHASDmxCtx *ctx, u32 PL, u3
 		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_DECODER_CONFIG, & PROP_DATA_NO_COPY( data, (dsi_size+5) ) );
 	} else {
 		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_CODECID, & PROP_UINT( GF_CODECID_MHAS ) );
+		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_PROFILE_LEVEL, & PROP_UINT( PL ) );
 	}
 
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_TIMESCALE, & PROP_UINT(ctx->timescale ? ctx->timescale : ctx->sample_rate));
@@ -406,15 +407,15 @@ static Bool mhas_dmx_process_event(GF_Filter *filter, const GF_FilterEvent *evt)
 	return GF_FALSE;
 }
 
-static GFINLINE void mhas_dmx_update_cts(GF_MHASDmxCtx *ctx)
+static GFINLINE void mhas_dmx_update_cts(GF_MHASDmxCtx *ctx, u32 pck_dur)
 {
 	if (ctx->timescale) {
-		u64 inc = ctx->frame_len;
+		u64 inc = pck_dur;
 		inc *= ctx->timescale;
 		inc /= ctx->sample_rate;
 		ctx->cts += inc;
 	} else {
-		ctx->cts += ctx->frame_len;
+		ctx->cts += pck_dur;
 	}
 }
 
@@ -542,7 +543,7 @@ GF_Err mhas_dmx_process(GF_Filter *filter)
 			remain=0;
 			break;
 		}
-		if ((hdr_start[1]==0x01) && (hdr_start[2]==0xA5)) {
+		if ( (u32)(hdr_start-start)+3 <= remain  && (hdr_start[1]==0x01) && (hdr_start[2]==0xA5)) {
 			GF_LOG(GF_LOG_DEBUG, GF_LOG_MEDIA, ("[MHASDmx] Sync found !\n"));
 			ctx->nosync = GF_FALSE;
 			break;
@@ -638,10 +639,11 @@ GF_Err mhas_dmx_process(GF_Filter *filter)
 				numSpeakers = (s32) gf_mpegh_escaped_value(ctx->bs, 5, 8, 16) + 1;
 				//TODO ...
 			}
+			if (sr) {
+				mhas_dmx_check_pid(filter, ctx, pl, sr, frame_len, CICPspeakerLayoutIdx, numSpeakers, start + pay_start, (u32) mhas_size);
 
-			mhas_dmx_check_pid(filter, ctx, pl, sr, frame_len, CICPspeakerLayoutIdx, numSpeakers, start + pay_start, (u32) mhas_size);
-
-			has_cfg = GF_TRUE;
+				has_cfg = GF_TRUE;
+			}
 		}
 		//audio truncation
 		else if (mhas_type==17) {
@@ -705,16 +707,17 @@ GF_Err mhas_dmx_process(GF_Filter *filter)
 							offset /= ctx->sample_rate;
 						}
 						gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_DELAY , &PROP_LONGSINT( -offset));
+					} else if (pck_dur >= nb_trunc_samples) {
+						pck_dur -= nb_trunc_samples;
 					}
-				} else {
+				} else if (pck_dur >= nb_trunc_samples) {
 					pck_dur -= nb_trunc_samples;
 				}
 				nb_trunc_samples = 0;
 			}
 
 			if (ctx->timescale) {
-				pck_dur *= ctx->timescale;
-				pck_dur /= ctx->sample_rate;
+				pck_dur = gf_timestamp_rescale(pck_dur, ctx->sample_rate, ctx->timescale);
 			}
 
 			dst = gf_filter_pck_new_alloc(ctx->opid, au_size, &output);
@@ -725,12 +728,12 @@ GF_Err mhas_dmx_process(GF_Filter *filter)
 			if (!has_cfg)
 				mhas_sap = 0;
 
-			if (mhas_sap) {
-				gf_filter_pck_set_sap(dst, GF_FILTER_SAP_1);
-			}
+			gf_filter_pck_set_sap(dst, mhas_sap ? GF_FILTER_SAP_1 : GF_FILTER_SAP_NONE);
+
 			gf_filter_pck_set_dts(dst, ctx->cts);
 			gf_filter_pck_set_cts(dst, ctx->cts);
 			gf_filter_pck_set_duration(dst, (u32) pck_dur);
+			gf_filter_pck_set_framing(dst, GF_TRUE, GF_TRUE);
 			if (ctx->byte_offset != GF_FILTER_NO_BO) {
 				u64 offset = (u64) (start - ctx->mhas_buffer);
 				offset += ctx->byte_offset + au_start;
@@ -743,7 +746,7 @@ GF_Err mhas_dmx_process(GF_Filter *filter)
 			consumed = au_start;
 			ctx->nb_frames ++;
 
-			mhas_dmx_update_cts(ctx);
+			mhas_dmx_update_cts(ctx,(u32)  pck_dur);
 			has_cfg = 0;
 
 			if (prev_pck_size) {
@@ -773,9 +776,12 @@ GF_Err mhas_dmx_process(GF_Filter *filter)
 		}
 	}
 	if (consumed) {
-		assert(remain>=consumed);
-		remain -= consumed;
-		start += consumed;
+		if (remain>=consumed) {
+			remain -= consumed;
+			start += consumed;
+		} else {
+			remain=0;
+		}
 	}
 
 skip:
@@ -793,10 +799,15 @@ skip:
 	if (!ctx->mhas_buffer_size) {
 		if (ctx->src_pck) gf_filter_pck_unref(ctx->src_pck);
 		ctx->src_pck = NULL;
+	} else if (in_pck && !ctx->src_pck) {
+		ctx->src_pck = in_pck;
+		gf_filter_pck_ref_props(&ctx->src_pck);
 	}
 
-	if (in_pck)
+
+	if (in_pck) {
 		gf_filter_pid_drop_packet(ctx->ipid);
+	}
 
 	return GF_OK;
 }
@@ -836,6 +847,8 @@ static const char *mhas_dmx_probe_data(const u8 *data, u32 size, GF_FilterProbeS
 		u32 pos = (u32) (ptr - data);
 		const u8 *sync_start = memchr(ptr, 0xC0, size - pos);
 		if (!sync_start) return NULL;
+		u32 remain = size - (u32) (sync_start-data);
+		if (remain<2) return NULL;
 		if ((sync_start[1]== 0x01) && (sync_start[2]==0xA5)) {
 			sync_pos = pos;
 			break;
@@ -910,19 +923,18 @@ GF_FilterRegister MHASDmxRegister = {
 	.configure_pid = mhas_dmx_configure_pid,
 	.process = mhas_dmx_process,
 	.probe_data = mhas_dmx_probe_data,
-	.process_event = mhas_dmx_process_event
+	.process_event = mhas_dmx_process_event,
+	.hint_class_type = GF_FS_CLASS_FRAMING
 };
 
 
-const GF_FilterRegister *mhas_dmx_register(GF_FilterSession *session)
+const GF_FilterRegister *rfmhas_register(GF_FilterSession *session)
 {
 	return &MHASDmxRegister;
 }
-
 #else
-
-const GF_FilterRegister *mhas_dmx_register(GF_FilterSession *session)
+const GF_FilterRegister *rfmhas_register(GF_FilterSession *session)
 {
 	return NULL;
 }
-#endif //#if !defined(GPAC_DISABLE_AV_PARSERS)
+#endif //#if !defined(GPAC_DISABLE_AV_PARSERS) && !defined(GPAC_DISABLE_RFMHAS)

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *          Authors: Cyril Concolato / Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2005-2022
+ *			Copyright (c) Telecom ParisTech 2005-2025
  *					All rights reserved
  *
  *  This file is part of GPAC / ISO Media File Format sub-project
@@ -162,7 +162,7 @@ GF_ISMASample *gf_isom_get_ismacryp_sample(GF_ISOFile *the_file, u32 trackNumber
 	GF_ISMASampleFormatBox *fmt;
 	GF_ProtectionSchemeInfoBox *sinf;
 
-	trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return NULL;
 
 	sinf = isom_get_sinf_entry(trak, sampleDescriptionIndex, 0, NULL);
@@ -196,7 +196,7 @@ u32 gf_isom_is_media_encrypted(GF_ISOFile *the_file, u32 trackNumber, u32 sample
 	u32 i, count;
 	GF_ProtectionSchemeInfoBox *sinf;
 
-	trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return 0;
 	count = gf_list_count(trak->Media->information->sampleTable->SampleDescription->child_boxes);
 	for (i=0; i<count; i++) {
@@ -220,7 +220,7 @@ Bool gf_isom_is_ismacryp_media(GF_ISOFile *the_file, u32 trackNumber, u32 sample
 	GF_TrackBox *trak;
 	GF_ProtectionSchemeInfoBox *sinf;
 
-	trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return GF_FALSE;
 
 	sinf = isom_get_sinf_entry(trak, sampleDescriptionIndex, GF_ISOM_ISMACRYP_SCHEME, NULL);
@@ -239,7 +239,7 @@ Bool gf_isom_is_omadrm_media(GF_ISOFile *the_file, u32 trackNumber, u32 sampleDe
 	GF_TrackBox *trak;
 	GF_ProtectionSchemeInfoBox *sinf;
 
-	trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return GF_FALSE;
 
 	sinf = isom_get_sinf_entry(trak, sampleDescriptionIndex, GF_ISOM_OMADRM_SCHEME, NULL);
@@ -259,7 +259,7 @@ GF_Err gf_isom_get_ismacryp_info(GF_ISOFile *the_file, u32 trackNumber, u32 samp
 	GF_TrackBox *trak;
 	GF_ProtectionSchemeInfoBox *sinf;
 
-	trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return GF_BAD_PARAM;
 
 	sinf = isom_get_sinf_entry(trak, sampleDescriptionIndex, GF_ISOM_ISMACRYP_SCHEME, NULL);
@@ -300,7 +300,7 @@ GF_Err gf_isom_get_omadrm_info(GF_ISOFile *the_file, u32 trackNumber, u32 sample
 	GF_TrackBox *trak;
 	GF_ProtectionSchemeInfoBox *sinf;
 
-	trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return GF_BAD_PARAM;
 
 	sinf = isom_get_sinf_entry(trak, sampleDescriptionIndex, GF_ISOM_OMADRM_SCHEME, NULL);
@@ -351,10 +351,10 @@ GF_Err gf_isom_remove_track_protection(GF_ISOFile *the_file, u32 trackNumber, u3
 	GF_SampleEntryBox *sea;
 	GF_ProtectionSchemeInfoBox *sinf;
 
-	e = CanAccessMovie(the_file, GF_ISOM_OPEN_WRITE);
+	e = gf_isom_can_access_movie(the_file, GF_ISOM_OPEN_WRITE);
 	if (e) return e;
 
-	trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak || !trak->Media || !sampleDescriptionIndex) return GF_BAD_PARAM;
 
 	sea = NULL;
@@ -390,10 +390,10 @@ GF_Err gf_isom_change_ismacryp_protection(GF_ISOFile *the_file, u32 trackNumber,
 	GF_SampleEntryBox *sea;
 	GF_ProtectionSchemeInfoBox *sinf;
 
-	e = CanAccessMovie(the_file, GF_ISOM_OPEN_WRITE);
+	e = gf_isom_can_access_movie(the_file, GF_ISOM_OPEN_WRITE);
 	if (e) return e;
 
-	trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak || !trak->Media || !sampleDescriptionIndex) return GF_BAD_PARAM;
 
 	sea = NULL;
@@ -421,7 +421,7 @@ static GF_Err isom_set_protected_entry(GF_ISOFile *the_file, u32 trackNumber, u3
 	u32 *overwrite_type=NULL;
 	GF_SampleEntryBox *sea;
 	GF_ProtectionSchemeInfoBox *sinf;
-	GF_TrackBox *trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	GF_TrackBox *trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return GF_BAD_PARAM;
 
 	e = Media_GetSampleDesc(trak->Media, desc_index, &sea, NULL);
@@ -450,6 +450,7 @@ static GF_Err isom_set_protected_entry(GF_ISOFile *the_file, u32 trackNumber, u3
 	case GF_ISOM_BOX_TYPE_DSMV:
 	case GF_ISOM_BOX_TYPE_AC3:
 	case GF_ISOM_BOX_TYPE_EC3:
+	case GF_ISOM_BOX_TYPE_AC4:
 		sea->type = GF_ISOM_BOX_TYPE_ENCA;
 		break;
 	case GF_ISOM_BOX_TYPE_MP4V:
@@ -585,6 +586,7 @@ GF_Err gf_isom_set_ismacryp_protection(GF_ISOFile *the_file, u32 trackNumber, u3
 	return GF_OK;
 }
 
+GF_EXPORT
 GF_Err gf_isom_set_oma_protection(GF_ISOFile *the_file, u32 trackNumber, u32 desc_index,
                                   char *contentID, char *kms_URI, u32 encryption_type, u64 plainTextLength, char *textual_headers, u32 textual_headers_len,
                                   Bool selective_encryption, u32 KI_length, u32 IV_length)
@@ -620,6 +622,7 @@ GF_Err gf_isom_set_oma_protection(GF_ISOFile *the_file, u32 trackNumber, u32 des
 	return GF_OK;
 }
 
+GF_EXPORT
 GF_Err gf_isom_set_generic_protection(GF_ISOFile *the_file, u32 trackNumber, u32 desc_index, u32 scheme_type, u32 scheme_version, char *scheme_uri, char *kms_URI)
 {
 	GF_Err e;
@@ -650,7 +653,7 @@ GF_Err gf_isom_get_original_format_type(GF_ISOFile *the_file, u32 trackNumber, u
 	GF_ProtectionSchemeInfoBox *sinf;
 	u32 i, count;
 
-	trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return GF_BAD_PARAM;
 
 	count = gf_list_count(trak->Media->information->sampleTable->SampleDescription->child_boxes);
@@ -660,6 +663,7 @@ GF_Err gf_isom_get_original_format_type(GF_ISOFile *the_file, u32 trackNumber, u
 		Media_GetSampleDesc(trak->Media, i+1, &sea, NULL);
 		if (!sea) return GF_BAD_PARAM;
 		sinf = (GF_ProtectionSchemeInfoBox*) gf_isom_box_find_child(sea->child_boxes, GF_ISOM_BOX_TYPE_SINF);
+		if (!sinf) sinf = (GF_ProtectionSchemeInfoBox*) gf_isom_box_find_child(sea->child_boxes, GF_ISOM_BOX_TYPE_RINF);
 		if (!sinf) continue;
 
 		if (outOriginalFormat && sinf->original_format) {
@@ -680,7 +684,7 @@ Bool gf_isom_is_cenc_media(GF_ISOFile *the_file, u32 trackNumber, u32 sampleDesc
 	GF_ProtectionSchemeInfoBox *sinf;
 	u32 i, count;
 
-	trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return GF_FALSE;
 
 	count = gf_list_count(trak->Media->information->sampleTable->SampleDescription->child_boxes);
@@ -724,7 +728,7 @@ GF_Err gf_isom_get_cenc_info(GF_ISOFile *the_file, u32 trackNumber, u32 sampleDe
 	GF_TrackBox *trak;
 	GF_ProtectionSchemeInfoBox *sinf;
 
-	trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return GF_BAD_PARAM;
 
 
@@ -750,8 +754,9 @@ GF_Err gf_isom_get_cenc_info(GF_ISOFile *the_file, u32 trackNumber, u32 sampleDe
 
 #ifndef GPAC_DISABLE_ISOM_WRITE
 
+GF_EXPORT
 GF_Err gf_isom_set_cenc_protection(GF_ISOFile *the_file, u32 trackNumber, u32 desc_index, u32 scheme_type,
-                                   u32 scheme_version, u32 default_IsEncrypted, u8 default_crypt_byte_block, u8 default_skip_byte_block,
+                                   u32 scheme_version, u32 default_IsEncrypted, u32 default_crypt_byte_block, u32 default_skip_byte_block,
 								    u8 *key_info, u32 key_info_size)
 {
 	GF_Err e;
@@ -803,7 +808,7 @@ GF_Err gf_isom_remove_cenc_saiz(GF_ISOFile *the_file, u32 trackNumber)
 {
 	u32 i;
 	GF_SampleTableBox *stbl;
-	GF_TrackBox *trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	GF_TrackBox *trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return GF_BAD_PARAM;
 
 	stbl = trak->Media->information->sampleTable;
@@ -844,7 +849,7 @@ GF_Err gf_isom_remove_cenc_saio(GF_ISOFile *the_file, u32 trackNumber)
 {
 	u32 i;
 	GF_SampleTableBox *stbl;
-	GF_TrackBox *trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	GF_TrackBox *trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return GF_BAD_PARAM;
 
 	stbl = trak->Media->information->sampleTable;
@@ -877,7 +882,8 @@ GF_Err gf_isom_remove_cenc_saio(GF_ISOFile *the_file, u32 trackNumber)
 }
 #endif
 
-GF_Err gf_cenc_set_pssh(GF_ISOFile *file, bin128 systemID, u32 version, u32 KID_count, bin128 *KIDs, u8 *data, u32 len, u32 pssh_mode)
+GF_EXPORT
+GF_Err gf_isom_cenc_set_pssh(GF_ISOFile *file, bin128 systemID, u32 version, u32 KID_count, bin128 *KIDs, u8 *data, u32 len, u32 pssh_mode)
 {
 	GF_ProtectionSystemHeaderBox *pssh = NULL;
 	GF_PIFFProtectionSystemHeaderBox *pssh_piff = NULL;
@@ -890,10 +896,14 @@ GF_Err gf_cenc_set_pssh(GF_ISOFile *file, bin128 systemID, u32 version, u32 KID_
 		if (!file->meta->child_boxes) file->meta->child_boxes = gf_list_new();
 		child_boxes = &file->meta->child_boxes;
 	} else if (file->FragmentsFlags & GF_ISOM_FRAG_WRITE_READY) {
+#ifndef GPAC_DISABLE_ISOM_FRAGMENTS
 		if (!file->moof) return GF_BAD_PARAM;
 		if (!file->moof->PSSHs) file->moof->PSSHs = gf_list_new();
 		child_boxes = &file->moof->child_boxes;
 		moof_pssh = file->moof->PSSHs;
+#else
+		return GF_NOT_SUPPORTED;
+#endif
 	} else {
 		if (!file->moov) return GF_BAD_PARAM;
 		if (!file->moov->child_boxes) file->moov->child_boxes = gf_list_new();
@@ -982,12 +992,12 @@ GF_Err gf_cenc_set_pssh(GF_ISOFile *file, bin128 systemID, u32 version, u32 KID_
 }
 
 
-
-GF_Err gf_isom_remove_samp_enc_box(GF_ISOFile *the_file, u32 trackNumber)
+GF_EXPORT
+GF_Err gf_isom_remove_cenc_senc_box(GF_ISOFile *the_file, u32 trackNumber)
 {
 	u32 i;
 	GF_SampleTableBox *stbl;
-	GF_TrackBox *trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	GF_TrackBox *trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return GF_BAD_PARAM;
 	stbl = trak->Media->information->sampleTable;
 	if (!stbl)
@@ -1023,11 +1033,12 @@ GF_Err gf_isom_remove_samp_enc_box(GF_ISOFile *the_file, u32 trackNumber)
 	return GF_OK;
 }
 
-GF_Err gf_isom_remove_samp_group_box(GF_ISOFile *the_file, u32 trackNumber)
+GF_EXPORT
+GF_Err gf_isom_remove_cenc_seig_sample_group(GF_ISOFile *the_file, u32 trackNumber)
 {
 	u32 i;
 	GF_SampleTableBox *stbl;
-	GF_TrackBox *trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	GF_TrackBox *trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return GF_BAD_PARAM;
 	stbl = trak->Media->information->sampleTable;
 	if (!stbl)
@@ -1127,9 +1138,10 @@ GF_SampleEncryptionBox * gf_isom_create_samp_enc_box(u8 version, u32 flags)
 	return senc;
 }
 
+GF_EXPORT
 GF_Err gf_isom_cenc_allocate_storage(GF_ISOFile *the_file, u32 trackNumber)
 {
-	GF_TrackBox *trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	GF_TrackBox *trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return GF_BAD_PARAM;
 
 	if (trak->sample_encryption) return GF_OK;
@@ -1139,9 +1151,10 @@ GF_Err gf_isom_cenc_allocate_storage(GF_ISOFile *the_file, u32 trackNumber)
 	return gf_list_add(trak->child_boxes, trak->sample_encryption);
 }
 
+GF_EXPORT
 GF_Err gf_isom_piff_allocate_storage(GF_ISOFile *the_file, u32 trackNumber, u32 AlgorithmID, u8 IV_size, bin128 KID)
 {
-	GF_TrackBox *trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	GF_TrackBox *trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return GF_BAD_PARAM;
 
 	if (trak->sample_encryption) return GF_OK;
@@ -1206,7 +1219,7 @@ GF_Err gf_isom_cenc_merge_saiz_saio(GF_SampleEncryptionBox *senc, GF_SampleTable
 {
 	u32 i;
 	Bool is_first_saiz = GF_FALSE;
-	assert(stbl);
+	gf_assert(stbl);
 
 	if (!senc->cenc_saiz) {
 		senc->cenc_saiz = (GF_SampleAuxiliaryInfoSizeBox *) gf_isom_box_new_parent(&stbl->child_boxes, GF_ISOM_BOX_TYPE_SAIZ);
@@ -1292,12 +1305,13 @@ GF_Err gf_isom_cenc_merge_saiz_saio(GF_SampleEncryptionBox *senc, GF_SampleTable
 }
 #endif /* GPAC_DISABLE_ISOM_FRAGMENTS */
 
+GF_EXPORT
 GF_Err gf_isom_track_cenc_add_sample_info(GF_ISOFile *the_file, u32 trackNumber, u32 container_type, u8 *buf, u32 len, Bool use_subsamples, Bool use_saio_32bit, Bool use_multikey)
 {
 	GF_SampleEncryptionBox *senc;
 	GF_CENCSampleAuxInfo *sai;
 	GF_SampleTableBox *stbl;
-	GF_TrackBox *trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	GF_TrackBox *trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return GF_BAD_PARAM;
 	stbl = trak->Media->information->sampleTable;
 	if (!stbl) return GF_BAD_PARAM;
@@ -1403,7 +1417,9 @@ Bool gf_isom_cenc_has_saiz_saio_full(GF_SampleTableBox *stbl, void *_traf, u32 s
 			if (stbl) {
 				entry = gf_list_get(stbl->SampleDescription->child_boxes, 0);
 			} else {
+#ifndef GPAC_DISABLE_ISOM_FRAGMENTS
 				entry = gf_list_get(traf->trex->track->Media->information->sampleTable->SampleDescription->child_boxes, 0);
+#endif
 			}
 
 			if (entry)
@@ -1412,6 +1428,9 @@ Bool gf_isom_cenc_has_saiz_saio_full(GF_SampleTableBox *stbl, void *_traf, u32 s
 			if (sinf && sinf->scheme_type) {
 				saiz_aux_info_type = sinf_fmt = sinf->scheme_type->scheme_type;
 			}
+			//default to cenc for smooth
+			else if (traf->trex->track->moov->mov->is_smooth)
+				saiz_aux_info_type = sinf_fmt = GF_ISOM_CENC_SCHEME;
 		}
 		if (!saiz_aux_info_type && (c1==1) && (c2==1)) {
 			GF_LOG(GF_LOG_WARNING, GF_LOG_CONTAINER, ("[iso file] saiz box without flags nor aux info type and no default scheme, ignoring\n"));
@@ -1441,7 +1460,9 @@ Bool gf_isom_cenc_has_saiz_saio_full(GF_SampleTableBox *stbl, void *_traf, u32 s
 			if (stbl) {
 				entry = gf_list_get(stbl->SampleDescription->child_boxes, 0);
 			} else {
+#ifndef GPAC_DISABLE_ISOM_FRAGMENTS
 				entry = gf_list_get(traf->trex->track->Media->information->sampleTable->SampleDescription->child_boxes, 0);
+#endif
 			}
 			if (entry)
 				sinf = (GF_ProtectionSchemeInfoBox *) gf_isom_box_find_child(entry->child_boxes, GF_ISOM_BOX_TYPE_SINF);
@@ -1449,6 +1470,9 @@ Bool gf_isom_cenc_has_saiz_saio_full(GF_SampleTableBox *stbl, void *_traf, u32 s
 			if (sinf && sinf->scheme_type) {
 				saio_aux_info_type = sinf_fmt = sinf->scheme_type->scheme_type;
 			}
+			//default to cenc for smooth
+			else if (traf->trex->track->moov->mov->is_smooth)
+				saio_aux_info_type = sinf_fmt = GF_ISOM_CENC_SCHEME;
 		}
 		if (!saio_aux_info_type && (c1==1) && (c2==1)) {
 			GF_LOG(GF_LOG_WARNING, GF_LOG_CONTAINER, ("[iso file] saio box without flags nor aux info type and no default scheme, ignoring\n"));
@@ -1544,7 +1568,7 @@ static GF_Err isom_cenc_get_sai_by_saiz_saio(GF_MediaBox *mdia, u32 sampleNumber
 		}
 		if ((nb_saio==1) && !saio_cenc->total_size) {
 			for (j = 0; j < saiz->sample_count; j++) {
-				saio_cenc->total_size += saiz->default_sample_info_size ? saiz->default_sample_info_size : saiz->sample_info_size[j];
+				saio_cenc->total_size += (saiz->default_sample_info_size || !saiz->sample_info_size) ? saiz->default_sample_info_size : saiz->sample_info_size[j];
 			}
 		}
 		if (saiz->cached_sample_num+1== sampleNumber) {
@@ -1554,7 +1578,7 @@ static GF_Err isom_cenc_get_sai_by_saiz_saio(GF_MediaBox *mdia, u32 sampleNumber
 				return GF_ISOM_INVALID_FILE;
 
 			for (j = 0; j < sampleNumber-1; j++)
-				prev_sai_size += saiz->default_sample_info_size ? saiz->default_sample_info_size : saiz->sample_info_size[j];
+				prev_sai_size += (saiz->default_sample_info_size || !saiz->sample_info_size) ? saiz->default_sample_info_size : saiz->sample_info_size[j];
 		}
 		if (saiz->default_sample_info_size) {
 			size = saiz->default_sample_info_size;
@@ -1579,7 +1603,8 @@ static GF_Err isom_cenc_get_sai_by_saiz_saio(GF_MediaBox *mdia, u32 sampleNumber
 			saio_cenc->cached_data = gf_malloc(sizeof(u8)*saio_cenc->total_size);
 			if (!saio_cenc->cached_data) return GF_OUT_OF_MEM;
 			cur_position = gf_bs_get_position(mdia->information->dataHandler->bs);
-			gf_bs_seek(mdia->information->dataHandler->bs, offset);
+			//offset is as written in saio (relative to frag base data offset), compensate removed bytes
+			gf_bs_seek(mdia->information->dataHandler->bs, offset - mdia->mediaTrack->moov->mov->bytes_removed );
 			gf_bs_read_data(mdia->information->dataHandler->bs, saio_cenc->cached_data, saio_cenc->total_size);
 			gf_bs_seek(mdia->information->dataHandler->bs, cur_position);
 		}
@@ -1598,14 +1623,16 @@ static GF_Err isom_cenc_get_sai_by_saiz_saio(GF_MediaBox *mdia, u32 sampleNumber
 
 	offset += (nb_saio == 1) ? prev_sai_size : 0;
 	cur_position = gf_bs_get_position(mdia->information->dataHandler->bs);
-	gf_bs_seek(mdia->information->dataHandler->bs, offset);
+	//offset is as written in saio (relative to frag base data offset), compensate removed bytes
+	gf_bs_seek(mdia->information->dataHandler->bs, offset - mdia->mediaTrack->moov->mov->bytes_removed);
 
 	if (out_buffer) {
 		if ((*out_size) < size) {
 			(*out_buffer) = gf_realloc((*out_buffer), sizeof(char)*(size) );
 			if (! *out_buffer) return GF_OUT_OF_MEM;
 		}
-		gf_bs_read_data(mdia->information->dataHandler->bs, (*out_buffer), size);
+		if ((*out_buffer) && size)
+			gf_bs_read_data(mdia->information->dataHandler->bs, (*out_buffer), size);
 	}
 	(*out_size) = size;
 
@@ -1623,7 +1650,7 @@ GF_Err gf_isom_cenc_get_sample_aux_info(GF_ISOFile *the_file, u32 trackNumber, u
 	u32 type, scheme_type = -1;
 	GF_CENCSampleAuxInfo *a_sai;
 
-	trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return GF_BAD_PARAM;
 	stbl = trak->Media->information->sampleTable;
 	if (!stbl)
@@ -1650,7 +1677,7 @@ GF_Err gf_isom_cenc_get_sample_aux_info(GF_ISOFile *the_file, u32 trackNumber, u
 
 	gf_isom_get_cenc_info(the_file, trackNumber, sampleDescIndex, NULL, &scheme_type, NULL);
 
-	/*get sample auxiliary information by saiz/saio rather than by parsing senc box*/
+	/*! if we have saiz/saio use this directly*/
 	if (gf_isom_cenc_has_saiz_saio_track(stbl, scheme_type)) {
 		return isom_cenc_get_sai_by_saiz_saio(trak->Media, sampleNumber, scheme_type, out_buffer, outSize);
 	}
@@ -1659,7 +1686,7 @@ GF_Err gf_isom_cenc_get_sample_aux_info(GF_ISOFile *the_file, u32 trackNumber, u
 
 	//senc is not loaded by default, do it now
 	if (!gf_list_count(senc->samp_aux_info)) {
-		GF_Err e = senc_Parse(trak->Media->information->dataHandler->bs, trak, NULL, senc);
+		GF_Err e = senc_Parse(trak->Media->information->dataHandler->bs, trak, NULL, senc, 0);
 		if (e) return e;
 	}
 
@@ -1681,6 +1708,10 @@ GF_Err gf_isom_cenc_get_sample_aux_info(GF_ISOFile *the_file, u32 trackNumber, u
 		u8 IV_size=0, constant_IV_size=0;
 		Bool is_Protected;
 
+#ifndef	GPAC_DISABLE_ISOM_FRAGMENTS
+		//read number of trashed samples since gf_isom_get_sample_cenc_info_internal removes them
+		sampleNumber += trak->sample_count_at_seg_start;
+#endif
 		gf_isom_get_sample_cenc_info_internal(trak, NULL, senc, sampleNumber, &is_Protected, NULL, NULL, &key_info, &key_info_size);
 		if (!key_info) {
 			IV_size = key_info_size; //piff default
@@ -1703,7 +1734,7 @@ GF_Err gf_isom_cenc_get_sample_aux_info(GF_ISOFile *the_file, u32 trackNumber, u
 	return GF_OK;
 }
 
-void gf_isom_cenc_get_default_info_internal(GF_TrackBox *trak, u32 sampleDescriptionIndex, u32 *container_type, Bool *default_IsEncrypted, u8 *crypt_byte_block, u8 *skip_byte_block, const u8 **key_info, u32 *key_info_size)
+void gf_isom_cenc_get_default_info_internal(GF_TrackBox *trak, u32 sampleDescriptionIndex, u32 *container_type, Bool *default_IsEncrypted, u32 *crypt_byte_block, u32 *skip_byte_block, const u8 **key_info, u32 *key_info_size)
 {
 	GF_ProtectionSchemeInfoBox *sinf;
 
@@ -1800,9 +1831,9 @@ void gf_isom_cenc_get_default_info_internal(GF_TrackBox *trak, u32 sampleDescrip
 }
 
 GF_EXPORT
-GF_Err gf_isom_cenc_get_default_info(GF_ISOFile *the_file, u32 trackNumber, u32 sampleDescriptionIndex, u32 *container_type, Bool *default_IsEncrypted, u8 *crypt_byte_block, u8 *skip_byte_block, const u8 **key_info, u32 *key_info_size)
+GF_Err gf_isom_cenc_get_default_info(GF_ISOFile *the_file, u32 trackNumber, u32 sampleDescriptionIndex, u32 *container_type, Bool *default_IsEncrypted, u32 *crypt_byte_block, u32 *skip_byte_block, const u8 **key_info, u32 *key_info_size)
 {
-	GF_TrackBox *trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	GF_TrackBox *trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return GF_BAD_PARAM;
 	gf_isom_cenc_get_default_info_internal(trak, sampleDescriptionIndex, container_type, default_IsEncrypted, crypt_byte_block, skip_byte_block, key_info, key_info_size);
 	return GF_OK;
@@ -1811,6 +1842,7 @@ GF_Err gf_isom_cenc_get_default_info(GF_ISOFile *the_file, u32 trackNumber, u32 
 /*
 	Adobe'protection scheme
 */
+GF_EXPORT
 GF_Err gf_isom_set_adobe_protection(GF_ISOFile *the_file, u32 trackNumber, u32 desc_index, u32 scheme_type, u32 scheme_version, Bool is_selective_enc, char *metadata, u32 len)
 {
 	GF_ProtectionSchemeInfoBox *sinf;
@@ -1871,7 +1903,7 @@ Bool gf_isom_is_adobe_protection_media(GF_ISOFile *the_file, u32 trackNumber, u3
 	GF_TrackBox *trak;
 	GF_ProtectionSchemeInfoBox *sinf;
 
-	trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return GF_FALSE;
 
 	sinf = isom_get_sinf_entry(trak, sampleDescriptionIndex, GF_ISOM_ADOBE_SCHEME, NULL);
@@ -1891,7 +1923,7 @@ GF_Err gf_isom_get_adobe_protection_info(GF_ISOFile *the_file, u32 trackNumber, 
 	GF_TrackBox *trak;
 	GF_ProtectionSchemeInfoBox *sinf;
 
-	trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return GF_BAD_PARAM;
 
 	sinf = isom_get_sinf_entry(trak, sampleDescriptionIndex, GF_ISOM_ADOBE_SCHEME, NULL);
@@ -1933,7 +1965,7 @@ void gf_isom_ipmpx_remove_tool_list(GF_ISOFile *the_file)
 }
 #endif
 
-
+GF_EXPORT
 Bool gf_cenc_validate_key_info(const u8 *key_info, u32 key_info_size)
 {
 	u32 i, n_keys, kpos, nb_missing = 19;

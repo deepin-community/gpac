@@ -90,7 +90,7 @@ typedef struct
 typedef struct _gf_sc_texture_handler GF_TextureH;
 
 /*interface name and version for video output*/
-#define GF_VIDEO_OUTPUT_INTERFACE	GF_4CC('G','V','O','7')
+#define GF_VIDEO_OUTPUT_INTERFACE	GF_4CC('G','V','O','8')
 
 /*! window creation flags*/
 typedef enum
@@ -157,7 +157,7 @@ typedef struct _video_out
 	GF_EVENT_SET_CURSOR: sets cursor
 	GF_EVENT_SET_CAPTION: sets caption
 	GF_EVENT_SHOWHIDE: show/hide output window for self-managed output
-	GF_EVENT_SIZE:  inital window resize upon scene load
+	GF_EVENT_SIZE:  initial window resize upon scene load
 	GF_EVENT_VIDEO_SETUP: all HW related setup:
 		* for 2D output, this means resizing the backbuffer if needed (depending on HW constraints)
 		* for 3D output, this means re-setup of OpenGL context (depending on HW constraints).

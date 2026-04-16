@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2021
+ *			Copyright (c) Telecom ParisTech 2000-2025
  *					All rights reserved
  *
  *  This file is part of GPAC / ISO Media File Format sub-project
@@ -921,7 +921,7 @@ GF_Err gf_isom_reset_hint_reader(GF_ISOFile *the_file, u32 trackNumber, u32 samp
 	GF_TrackBox *trak;
 	GF_HintSampleEntryBox *entry;
 
-	trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return GF_BAD_PARAM;
 
 	if (!sample_start) return GF_BAD_PARAM;
@@ -988,7 +988,7 @@ static GF_ISOSample *gf_isom_get_data_sample(GF_HintSample *hsamp, GF_TrackBox *
 	}
 
 	samp = gf_isom_sample_new();
-	Media_GetSample(trak->Media, sample_num, &samp, &i, 0, NULL);
+	Media_GetSample(trak->Media, sample_num, &samp, &i, 0, NULL, GF_FALSE);
 	if (!samp) return NULL;
 	GF_SAFEALLOC(hdc, GF_HintDataCache);
 	if (!hdc) return NULL;
@@ -1030,7 +1030,7 @@ GF_Err gf_isom_next_hint_packet(GF_ISOFile *the_file, u32 trackNumber, char **pc
 	if (repeated) *repeated = 0;
 	if (sample_num) *sample_num = 0;
 
-	trak = gf_isom_get_track_from_file(the_file, trackNumber);
+	trak = gf_isom_get_track_box(the_file, trackNumber);
 	if (!trak) return GF_BAD_PARAM;
 	e = Media_GetSampleDesc(trak->Media, 1, (GF_SampleEntryBox **) &entry, NULL);
 	if (e) return e;

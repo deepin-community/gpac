@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -25,17 +25,20 @@
 
 #include <gpac/internal/compositor_dev.h>
 
+#ifndef GPAC_DISABLE_COMPOSITOR
+
 void gf_ar_rcfg_done(GF_Filter *filter, GF_FilterPid *pid, GF_FilterPacket *pck)
 {
 	u32 size;
 	GF_AudioRenderer *ar = (GF_AudioRenderer *) gf_filter_pck_get_data(pck, &size);
-	assert(!size);
-	assert(ar->wait_for_rcfg);
-	ar->wait_for_rcfg --;
+	gf_assert(!size);
+	if (ar->wait_for_rcfg)
+		ar->wait_for_rcfg --;
+
 	if (ar->wait_for_rcfg) {
-		GF_LOG(GF_LOG_DEBUG, GF_LOG_AUDIO, ("[Compositor] Reconfigure negociation %d still pending\n", ar->wait_for_rcfg));
+		GF_LOG(GF_LOG_DEBUG, GF_LOG_AUDIO, ("[Compositor] Reconfigure negotiation %d still pending\n", ar->wait_for_rcfg));
 	} else {
-		GF_LOG(GF_LOG_DEBUG, GF_LOG_AUDIO, ("[Compositor] Reconfigure negociation done\n"));
+		GF_LOG(GF_LOG_DEBUG, GF_LOG_AUDIO, ("[Compositor] Reconfigure negotiation done\n"));
 	}
 }
 
@@ -230,9 +233,9 @@ void gf_sc_ar_add_src(GF_AudioRenderer *ar, GF_AudioInterface *source)
 	Bool recfg;
 	if (!ar) return;
 
-#ifndef GPAC_DISABLE_PLAYER
+#ifndef GPAC_DISABLE_COMPOSITOR
 	compositor_setup_aout(ar->compositor);
-#endif //GPAC_DISABLE_PLAYER
+#endif //GPAC_DISABLE_COMPOSITOR
 
 	/*lock mixer*/
 	gf_mixer_lock(ar->mixer, GF_TRUE);
@@ -284,8 +287,10 @@ static void gf_ar_pck_done(GF_Filter *filter, GF_FilterPid *pid, GF_FilterPacket
 	/*data = */gf_filter_pck_get_data(pck, &size);
 	if (!size) return;
 	
-	assert(size <= compositor->audio_renderer->nb_bytes_out);
-	compositor->audio_renderer->nb_bytes_out -= size;
+	if (size <= compositor->audio_renderer->nb_bytes_out)
+		compositor->audio_renderer->nb_bytes_out -= size;
+	else//should never happen but we can live with it
+		compositor->audio_renderer->nb_bytes_out = 0;
 }
 
 void gf_ar_send_packets(GF_AudioRenderer *ar)
@@ -451,3 +456,4 @@ u32 gf_sc_ar_get_clock(GF_AudioRenderer *ar)
 
 
 
+#endif //GPAC_DISABLE_COMPOSITOR

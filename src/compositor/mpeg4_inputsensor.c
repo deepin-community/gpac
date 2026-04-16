@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -29,7 +29,7 @@
 #include <gpac/nodes_x3d.h>
 #include <gpac/constants.h>
 
-#ifndef GPAC_DISABLE_VRML
+#if !defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_COMPOSITOR)
 
 enum
 {
@@ -399,8 +399,8 @@ static GF_Err IS_ProcessData(GF_InputSensorCtx *is_ctx, const char *inBuffer, u3
 	/*apply it*/
 	i=0;
 	while ((st = (ISStack*)gf_list_enum(is_ctx->is_nodes, &i))) {
-		assert(st->is);
-		assert(st->mo);
+		gf_assert(st->is);
+		gf_assert(st->mo);
 		if (!st->is->enabled) continue;
 
 		count = gf_list_count(st->is->buffer.commandList);
@@ -432,8 +432,7 @@ static void InputSensorUnregister(GF_Node *node, ISStack *st)
 
 	odm = st->mo->odm;
 	if (!odm) return;
-
-	assert(odm->type == GF_STREAM_INTERACT);
+	if (odm->type != GF_STREAM_INTERACT) return;
 
 	/*get IS dec*/
 	is_ctx = locate_is_ctx_for_odm(odm->parentscene, odm);
@@ -459,8 +458,6 @@ static void InputSensorRegister(GF_Node *n)
 	ISStack *st = (ISStack *)gf_node_get_private(n);
 	odm = st->mo->odm;
 	if (!odm || (odm->type != GF_STREAM_INTERACT)) return;
-
-	assert(odm->type == GF_STREAM_INTERACT);
 
 	/*get IS dec*/
 	is_ctx = locate_is_ctx_for_odm(odm->parentscene, odm);
@@ -996,4 +993,4 @@ void gf_sc_input_sensor_string_input(GF_Compositor *compositor, u32 character)
 {
 }
 
-#endif /*GPAC_DISABLE_VRML*/
+#endif // !defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_COMPOSITOR)

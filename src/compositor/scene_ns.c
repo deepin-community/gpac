@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -26,17 +26,19 @@
 #include <gpac/internal/compositor_dev.h>
 #include <gpac/network.h>
 
+#if !defined(GPAC_DISABLE_COMPOSITOR)
+
 
 Bool scene_ns_on_setup_error(GF_Filter *failed_filter, void *udta, GF_Err err)
 {
 	GF_SceneNamespace *scene_ns;
 	GF_Scene *scene;
 	GF_ObjectManager *root = (GF_ObjectManager *)udta;
-	assert(root);
+	if (!root) return GF_FALSE;;
 	scene_ns = root->scene_ns;
-	assert(scene_ns);
+	gf_fatal_assert(scene_ns);
 	scene = root->subscene ? root->subscene : root->parentscene;
-	assert(scene);
+	gf_fatal_assert(scene);
 
 	GF_LOG(GF_LOG_DEBUG, GF_LOG_COMPTIME, ("[ODM] Service connection failure received from %s - %s\n", scene_ns->url, gf_error_to_string(err) ));
 
@@ -498,7 +500,7 @@ void gf_scene_ns_connect_object(GF_Scene *scene, GF_ObjectManager *odm, char *se
 		return;
 	}
 	odm->scene_ns->nb_odm_users++;
-	assert(odm->scene_ns->owner == odm);
+	gf_assert(odm->scene_ns->owner == odm);
 
 	if (frag && !odm->scene_ns->url_frag) {
 		odm->scene_ns->url_frag = gf_strdup(frag+1);
@@ -590,3 +592,5 @@ void gf_scene_ns_connect_object(GF_Scene *scene, GF_ObjectManager *odm, char *se
 	/*OK connect*/
 	gf_odm_service_media_event(odm, GF_EVENT_MEDIA_SETUP_BEGIN);
 }
+
+#endif //!defined(GPAC_DISABLE_COMPOSITOR)

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2005-2022
+ *			Copyright (c) Telecom ParisTech 2005-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / NHNT demuxer filter
@@ -28,6 +28,8 @@
 #include <gpac/thread.h>
 #include <gpac/list.h>
 #include <gpac/bitstream.h>
+
+#ifndef GPAC_DISABLE_NHNTR
 
 #ifndef GPAC_DISABLE_AV_PARSERS
 #include <gpac/avparse.h>
@@ -280,7 +282,7 @@ GF_Err nhntdmx_process(GF_Filter *filter)
 	data = (u8 *)gf_filter_pck_get_data(pck, &pkt_size);
 	gf_filter_pck_get_framing(pck, &start, &end);
 	//for now we only work with complete files
-	assert(end);
+	gf_assert(end);
 
 	if (!ctx->bs) {
 		ctx->bs = gf_bs_new(data, pkt_size, GF_BITSTREAM_READ);
@@ -292,6 +294,7 @@ GF_Err nhntdmx_process(GF_Filter *filter)
 	p = gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_FILEPATH);
 	if (!p) {
 		gf_filter_pid_drop_packet(ctx->ipid);
+		GF_LOG(GF_LOG_ERROR, GF_LOG_PARSER, ("[NHNTDmx] NHNT only supported with local files\n"));
 		return GF_NOT_SUPPORTED;
 	}
 
@@ -446,7 +449,7 @@ GF_Err nhntdmx_process(GF_Filter *filter)
 
 		dst_pck = gf_filter_pck_new_alloc(ctx->opid, len, &output);
 		if (!dst_pck) return GF_OUT_OF_MEM;
-		
+
 		res = (u32) gf_fread(output, len, ctx->mdia);
 		if (res != len) {
 			GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[NHNT] Read failure, expecting %d bytes got %d", len, res));
@@ -506,19 +509,26 @@ GF_FilterRegister NHNTDmxRegister = {
 	.name = "nhntr",
 	GF_FS_SET_DESCRIPTION("NHNT reader")
 	GF_FS_SET_HELP("This filter reads NHNT files/data to produce a media PID and frames.\n"
-	"NHNT documentation is available at https://wiki.gpac.io/NHNT-Format\n")
+	"NHNT documentation is available at https://wiki.gpac.io/xmlformats/NHNT-Format\n")
 	.private_size = sizeof(GF_NHNTDmxCtx),
+	.flags = GF_FS_REG_USE_SYNC_READ,
 	.args = GF_NHNTDmxArgs,
 	.initialize = nhntdmx_initialize,
 	.finalize = nhntdmx_finalize,
 	SETCAPS(NHNTDmxCaps),
 	.configure_pid = nhntdmx_configure_pid,
 	.process = nhntdmx_process,
-	.process_event = nhntdmx_process_event
+	.process_event = nhntdmx_process_event,
+	.hint_class_type = GF_FS_CLASS_TOOL
 };
 
-const GF_FilterRegister *nhntdmx_register(GF_FilterSession *session)
+const GF_FilterRegister *nhntr_register(GF_FilterSession *session)
 {
 	return &NHNTDmxRegister;
 }
-
+#else
+const GF_FilterRegister *nhntr_register(GF_FilterSession *session)
+{
+	return NULL;
+}
+#endif // GPAC_DISABLE_NHNTR

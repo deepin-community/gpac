@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -28,9 +28,7 @@
 #include "nodes_stacks.h"
 
 
-#ifndef GPAC_DISABLE_VRML
-
-#ifndef GPAC_DISABLE_3D
+#if !defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_COMPOSITOR) && !defined(GPAC_DISABLE_3D)
 
 #include <gpac/mediaobject.h>
 
@@ -125,7 +123,7 @@ static void build_shape_sphere(GF_Node *n, Drawable3D *stack, GF_TraverseState *
 	mesh_new_sphere(stack->mesh, sp->radius, tr_state->visual->compositor->fast, NULL);
 }
 
-static void get_tx_coords_from_angle(GF_TraverseState *tr_state, GF_TextureHandler *txh, Bool horizontal, u32 *min_coord, u32 *max_coord)
+void get_tx_coords_from_angle(GF_TraverseState *tr_state, GF_TextureHandler *txh, Bool horizontal, u32 *min_coord, u32 *max_coord)
 {
 	GF_Vec target, ref;
 	Fixed dot, det, hfov, theta_angle, angle_start, angle_end, min_tx, max_tx;
@@ -671,6 +669,4 @@ void compositor_init_non_linear_deformer(GF_Compositor *compositor, GF_Node *nod
 	gf_node_set_callback_function(node, TraverseNonLinearDeformer);
 }
 
-#endif /*GPAC_DISABLE_3D*/
-
-#endif /*GPAC_DISABLE_VRML*/
+#endif // !defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_COMPOSITOR) && !defined(GPAC_DISABLE_3D)

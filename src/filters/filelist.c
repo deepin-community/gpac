@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2018-2022
+ *			Copyright (c) Telecom ParisTech 2018-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / file concatenator filter
@@ -30,6 +30,8 @@
 #include <gpac/bitstream.h>
 #include <gpac/isomedia.h>
 #include <gpac/network.h>
+
+#ifndef GPAC_DISABLE_FLIST
 
 #ifndef GPAC_DISABLE_AV_PARSERS
 #include <gpac/avparse.h>
@@ -61,14 +63,15 @@ typedef struct
 	//in output timescale
 	u64 cts_o, dts_o;
 	Bool single_frame;
-	Bool is_eos;
+	Bool is_eos, detached;
 	u64 dts_sub;
 	u64 first_dts_plus_one;
+	u64 prev_max_dts, prev_cts_o, prev_dts_o;
 
 	Bool skip_dts_init;
 	u32 play_state;
 
-	Bool send_cue;
+	Bool send_cue, send_period_switch;
 	s32 delay, initial_delay;
 
 	RawAudioInfo ra_info, splice_ra_info;
@@ -92,14 +95,13 @@ typedef struct
 	u64 file_size;
 } FileListEntry;
 
-enum
-{
+GF_OPT_ENUM (GF_FileListFileSortMode,
 	FL_SORT_NONE=0,
 	FL_SORT_NAME,
 	FL_SORT_SIZE,
 	FL_SORT_DATE,
 	FL_SORT_DATEX,
-};
+);
 
 enum
 {
@@ -113,13 +115,12 @@ enum
 	FL_SPLICE_AFTER,
 };
 
-enum
-{
+GF_OPT_ENUM (GF_FileListForceRawMode,
 	FL_RAW_AV=0,
 	FL_RAW_AUDIO,
 	FL_RAW_VIDEO,
-	FL_RAW_NO
-};
+	FL_RAW_NO,
+);
 
 
 enum
@@ -131,10 +132,10 @@ enum
 typedef struct
 {
 	//opts
-	Bool revert, sigcues, fdel;
-	u32 raw;
+	Bool revert, sigcues, sigperiods, fdel, keepts, flush;
+	GF_FileListForceRawMode raw;
 	s32 floop;
-	u32 fsort;
+	GF_FileListFileSortMode fsort;
 	u32 ka;
 	u64 timeout;
 	GF_PropStringList srcs;
@@ -156,6 +157,8 @@ typedef struct
 	GF_Fraction64 cts_offset, dts_offset, wait_dts_plus_one, dts_sub_plus_one;
 	u32 sync_init_time;
 
+	GF_Fraction64 prev_cts_offset, prev_dts_offset;
+
 	u32 nb_repeat;
 	Double start, stop;
 	Bool do_cat, do_del, src_error;
@@ -175,6 +178,7 @@ typedef struct
 
 	char *unknown_params;
 	char *pid_props;
+	Bool flushed;
 
 	GF_Fraction64 splice_start, splice_end;
 	u32 flags_splice_start, flags_splice_end;
@@ -205,15 +209,23 @@ typedef struct
 	//for isobmf cat mode in sigfrag
 	char *rel_url, *abs_url, *init_url;
 
+	Bool src_has_seen_eos;
 
 	GF_PropUIntList chap_times;
 	GF_PropStringList chap_names;
+
+	Bool is_gfio;
+	GF_FileIO *fio;
+	char *dyn_pl_data;
+	char *temp_base_url;
+
 } GF_FileListCtx;
 
 static const GF_FilterCapability FileListCapsSrc[] =
 {
 	CAP_UINT(GF_CAPS_INPUT_EXCLUDED, GF_PROP_PID_STREAM_TYPE, GF_STREAM_FILE),
 	CAP_UINT(GF_CAPS_INPUT_EXCLUDED, GF_PROP_PID_CODECID, GF_CODECID_NONE),
+	CAP_BOOL(GF_CAPS_INPUT_EXCLUDED, GF_PROP_PID_UNFRAMED, GF_TRUE),
 };
 
 static const GF_FilterCapability FileListCapsSrc_RAW_AV[] =
@@ -262,6 +274,16 @@ static const GF_FilterCapability FileListCapsSrc_RAW_V[] =
 
 static void filelist_start_ipid(GF_FileListCtx *ctx, FileListPid *iopid, u32 prev_timescale, Bool is_reassign)
 {
+	//PID is stopped, send a play/stop sequence to reset all buffers and ignore
+	if (iopid->play_state==FLIST_STATE_STOP) {
+		iopid->is_eos = GF_TRUE;
+		GF_FilterEvent evt;
+		GF_FEVT_INIT(evt, GF_FEVT_PLAY, iopid->ipid);
+		gf_filter_pid_send_event(iopid->ipid, &evt);
+		GF_FEVT_INIT(evt, GF_FEVT_STOP, iopid->ipid);
+		gf_filter_pid_send_event(iopid->ipid, &evt);
+		return;
+	}
 	iopid->is_eos = GF_FALSE;
 
 	if (is_reassign && !ctx->do_cat) {
@@ -269,12 +291,12 @@ static void filelist_start_ipid(GF_FileListCtx *ctx, FileListPid *iopid, u32 pre
 		//if we reattached the input, we must send a play request
 		gf_filter_pid_init_play_event(iopid->ipid, &evt, ctx->start, 1.0, "FileList");
 		gf_filter_pid_send_event(iopid->ipid, &evt);
-        iopid->skip_dts_init = GF_FALSE;
-        if (iopid->play_state==FLIST_STATE_STOP) {
-            GF_FEVT_INIT(evt, GF_FEVT_STOP, iopid->ipid)
-            gf_filter_pid_send_event(iopid->ipid, &evt);
-            iopid->skip_dts_init = GF_TRUE;
-        }
+		iopid->skip_dts_init = GF_FALSE;
+		if (iopid->play_state==FLIST_STATE_STOP) {
+			GF_FEVT_INIT(evt, GF_FEVT_STOP, iopid->ipid)
+			gf_filter_pid_send_event(iopid->ipid, &evt);
+			iopid->skip_dts_init = GF_TRUE;
+		}
 	}
 
 	//and convert back cts/dts offsets to output timescale
@@ -288,7 +310,7 @@ static void filelist_start_ipid(GF_FileListCtx *ctx, FileListPid *iopid, u32 pre
 	} else {
 		iopid->cts_o = 0;
 	}
-	
+
 	if (is_reassign && prev_timescale) {
 		u64 dts, cts;
 
@@ -353,7 +375,7 @@ static void filelist_override_caps(GF_Filter *filter, GF_FileListCtx *ctx)
 		gf_filter_override_caps(filter, FileListCapsSrc_RAW_V, GF_ARRAY_LENGTH(FileListCapsSrc_RAW_V) );
 		break;
 	default:
-		gf_filter_override_caps(filter, FileListCapsSrc, 2);
+		gf_filter_override_caps(filter, FileListCapsSrc, GF_ARRAY_LENGTH(FileListCapsSrc));
 	}
 }
 
@@ -386,6 +408,7 @@ static GF_Err filelist_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool 
 			return GF_NOT_SUPPORTED;
 		ctx->file_pid = pid;
 
+		gf_filter_pid_set_framing_mode(pid, GF_TRUE);
 
 		//check multithreaded FileIO restrictions
 		p = gf_filter_pid_get_property(pid, GF_PROP_PID_FILEPATH);
@@ -408,7 +431,7 @@ static GF_Err filelist_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool 
 		//check matching stream types if out pit not connected, and reuse if matching
 		if (!iopid->ipid) {
 			p = gf_filter_pid_get_property(pid, GF_PROP_PID_STREAM_TYPE);
-			assert(p);
+			if (!p) return GF_NOT_SUPPORTED;
 			if (p->value.uint == iopid->stream_type) {
 				iopid->ipid = pid;
 				prev_timescale = iopid->timescale;
@@ -434,6 +457,7 @@ static GF_Err filelist_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool 
 		}
 		gf_list_add(ctx->io_pids, iopid);
 		iopid->send_cue = ctx->sigcues;
+		iopid->send_period_switch = ctx->sigperiods;
 		iopid->play_state = FLIST_STATE_WAIT_PLAY;
 		first_config = GF_TRUE;
 	}
@@ -442,8 +466,9 @@ static GF_Err filelist_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool 
 	if (!iopid->opid) {
 		iopid->opid = gf_filter_pid_new(filter);
 		p = gf_filter_pid_get_property(pid, GF_PROP_PID_STREAM_TYPE);
-		assert(p);
+		if (!p) return GF_NOT_SUPPORTED;
 		iopid->stream_type = p->value.uint;
+		iopid->detached = GF_FALSE;
 	}
 	gf_filter_pid_set_framing_mode(pid, GF_TRUE);
 
@@ -454,7 +479,6 @@ static GF_Err filelist_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool 
 
 		p = gf_filter_pid_get_property(iopid->ipid, GF_PROP_PID_URL);
 		if (p && p->value.string) src_url = gf_strdup(p->value.string);
-
 	}
 	opid = iopid->opid;
 
@@ -639,9 +663,9 @@ static Bool filelist_process_event(GF_Filter *filter, const GF_FilterEvent *evt)
 		iopid = gf_list_get(ctx->io_pids, i);
 		if (!iopid->ipid) continue;
 
-        //only send on non connected inputs or on the one matching the pid event
-        if (iopid->opid && (iopid->opid != evt->base.on_pid))
-            continue;
+		//only send on non connected inputs or on the one matching the pid event
+		if (iopid->opid && (iopid->opid != evt->base.on_pid))
+			continue;
 
 		fevt.base.on_pid = iopid->ipid;
 		if (evt->base.type==GF_FEVT_PLAY) {
@@ -651,9 +675,32 @@ static Bool filelist_process_event(GF_Filter *filter, const GF_FilterEvent *evt)
 		} else if (evt->base.type==GF_FEVT_STOP) {
 			iopid->play_state = FLIST_STATE_STOP;
 			iopid->is_eos = GF_TRUE;
+			//reset all timing info
+			iopid->dts_sub = 0;
+			iopid->first_dts_plus_one = 0;
+			iopid->prev_max_dts = iopid->prev_cts_o = iopid->prev_dts_o = 0;
+			iopid->max_cts = iopid->max_dts = 0;
+			iopid->cts_o = iopid->dts_o = 0;
+			iopid->skip_dts_init = 0;
 		}
 		gf_filter_pid_send_event(iopid->ipid, &fevt);
 	}
+	//restart of playlist after EOS, reinit timing
+	if ((evt->base.type==GF_FEVT_PLAY) && ctx->is_eos) {
+		ctx->is_eos = GF_FALSE;
+		ctx->load_next = GF_TRUE;
+		ctx->last_url_crc = 0;
+		ctx->file_list_idx = ctx->revert ? gf_list_count(ctx->file_list) : -1;
+		ctx->cts_offset.num = ctx->cts_offset.den = 0;
+		ctx->dts_offset = ctx->cts_offset;
+		ctx->prev_cts_offset = ctx->cts_offset;
+		ctx->prev_dts_offset = ctx->cts_offset;
+		ctx->wait_dts_plus_one = ctx->cts_offset;
+		ctx->dts_sub_plus_one = ctx->cts_offset;
+		ctx->sync_init_time = 0;;
+		gf_filter_post_process_task(filter);
+	}
+
 	//and cancel
 	return GF_TRUE;
 }
@@ -663,9 +710,11 @@ static void filelist_check_implicit_cat(GF_FileListCtx *ctx, char *szURL)
 {
 	char *res_url = NULL;
 	char *sep, *o_url = szURL;
-	if (ctx->file_path) {
+	//do NOT concatenate if source is GFIO
+	if (ctx->file_path && !ctx->is_gfio) {
 		res_url = gf_url_concatenate(ctx->file_path, szURL);
-		szURL = res_url;
+		if (res_url)
+			szURL = res_url;
 	}
 	//we use default session separator set in filelist
 	sep = gf_url_colon_suffix(szURL, '=');
@@ -825,7 +874,12 @@ static Bool filelist_next_url(GF_Filter *filter, GF_FileListCtx *ctx, char szURL
 		return GF_TRUE;
 	}
 
-	if (ctx->wait_update_start || is_splice_update) {
+	Bool check_ftime = GF_TRUE;
+	//don't check for file time if we use a GFIO or a file-io mapping from source packets
+	if (ctx->fio) check_ftime = GF_FALSE;
+	else if (ctx->is_gfio) check_ftime = GF_FALSE;
+
+	if ((ctx->wait_update_start && check_ftime) || is_splice_update) {
 		u64 last_modif_time = gf_file_modification_time(ctx->file_path);
 		if (ctx->last_file_modif_time >= last_modif_time) {
 			if (!is_splice_update) {
@@ -846,16 +900,30 @@ static Bool filelist_next_url(GF_Filter *filter, GF_FileListCtx *ctx, char szURL
 	chap_name[0]=0;
 
 	f = gf_fopen(ctx->file_path, "rt");
+	if (!f) return GF_FALSE;
+
 	while (f) {
 		char *l = gf_fgets(szURL, GF_MAX_PATH, f);
-		url_crc = 0;
 		if (!l || (gf_feof(f) && !szURL[0]) ) {
 			if (ctx->floop != 0) {
 				gf_fseek(f, 0, SEEK_SET);
 				//load first line
+				if (last_found) {
+					if (!ctx->floop) return GF_FALSE;
+					if (ctx->floop>0) ctx->floop--;
+					ctx->last_url_crc=0;
+				}
 				last_found = GF_TRUE;
+				lineno=0;
 				continue;
 			}
+			if (ctx->ka && !is_end && !last_found && url_crc) {
+				gf_fseek(f, 0, SEEK_SET);
+				last_found = GF_TRUE;
+				lineno=0;
+				continue;
+			}
+
 			gf_fclose(f);
 			if (is_end) {
 				ctx->ka = 0;
@@ -865,6 +933,7 @@ static Bool filelist_next_url(GF_Filter *filter, GF_FileListCtx *ctx, char szURL
 			}
 			return GF_FALSE;
 		}
+		url_crc = 0;
 
 		len = (u32) strlen(szURL);
 		//in keep-alive mode, each line shall end with \n, of not consider the file is not yet ready
@@ -948,10 +1017,13 @@ static Bool filelist_next_url(GF_Filter *filter, GF_FileListCtx *ctx, char szURL
 					if (aval)
 						sscanf(aval, LLU, &end_range);
 				} else if (!strcmp(args, "end")) {
-					if (ctx->ka)
+					if (ctx->ka) {
 						is_end = GF_TRUE;
+						ctx->ka=0;
+					}
 				} else if (!strcmp(args, "ka")) {
-					sscanf(aval, "%u", &ctx->ka);
+					if (aval)
+						sscanf(aval, "%u", &ctx->ka);
 				} else if (!strcmp(args, "raw")) {
 					u32 raw_type = 0;
 					if (aval) {
@@ -982,8 +1054,14 @@ static Bool filelist_next_url(GF_Filter *filter, GF_FileListCtx *ctx, char szURL
 					if (ctx->splice_props) gf_free(ctx->splice_props);
 					ctx->splice_props = aval ? gf_strdup(aval) : NULL;
 				} else if (!strcmp(args, "chap") && aval) {
-					strncpy(chap_name, aval, 1023);
-					chap_name[1023]=0;
+					if (aval) {
+						strncpy(chap_name, aval, 1023);
+						chap_name[1023]=0;
+					}
+				} else if (!strcmp(args, "base_url")) {
+					if (ctx->temp_base_url) gf_free(ctx->temp_base_url);
+					ctx->temp_base_url = aval && aval[0] ? gf_strdup(aval) : NULL;
+				} else if (!strcmp(args, "replace") || !strcmp(args, "purge")) {
 				} else {
 					if (!ctx->unknown_params || !strstr(ctx->unknown_params, args)) {
 						GF_LOG(GF_LOG_WARNING, GF_LOG_MEDIA, ("[FileList] Unrecognized directive %s, ignoring\n", args));
@@ -1114,6 +1192,15 @@ static Bool filelist_next_url(GF_Filter *filter, GF_FileListCtx *ctx, char szURL
 	ctx->do_cat = do_cat;
 	ctx->skip_sync = no_sync;
 
+	if (ctx->temp_base_url) {
+		char *res_url = gf_url_concatenate(ctx->temp_base_url, szURL);
+		if (res_url) {
+			strncpy(szURL, res_url, GF_MAX_PATH-2);
+			szURL[GF_MAX_PATH-1]=0;
+			gf_free(res_url);
+		}
+	}
+
 	if (!ctx->floop)
 		ctx->do_del = (do_del || ctx->fdel) ? GF_TRUE : GF_FALSE;
 	ctx->start_range = start_range;
@@ -1164,13 +1251,25 @@ static GF_Err filelist_load_next(GF_Filter *filter, GF_FileListCtx *ctx)
 	char szURL[GF_MAX_PATH];
 	Bool next_url_ok;
 
+	ctx->src_has_seen_eos = GF_FALSE;
 	next_url_ok = filelist_next_url(filter, ctx, szURL, GF_FALSE);
 
 	if (!next_url_ok && ctx->ka) {
 		gf_filter_ask_rt_reschedule(filter, ctx->ka*1000);
+		if (ctx->flush && !ctx->flushed) {
+			count = gf_list_count(ctx->io_pids);
+			for (i=0; i<count; i++) {
+				iopid = gf_list_get(ctx->io_pids, i);
+				gf_filter_pid_send_flush(iopid->opid);
+				if (iopid->opid_aux)
+					gf_filter_pid_send_flush(iopid->opid_aux);
+			}
+			ctx->flushed = GF_TRUE;
+		}
 		return GF_OK;
 	}
 	count = gf_list_count(ctx->io_pids);
+	ctx->flushed = GF_FALSE;
 
 	if (ctx->wait_splice_start) {
 		if (!next_url_ok) {
@@ -1212,7 +1311,7 @@ static GF_Err filelist_load_next(GF_Filter *filter, GF_FileListCtx *ctx)
 
 	ctx->load_next = GF_FALSE;
 
-	if (! next_url_ok) {
+	if (!next_url_ok) {
 		if (ctx->splice_state==FL_SPLICE_ACTIVE) {
 			GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[FileList] No next URL for splice but splice period still active, resuming splice with possible broken coding dependencies!\n"));
 			ctx->wait_splice_end = GF_TRUE;
@@ -1234,6 +1333,17 @@ static GF_Err filelist_load_next(GF_Filter *filter, GF_FileListCtx *ctx)
 			iopid->ipid = NULL;
 		}
 		ctx->is_eos = GF_TRUE;
+		if (ctx->file_pid) {
+			GF_FilterEvent evt;
+			//force a play/stop on source to stop filters with keepalive (pipe in)
+			GF_FEVT_INIT(evt, GF_FEVT_PLAY, ctx->file_pid);
+			gf_filter_pid_send_event(ctx->file_pid, &evt);
+			GF_FEVT_INIT(evt, GF_FEVT_STOP, ctx->file_pid);
+			gf_filter_pid_send_event(ctx->file_pid, &evt);
+
+			//abort since we may have pending packets if we found the EOS while source was playing (pipe in)
+			gf_filter_abort(filter);
+		}
 		return GF_EOS;
 	}
 	for (i=0; i<gf_list_count(ctx->io_pids); i++) {
@@ -1350,7 +1460,8 @@ static GF_Err filelist_load_next(GF_Filter *filter, GF_FileListCtx *ctx)
 				f = gf_filter_load_filter(filter, url, &e);
 				if (f) gf_filter_require_source_id(f);
 			} else {
-				fsrc = gf_filter_connect_source(filter, url, ctx->file_path, GF_FALSE, &e);
+				//no parent path if gfio
+				fsrc = gf_filter_connect_source(filter, url, ctx->is_gfio ? NULL : ctx->file_path, GF_FALSE, &e);
 
 				if (fsrc) {
 					gf_filter_set_setup_failure_callback(filter, fsrc, filelist_on_filter_setup_error, filter);
@@ -1370,7 +1481,6 @@ static GF_Err filelist_load_next(GF_Filter *filter, GF_FileListCtx *ctx)
 				return GF_SERVICE_ERROR;
 			}
 			if (is_filter_chain) {
-
 				if (!filters) filters = gf_list_new();
 				if (!gf_list_count(filters)) gf_list_add(filters, fsrc);
 
@@ -1487,8 +1597,8 @@ static Bool filelist_check_splice(GF_FileListCtx *ctx)
 	GF_FilterSAPType sap;
 	GF_FilterPid *ipid;
 	Bool is_raw_audio;
-	assert(ctx->splice_ctrl);
-	assert(ctx->splice_state);
+	gf_fatal_assert(ctx->splice_ctrl);
+	gf_fatal_assert(ctx->splice_state);
 
 	ipid = ctx->splice_ctrl->splice_ipid ? ctx->splice_ctrl->splice_ipid : ctx->splice_ctrl->ipid;
 	is_raw_audio = ctx->splice_ctrl->splice_ipid ? ctx->splice_ctrl->splice_ra_info.is_raw : ctx->splice_ctrl->ra_info.is_raw;
@@ -1574,7 +1684,7 @@ static Bool filelist_check_splice(GF_FileListCtx *ctx)
 				ctx->splice_state = FL_SPLICE_ACTIVE;
 				ctx->splice_start_cts = filelist_translate_splice_cts(ctx->splice_ctrl, cts);
 				//we just activate splice, iopid->dts_sub_splice is not set yet !!
-				assert(!ctx->splice_ctrl->dts_sub_splice);
+				gf_assert(!ctx->splice_ctrl->dts_sub_splice);
 				ctx->splice_start_cts -= ctx->splice_ctrl->dts_sub;
 
 				if (ctx->flags_splice_end & FL_SPLICE_DELTA) {
@@ -1720,11 +1830,11 @@ static void filelist_forward_splice_pck(FileListPid *iopid, GF_FilterPacket *pck
 static void filelist_purge_slice(GF_FileListCtx *ctx)
 {
 	u32 i, count = gf_list_count(ctx->io_pids);
-	assert(ctx->splice_ctrl);
+	gf_assert(ctx->splice_ctrl);
 
 	if (ctx->mark_only)
 		return;
-	assert(ctx->splice_ctrl->splice_ipid);
+	gf_assert(ctx->splice_ctrl->splice_ipid);
 
 	for (i=0; i<count; i++) {
 		FileListPid *iopid = gf_list_get(ctx->io_pids, i);
@@ -1868,10 +1978,14 @@ void filelist_send_packet(GF_FileListCtx *ctx, FileListPid *iopid, GF_FilterPack
 			iopid->send_cue = GF_FALSE;
 			gf_filter_pck_set_property(dst_pck, GF_PROP_PCK_CUE_START, &PROP_BOOL(GF_TRUE));
 		}
+		if (iopid->send_period_switch) {
+			iopid->send_period_switch = GF_FALSE;
+			gf_filter_pid_set_property_str(iopid->opid, "period_switch", &PROP_BOOL(GF_TRUE));
+		}
 	}
 
 	if (ctx->sigfrag_mode && ctx->abs_url) {
-		gf_filter_pck_set_property(dst_pck, GF_PROP_PID_URL, &PROP_STRING(ctx->abs_url));
+		gf_filter_pck_set_property(dst_pck, GF_PROP_PCK_SEG_URL, &PROP_STRING(ctx->abs_url));
 		if (ctx->rel_url) {
 			gf_filter_pck_set_property(dst_pck, GF_PROP_PCK_FILENAME, &PROP_STRING(ctx->rel_url));
 		}
@@ -1888,12 +2002,14 @@ void filelist_send_packet(GF_FileListCtx *ctx, FileListPid *iopid, GF_FilterPack
 
 static GF_Err filelist_process(GF_Filter *filter)
 {
-	Bool start, end, purge_splice = GF_FALSE;
+	Bool start, end, purge_splice;
 	u32 i, count, nb_done, nb_inactive, nb_stop, nb_ready;
 	FileListPid *iopid;
 	GF_FileListCtx *ctx = gf_filter_get_udta(filter);
 
+restart:
 
+	purge_splice = GF_FALSE;
 	if (!ctx->file_list) {
 		GF_FilterPacket *pck;
 		if (!ctx->file_pid) {
@@ -1902,35 +2018,100 @@ static GF_Err filelist_process(GF_Filter *filter)
 		pck = gf_filter_pid_get_packet(ctx->file_pid);
 		if (pck) {
 			gf_filter_pck_get_framing(pck, &start, &end);
-			gf_filter_pid_drop_packet(ctx->file_pid);
 
-			if (end) {
-				const GF_PropertyValue *p;
-				Bool is_first = GF_TRUE;
-				FILE *f=NULL;
-				p = gf_filter_pid_get_property(ctx->file_pid, GF_PROP_PID_FILEPATH);
-				if (p) {
-					char *frag;
-					if (ctx->file_path) {
-						gf_free(ctx->file_path);
-						is_first = GF_FALSE;
-					}
-					ctx->file_path = gf_strdup(p->value.string);
-					frag = strchr(ctx->file_path, '#');
-					if (frag) {
-						frag[0] = 0;
-						ctx->frag_url = gf_strdup(frag+1);
-					}
-					f = gf_fopen(ctx->file_path, "rt");
-				}
-				if (!f) {
-					GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[FileList] Unable to open file %s\n", ctx->file_path ? ctx->file_path : "no source path"));
-					return GF_SERVICE_ERROR;
+			if (!end) {
+				gf_filter_pid_drop_packet(ctx->file_pid);
+				return GF_SERVICE_ERROR;
+			}
+
+			const GF_PropertyValue *p;
+			Bool is_first = GF_TRUE;
+			FILE *f=NULL;
+			p = gf_filter_pid_get_property(ctx->file_pid, GF_PROP_PID_FILEPATH);
+			if (!p) {
+				p = gf_filter_pid_get_property(ctx->file_pid, GF_PROP_PID_URL);
+				if (p && p->value.string && !strncmp(p->value.string, "gfio://", 7)) {
+					ctx->is_gfio = GF_TRUE;
 				} else {
-					gf_fclose(f);
-					ctx->load_next = is_first;
+					p = NULL;
 				}
 			}
+			if (p) {
+				char *frag;
+				if (ctx->file_path) {
+					gf_free(ctx->file_path);
+					is_first = GF_FALSE;
+				}
+				ctx->file_path = gf_strdup(p->value.string);
+				frag = strchr(ctx->file_path, '#');
+				if (frag) {
+					frag[0] = 0;
+					ctx->frag_url = gf_strdup(frag+1);
+				}
+				f = gf_fopen(ctx->file_path, "rt");
+			} else {
+				const u8 *data;
+				u32 size, len;
+				Bool replace = GF_FALSE;
+				data = gf_filter_pck_get_data(pck, &size);
+				p = gf_filter_pid_get_property(ctx->file_pid, GF_PROP_PID_URL);
+				if (ctx->fio) gf_fclose((FILE*) ctx->fio);
+				//full replacement
+				if (data && (size>=8) && !strncmp(data, "#replace", 8)) {
+					replace = GF_TRUE;
+					if (ctx->dyn_pl_data) gf_free(ctx->dyn_pl_data);
+					ctx->dyn_pl_data = NULL;
+				}
+				//look for #purge in existing playlist
+				if (ctx->dyn_pl_data) {
+					char *purge_start = strstr(ctx->dyn_pl_data, "purge");
+					while (purge_start) {
+						char *purge_next = strstr(purge_start, "purge");
+						if (!purge_next) break;
+						purge_start = purge_next;
+					}
+					if (purge_start) {
+						purge_start = gf_strdup(purge_start);
+						gf_free(ctx->dyn_pl_data);
+						ctx->dyn_pl_data = purge_start;
+					}
+				} else {
+					replace = GF_TRUE;
+				}
+				//concatenate playlists
+				len = ctx->dyn_pl_data ? (u32) strlen(ctx->dyn_pl_data) : 0;
+				ctx->dyn_pl_data = gf_realloc(ctx->dyn_pl_data, size+len+1);
+				memcpy(ctx->dyn_pl_data+len, data, size);
+				size += len;
+				ctx->dyn_pl_data[size] = 0;
+
+				if (ctx->fio) gf_fclose((FILE*) ctx->fio);
+				ctx->fio = gf_fileio_from_mem(p ? p->value.string : NULL, ctx->dyn_pl_data, size);
+				if (ctx->file_path) gf_free(ctx->file_path);
+				ctx->file_path = gf_strdup( gf_fileio_url(ctx->fio) );
+				p = gf_filter_pid_get_property(ctx->file_pid, GF_PROP_PID_URL);
+
+				ctx->ka = 1000;
+				if (replace) {
+					//reset last url crc we want to reload everything
+					ctx->last_url_crc = 0;
+					//full playlist reload
+					is_first = GF_TRUE;
+				} else {
+					is_first = GF_FALSE;
+				}
+			}
+			gf_filter_pid_drop_packet(ctx->file_pid);
+
+			if (!f && !ctx->fio) {
+				GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[FileList] Unable to open file %s\n", ctx->file_path ? ctx->file_path : "no source path"));
+				return GF_SERVICE_ERROR;
+			} else {
+				if (f) gf_fclose(f);
+				ctx->load_next = is_first;
+			}
+		} else if (ctx->dyn_pl_data && gf_filter_pid_is_eos(ctx->file_pid) && !gf_filter_pid_is_flush_eos(ctx->file_pid)) {
+			ctx->ka = 0;
 		}
 	}
 	if (ctx->is_eos)
@@ -1946,6 +2127,7 @@ static GF_Err filelist_process(GF_Filter *filter)
 	if (!ctx->dts_sub_plus_one.num) {
 		u32 nb_eos = 0;
 		u32 nb_ready_av=0, nb_not_ready_av=0, nb_not_ready_sparse=0;
+		u32 nb_continuous=0;
 		for (i=0; i<gf_list_count(ctx->filter_srcs); i++) {
 			GF_Filter *fsrc = gf_list_get(ctx->filter_srcs, i);
 			if (gf_filter_has_pid_connection_pending(fsrc, filter)) {
@@ -1957,24 +2139,38 @@ static GF_Err filelist_process(GF_Filter *filter)
 			GF_FilterPacket *pck;
 			u64 dts;
 			iopid = gf_list_get(ctx->io_pids, i);
-            if (!iopid->ipid) {
+			if (!iopid->ipid) {
 				if (ctx->src_error) {
 					nb_eos++;
 					continue;
 				}
 
-				if (iopid->opid) gf_filter_pid_set_eos(iopid->opid);
-				if (iopid->opid_aux) gf_filter_pid_set_eos(iopid->opid_aux);
-				return GF_OK;
+				if (iopid->opid && !iopid->detached) {
+					GF_LOG(GF_LOG_WARNING, GF_LOG_MEDIA, ("[FileList] Output PID %s no longer has an associated input, signaling EOS\n", gf_filter_pid_get_name(iopid->opid) ));
+					gf_filter_pid_set_eos(iopid->opid);
+				}
+				if (iopid->opid_aux && !iopid->detached) {
+					GF_LOG(GF_LOG_WARNING, GF_LOG_MEDIA, ("[FileList] Output PID %s no longer has an associated input, signaling EOS\n", gf_filter_pid_get_name(iopid->opid_aux) ));
+					gf_filter_pid_set_eos(iopid->opid_aux);
+				}
+				iopid->detached = GF_TRUE;
+
+				nb_eos++;
+				continue;
 			}
-            if (iopid->skip_dts_init) continue;
-            pck = gf_filter_pid_get_packet(iopid->ipid);
+			if (iopid->skip_dts_init) continue;
+			pck = gf_filter_pid_get_packet(iopid->ipid);
 
 			if (!pck) {
-				if (gf_filter_pid_is_eos(iopid->ipid) || (iopid->play_state==FLIST_STATE_STOP)) {
+				//still waiting for EOS on source
+				if (gf_filter_pid_is_eos(iopid->ipid)) {
 					nb_eos++;
 					continue;
 				}
+				//PID is stopped, don't check for EOS
+				if (iopid->play_state==FLIST_STATE_STOP)
+					continue;
+
 				if ((iopid->stream_type==GF_STREAM_AUDIO) || (iopid->stream_type==GF_STREAM_VISUAL))
 					nb_not_ready_av++;
 				else
@@ -2030,12 +2226,16 @@ static GF_Err filelist_process(GF_Filter *filter)
 				ctx->dts_sub_plus_one.num = dts + 1;
 				ctx->dts_sub_plus_one.den = iopid->timescale;
 			}
+			if (ctx->first_loaded && (dts==iopid->prev_max_dts))
+				nb_continuous++;
 	 	}
 
 		if (nb_not_ready_av || (!nb_ready_av && nb_not_ready_sparse)) {
 			u32 now = gf_sys_clock();
 			if (!ctx->sync_init_time) {
 				ctx->sync_init_time = now;
+				ctx->dts_sub_plus_one.num = 0;
+				return GF_OK;
 			} else if (now - ctx->sync_init_time < 5000) {
 				ctx->dts_sub_plus_one.num = 0;
 				return GF_OK;
@@ -2046,12 +2246,22 @@ static GF_Err filelist_process(GF_Filter *filter)
 		ctx->sync_init_time = 0;
 	 	ctx->src_error = GF_FALSE;
 	 	if (nb_eos) {
+			//all sources in EOS before initializing clock, likely broken source, load next
 			if (nb_eos==count) {
 				//force load
 				ctx->load_next = GF_TRUE;
-				return filelist_process(filter);
+				//avoid recursive call
+				goto restart;
 			}
+			//wait for all sources to be in EOS
 			return GF_OK;
+		}
+
+		if (ctx->keepts) {
+			ctx->dts_sub_plus_one.num = 1;
+			ctx->dts_sub_plus_one.den = 1;
+			ctx->dts_offset.num = 0;
+			ctx->cts_offset.num = 0;
 		}
 
 		//if we start with a splice, set first dst_sub to 0 to keep timestamps untouched
@@ -2065,10 +2275,24 @@ static GF_Err filelist_process(GF_Filter *filter)
 			ctx->skip_sync = GF_FALSE;
 		}
 
+		if (nb_continuous==count) {
+			ctx->dts_offset = ctx->prev_dts_offset;
+			ctx->cts_offset = ctx->prev_cts_offset;
+		}
 		for (i=0; i<count; i++) {
 			iopid = gf_list_get(ctx->io_pids, i);
+			if (nb_continuous==count) {
+				iopid->cts_o = iopid->prev_cts_o;
+				iopid->dts_o = iopid->prev_dts_o;
+				continue;
+			}
 			iopid->dts_sub = gf_timestamp_rescale(ctx->dts_sub_plus_one.num - 1, ctx->dts_sub_plus_one.den, iopid->o_timescale);
+			if (ctx->keepts) {
+				iopid->cts_o = 0;
+				iopid->dts_o = 0;
+			}
 		}
+		ctx->keepts = GF_FALSE;
 		ctx->wait_dts_plus_one.num = 0;
 	}
 
@@ -2081,31 +2305,31 @@ static GF_Err filelist_process(GF_Filter *filter)
 	for (i=0; i<count; i++) {
 		iopid = gf_list_get(ctx->io_pids, i);
 		if (!iopid->ipid) {
-            iopid->splice_ready = GF_TRUE;
+			iopid->splice_ready = GF_TRUE;
 			nb_inactive++;
 			continue;
 		}
 		if (iopid->play_state==FLIST_STATE_WAIT_PLAY)
 			continue;
-        if (iopid->play_state==FLIST_STATE_STOP) {
+		if (iopid->play_state==FLIST_STATE_STOP) {
 			nb_stop++;
-            //in case the input still dispatch packets, drop them
-            while (1) {
-                GF_FilterPacket *pck = gf_filter_pid_get_packet(iopid->ipid);
-                if (!pck) break;
-                gf_filter_pid_drop_packet(iopid->ipid);
-            }
-            while (iopid->splice_ipid) {
-                GF_FilterPacket *pck = gf_filter_pid_get_packet(iopid->splice_ipid);
-                if (!pck) break;
-                gf_filter_pid_drop_packet(iopid->splice_ipid);
-            }
-            nb_done++;
-            iopid->splice_ready = GF_TRUE;
-            continue;
-        }
+			//in case the input still dispatch packets, drop them
+			while (1) {
+				GF_FilterPacket *pck = gf_filter_pid_get_packet(iopid->ipid);
+				if (!pck) break;
+				gf_filter_pid_drop_packet(iopid->ipid);
+			}
+			while (iopid->splice_ipid) {
+				GF_FilterPacket *pck = gf_filter_pid_get_packet(iopid->splice_ipid);
+				if (!pck) break;
+				gf_filter_pid_drop_packet(iopid->splice_ipid);
+			}
+			nb_done++;
+			iopid->splice_ready = GF_TRUE;
+			continue;
+		}
 		if (iopid->is_eos) {
-            iopid->splice_ready = GF_TRUE;
+			iopid->splice_ready = GF_TRUE;
 			nb_done++;
 			continue;
 		}
@@ -2123,6 +2347,7 @@ static GF_Err filelist_process(GF_Filter *filter)
 						iopid->splice_ready = GF_TRUE;
 					} else {
 						iopid->is_eos = GF_TRUE;
+						ctx->src_has_seen_eos = GF_TRUE;
 						if (ctx->splice_state==FL_SPLICE_ACTIVE)
 							purge_splice = GF_TRUE;
 					}
@@ -2132,8 +2357,9 @@ static GF_Err filelist_process(GF_Filter *filter)
 					nb_done++;
 				break;
 			}
-
-			if (gf_filter_pid_would_block(iopid->opid) && (!iopid->opid_aux || gf_filter_pid_would_block(iopid->opid_aux))) {
+			//if EOS has been seen on one input, do not regulate as the consumer(s) could wait for the next packet in
+			//the next file on one of the EOS stream (eg dasher consumer)
+			if (!ctx->src_has_seen_eos && gf_filter_pid_would_block(iopid->opid) && (!iopid->opid_aux || gf_filter_pid_would_block(iopid->opid_aux))) {
 				break;
 			}
 
@@ -2486,7 +2712,7 @@ static GF_Err filelist_process(GF_Filter *filter)
 		nb_inactive = 0;
 		nb_done = count;
 
-		assert(!ctx->splice_pid_props);
+		gf_assert(!ctx->splice_pid_props);
 		ctx->splice_pid_props = ctx->pid_props;
 		ctx->pid_props = NULL;
 
@@ -2525,7 +2751,6 @@ static GF_Err filelist_process(GF_Filter *filter)
 	}
 
 
-
 	if ((nb_inactive!=count) && (nb_done+nb_inactive==count)) {
 		//compute max cts and dts
 		GF_Fraction64 max_cts, max_dts;
@@ -2535,17 +2760,26 @@ static GF_Err filelist_process(GF_Filter *filter)
 		if (gf_filter_end_of_session(filter) || (nb_stop + nb_inactive == count) ) {
 			for (i=0; i<count; i++) {
 				iopid = gf_list_get(ctx->io_pids, i);
-				gf_filter_pid_set_eos(iopid->opid);
+				if (iopid->play_state!=FLIST_STATE_STOP)
+					gf_filter_pid_set_eos(iopid->opid);
 			}
 			ctx->is_eos = GF_TRUE;
 			return GF_EOS;
 		}
+		ctx->prev_cts_offset = ctx->cts_offset;
+		ctx->prev_dts_offset = ctx->dts_offset;
+
 		ctx->dts_sub_plus_one.num = 0;
 		for (i=0; i<count; i++) {
 			u64 ts;
 			iopid = gf_list_get(ctx->io_pids, i);
 			iopid->send_cue = ctx->sigcues;
+			iopid->send_period_switch = ctx->sigperiods;
 			if (!iopid->ipid) continue;
+			if (iopid->play_state==FLIST_STATE_STOP) continue;
+			iopid->prev_max_dts = iopid->max_dts;
+			iopid->prev_cts_o = iopid->cts_o;
+			iopid->prev_dts_o = iopid->dts_o;
 
 			ts = iopid->max_cts - iopid->dts_sub;
 			if (gf_timestamp_less(max_cts.num, max_cts.den, ts, iopid->timescale)) {
@@ -2638,7 +2872,8 @@ static GF_Err filelist_process(GF_Filter *filter)
 			}
 			//force load
 			ctx->load_next = GF_TRUE;
-			return filelist_process(filter);
+			//avoid recursive call
+			goto restart;
 		}
 	}
 	return GF_OK;
@@ -2712,7 +2947,6 @@ static GF_Err filelist_initialize(GF_Filter *filter)
 	ctx->filter_srcs = gf_list_new();
 	if (ctx->ka)
 		ctx->floop = 0;
-
 
 	if (! ctx->srcs.nb_items ) {
 		if (! gf_filter_is_dynamic(filter)) {
@@ -2839,6 +3073,11 @@ static void filelist_finalize(GF_Filter *filter)
 	p.type = GF_PROP_STRING_LIST;
 	p.value.string_list = ctx->chap_names;
 	gf_props_reset_single(&p);
+
+	if (ctx->fio) gf_fclose((FILE*) ctx->fio);
+	if (ctx->dyn_pl_data) gf_free(ctx->dyn_pl_data);
+	if (ctx->temp_base_url) gf_free(ctx->temp_base_url);
+
 }
 
 static const char *filelist_probe_data(const u8 *data, u32 size, GF_FilterProbeScore *score)
@@ -2873,7 +3112,7 @@ static const char *filelist_probe_data(const u8 *data, u32 size, GF_FilterProbeS
 				if (!c) return NULL;
 				if ( isalnum(c)) continue;
 				//valid URL chars plus backslash for win path
-				if (strchr("-._~:/?#[]@!$&'()*+,;%=\\", c)) {
+				if (strchr("-._~:/?#[]@!$&'()*+,;%=\\ ", c)) {
 					line_empty = GF_FALSE;
 					continue;
 				}
@@ -2916,12 +3155,15 @@ static const GF_FilterArgs GF_FileListArgs[] =
 		, GF_PROP_UINT, "no", "no|name|size|date|datex", 0},
 
 	{ OFFS(sigcues), "inject `CueStart` property at each source begin (new or repeated) for DASHing", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
+	{ OFFS(sigperiods), "ask for a new DASH Period at each source begin ; useful when media timing needs to be reset at loops (TTML, ...)", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(fdel), "delete source files after processing in playlist mode (does not delete the playlist)", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
+	{ OFFS(keepts), "keep initial timestamps unmodified (no reset to 0)", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(raw), "force input AV streams to be in raw format\n"
 	"- no: do not force decoding of inputs\n"
 	"- av: force decoding of audio and video inputs\n"
 	"- a: force decoding of audio inputs\n"
 	"- v: force decoding of video inputs", GF_PROP_UINT, "no", "av|a|v|no", GF_FS_ARG_HINT_NORMAL},
+	{ OFFS(flush), "send a flush signal once playlist is done before entering keepalive", GF_PROP_BOOL, "false", NULL, 0},
 	{0}
 };
 
@@ -2975,9 +3217,12 @@ GF_FilterRegister FileListRegister = {
 		"Playlist refreshing will abort:\n"
 		"- if the input playlist has a line not ending with a LF `(\\n)` character, in order to avoid asynchronous issues when reading the playlist.\n"
 		"- if the input playlist has not been modified for the [-timeout]() option value (infinite by default).\n"
+		"\n"
+		"Note: When the source playlist is a GFIO object, URLs inside the playlist are NOT translated into GFIO objects.\n"
+		"\n"
 		"## Playlist directives\n"
 		"A playlist directive line can contain zero or more directives, separated with space. The following directives are supported:\n"
-		"- repeat=N: repeats `N` times the content (hence played N+1).\n"
+		"- repeat=N: repeats `N` times the content (hence played N+1), infinite loop if negative.\n"
 		"- start=T: tries to play the file from start time `T` seconds (double format only). This may not work with some files/formats not supporting seeking.\n"
 		"- stop=T: stops source playback after `T` seconds (double format only). This works on any source (implemented independently from seek support).\n"
 		"- cat: specifies that the following entry should be concatenated to the previous source rather than opening a new source. This can optionally specify a byte range if desired, otherwise the full file is concatenated.\n"
@@ -2993,6 +3238,11 @@ GF_FilterRegister FileListRegister = {
 		"- mark: only inject marker for the splice period and do not load any replacement content (cf below).\n"
 		"- sprops=STR: assigns properties described in `STR` to all PIDs of the main content during a splice (cf below). `STR` is formatted according to `gpac -h doc` using the default parameter set.\n"
 		"- chap=NAME: assigns chapter name at the start of next URL (filter always removes source chapter names).\n"
+		"- base_url=PATH: overrides base URL for all following entries in the playlist. To reset, use an empty string.\n"
+		"\n"
+		"When the playlist is transmitted as packets (pipes, sockets, ...), the following directives also apply:\n"
+		"- replace: replaces the entire playlist content with new packet payload, otherwise concatenate (payload must start with `#replace`).\n"
+		"- purge: avoids having the playlist continuously growing by removing all inactive content before previous `#purge` directive, evaluated at each new packet only (payload must start with `#purge`).\n"
 		"\n"
 		"The following global options (applying to the filter, not the sources) may also be set in the playlist:\n"
 		"- ka=N: force [-ka]() option to `N` millisecond refresh.\n"
@@ -3078,7 +3328,7 @@ GF_FilterRegister FileListRegister = {
 		)
 	.private_size = sizeof(GF_FileListCtx),
 	.max_extra_pids = -1,
-	.flags = GF_FS_REG_ACT_AS_SOURCE | GF_FS_REG_REQUIRES_RESOLVER | GF_FS_REG_DYNAMIC_PIDS,
+	.flags = GF_FS_REG_ACT_AS_SOURCE | GF_FS_REG_REQUIRES_RESOLVER | GF_FS_REG_DYNAMIC_PIDS | GF_FS_REG_META,
 	.args = GF_FileListArgs,
 	.initialize = filelist_initialize,
 	.finalize = filelist_finalize,
@@ -3086,11 +3336,17 @@ GF_FilterRegister FileListRegister = {
 	.configure_pid = filelist_configure_pid,
 	.process = filelist_process,
 	.process_event = filelist_process_event,
-	.probe_data = filelist_probe_data
+	.probe_data = filelist_probe_data,
+	.hint_class_type = GF_FS_CLASS_STREAM
 };
 
-const GF_FilterRegister *filelist_register(GF_FilterSession *session)
+const GF_FilterRegister *flist_register(GF_FilterSession *session)
 {
 	return &FileListRegister;
 }
-
+#else
+const GF_FilterRegister *flist_register(GF_FilterSession *session)
+{
+	return NULL;
+}
+#endif // GPAC_DISABLE_FLIST

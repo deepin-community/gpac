@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Management sub-project
@@ -157,6 +157,7 @@ GF_SceneDumper *gf_sm_dumper_new(GF_SceneGraph *graph, char *_rad_name, Bool is_
 			if (!is_final_name) strcat(tmp->filename, ext_name);
 			tmp->trace = gf_fopen(tmp->filename, "wt");
 			if (!tmp->trace) {
+				gf_free(tmp->filename);
 				gf_free(tmp);
 				return NULL;
 			}
@@ -425,7 +426,7 @@ static void scene_dump_utf_string(GF_SceneDumper *sdump, Bool escape_xml, char *
 	u32 len, i;
 	u16 *uniLine;
 	if (!str) return;
-	len = (u32) strlen(str);
+	len = 1 + (u32) strlen(str);
 	if (!len) return;
 	uniLine = (u16*)gf_malloc(sizeof(u16) * len*4);
 	len = gf_utf8_mbstowcs(uniLine, len, (const char **) &str);
@@ -595,10 +596,8 @@ static void gf_dump_vrml_sffield(GF_SceneDumper *sdump, u32 type, void *ptr, Boo
 			gf_fprintf(sdump->trace, "\"%s\"", str);
 		}
 		else {
-			u16 *uniLine;
-
-			uniLine = (u16*)gf_malloc(sizeof(short) * (len + 1));
-			len = gf_utf8_mbstowcs(uniLine, len, (const char **)&str);
+			u16 *uniLine = (u16*)gf_malloc(sizeof(u16) * ((len/2)*2 + 2));
+			len = gf_utf8_mbstowcs(uniLine, len+1, (const char **)&str);
 
 			if (len != GF_UTF8_FAIL) {
 				for (i = 0; i<len; i++) {
@@ -759,7 +758,7 @@ static void gf_dump_vrml_simple_field(GF_SceneDumper *sdump, GF_FieldInfo field,
 		return;
 	case GF_SG_VRML_MFNODE:
 		list = * ((GF_ChildNodeItem **) field.far_ptr);
-		assert( list );
+		gf_assert( list );
 		sdump->indent++;
 		while (list) {
 			gf_dump_vrml_node(sdump, list->node, 1, NULL);
@@ -858,7 +857,7 @@ static void gf_dump_vrml_field(GF_SceneDumper *sdump, GF_Node *node, GF_FieldInf
 		}
 #endif
 		list = * ((GF_ChildNodeItem **) field.far_ptr);
-		assert(list);
+		gf_assert(list);
 		if (!sdump->XMLDump || !sdump->X3DDump) StartList(sdump, field.name);
 		sdump->indent++;
 		while (list) {
@@ -2785,7 +2784,7 @@ static GF_Err DumpLSRSendEvent(GF_SceneDumper *sdump, GF_Command *com)
 	) {
 		gf_fprintf(sdump->trace, " pointvalue=\"%g %g\"", FIX2FLT(com->send_event_x), FIX2FLT(com->send_event_y) );
 	}
-	
+
 	switch (com->send_event_name) {
 	case GF_EVENT_KEYDOWN:
 	case GF_EVENT_LONGKEYPRESS:
@@ -2909,7 +2908,7 @@ GF_Err gf_sm_dump_command_list(GF_SceneDumper *sdump, GF_List *comList, u32 inde
 			break;
 		case GF_SG_SCENE_REPLACE:
 			/*we don't support replace scene in conditional*/
-			assert(!sdump->current_com_list);
+			gf_assert(!sdump->current_com_list);
 			sdump->current_com_list = comList;
 			e = DumpSceneReplace(sdump, com);
 			sdump->current_com_list = NULL;
@@ -3396,7 +3395,7 @@ static void ReorderAUContext(GF_List *sample_list, GF_AUContext *au, Bool lsr_du
 	}
 	/*this happens when converting from xmt to bt*/
 	if (!au->timing) {
-		assert(au->owner->timeScale);
+		gf_assert(au->owner->timeScale);
 		au->timing = (u64) (au->timing_sec * au->owner->timeScale);
 	}
 
@@ -3430,19 +3429,22 @@ GF_Err gf_sm_dump(GF_SceneManager *ctx, char *rad_name, Bool is_final_name, GF_S
 	GF_Err e;
 	GF_List *sample_list;
 	Bool first_par;
-	u32 i, j, indent, num_scene, num_od, first_bifs, num_tracks;
+	u32 i, j, indent, num_scene, num_od, first_bifs;
 	Double time;
 	GF_SceneDumper *dumper;
 	GF_StreamContext *sc;
 	GF_AUContext *au;
 	Bool no_root_found = 1;
 
-	sample_list = gf_list_new();
-
 	num_scene = num_od = 0;
-	num_tracks = 0;
 	indent = 0;
 	dumper = gf_sm_dumper_new(ctx->scene_graph, rad_name, is_final_name, ' ', dump_mode);
+	if (!dumper) {
+		return GF_IO_ERR;
+	}
+
+	sample_list = gf_list_new();
+
 	e = GF_OK;
 	/*configure all systems streams we're dumping*/
 	i=0;
@@ -3451,11 +3453,9 @@ GF_Err gf_sm_dump(GF_SceneManager *ctx, char *rad_name, Bool is_final_name, GF_S
 		switch (sc->streamType) {
 		case GF_STREAM_SCENE:
 			num_scene ++;
-			num_tracks ++;
 			break;
 		case GF_STREAM_OD:
 			num_od ++;
-			num_tracks ++;
 			break;
 		default:
 			continue;

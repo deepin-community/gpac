@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / common tools sub-project
@@ -31,6 +31,11 @@
 
 #include <gpac/maths.h>
 
+#if !defined(GPAC_DISABLE_EVG) || !defined(GPAC_DISABLE_3D) || !defined(GPAC_DISABLE_VRML) || !defined(GPAC_DISABLE_SVG)
+#define DISABLE_MATHS
+#endif
+
+
 GF_EXPORT
 u32 gf_get_bit_size(u32 MaxVal)
 {
@@ -43,6 +48,29 @@ u32 gf_get_bit_size(u32 MaxVal)
 	}
 	return k;
 }
+
+/*adds @rc2 to @rc1 - the new @rc1 contains the old @rc1 and @rc2*/
+GF_EXPORT
+void gf_irect_union(GF_IRect *rc1, GF_IRect *rc2)
+{
+	if (!rc1->width || !rc1->height) {
+		*rc1=*rc2;
+		return;
+	}
+
+	if (rc2->x < rc1->x) {
+		rc1->width += rc1->x - rc2->x;
+		rc1->x = rc2->x;
+	}
+	if (rc2->x + rc2->width > rc1->x+rc1->width) rc1->width = rc2->x + rc2->width - rc1->x;
+	if (rc2->y > rc1->y) {
+		rc1->height += rc2->y - rc1->y;
+		rc1->y = rc2->y;
+	}
+	if (rc2->y - rc2->height < rc1->y - rc1->height) rc1->height = rc1->y - rc2->y + rc2->height;
+}
+
+#ifdef DISABLE_MATHS
 
 #ifdef GPAC_FIXED_POINT
 
@@ -706,6 +734,26 @@ Fixed gf_angle_diff(Fixed angle1, Fixed angle2)
 	2D MATRIX TOOLS
  */
 
+//sanity checker
+#if 0
+void do_check_mx(GF_Matrix2D *_this)
+{
+	if (
+		(ABS(_this->m[0])>1000000)
+		|| (ABS(_this->m[1])>100000)
+		|| (ABS(_this->m[2])>100000)
+		|| (ABS(_this->m[3])>100000)
+		|| (ABS(_this->m[4])>100000)
+		|| (ABS(_this->m[5])>100000)
+	) {
+		exit(120);
+	}
+}
+#define CHECK_MATRIX do_check_mx(_this);
+#else
+#define CHECK_MATRIX
+#endif
+
 GF_EXPORT
 void gf_mx2d_add_matrix(GF_Matrix2D *_this, GF_Matrix2D *from)
 {
@@ -724,6 +772,8 @@ void gf_mx2d_add_matrix(GF_Matrix2D *_this, GF_Matrix2D *from)
 	_this->m[3] = gf_mulfix(from->m[3], bck.m[0]) + gf_mulfix(from->m[4], bck.m[3]);
 	_this->m[4] = gf_mulfix(from->m[3], bck.m[1]) + gf_mulfix(from->m[4], bck.m[4]);
 	_this->m[5] = gf_mulfix(from->m[3], bck.m[2]) + gf_mulfix(from->m[4], bck.m[5]) + from->m[5];
+
+	CHECK_MATRIX
 }
 
 
@@ -745,6 +795,8 @@ void gf_mx2d_pre_multiply(GF_Matrix2D *_this, GF_Matrix2D *with)
 	_this->m[3] = gf_mulfix(bck.m[3], with->m[0]) + gf_mulfix(bck.m[4], with->m[3]);
 	_this->m[4] = gf_mulfix(bck.m[3], with->m[1]) + gf_mulfix(bck.m[4], with->m[4]);
 	_this->m[5] = gf_mulfix(bck.m[3], with->m[2]) + gf_mulfix(bck.m[4], with->m[5]) + bck.m[5];
+
+	CHECK_MATRIX
 }
 
 
@@ -757,6 +809,8 @@ void gf_mx2d_add_translation(GF_Matrix2D *_this, Fixed cx, Fixed cy)
 	tmp.m[2] = cx;
 	tmp.m[5] = cy;
 	gf_mx2d_add_matrix(_this, &tmp);
+
+	CHECK_MATRIX
 }
 
 
@@ -775,6 +829,8 @@ void gf_mx2d_add_rotation(GF_Matrix2D *_this, Fixed cx, Fixed cy, Fixed angle)
 	tmp.m[1] = -1 * tmp.m[3];
 	gf_mx2d_add_matrix(_this, &tmp);
 	gf_mx2d_add_translation(_this, cx, cy);
+
+	CHECK_MATRIX
 }
 
 GF_EXPORT
@@ -786,6 +842,8 @@ void gf_mx2d_add_scale(GF_Matrix2D *_this, Fixed scale_x, Fixed scale_y)
 	tmp.m[0] = scale_x;
 	tmp.m[4] = scale_y;
 	gf_mx2d_add_matrix(_this, &tmp);
+
+	CHECK_MATRIX
 }
 
 GF_EXPORT
@@ -801,6 +859,8 @@ void gf_mx2d_add_scale_at(GF_Matrix2D *_this, Fixed scale_x, Fixed scale_y, Fixe
 	tmp.m[4] = scale_y;
 	gf_mx2d_add_matrix(_this, &tmp);
 	if (angle) gf_mx2d_add_rotation(_this, cx, cy, angle);
+
+	CHECK_MATRIX
 }
 
 GF_EXPORT
@@ -812,6 +872,8 @@ void gf_mx2d_add_skew(GF_Matrix2D *_this, Fixed skew_x, Fixed skew_y)
 	tmp.m[1] = skew_x;
 	tmp.m[3] = skew_y;
 	gf_mx2d_add_matrix(_this, &tmp);
+
+	CHECK_MATRIX
 }
 
 GF_EXPORT
@@ -823,6 +885,8 @@ void gf_mx2d_add_skew_x(GF_Matrix2D *_this, Fixed angle)
 	tmp.m[1] = gf_tan(angle);
 	tmp.m[3] = 0;
 	gf_mx2d_add_matrix(_this, &tmp);
+
+	CHECK_MATRIX
 }
 
 GF_EXPORT
@@ -834,6 +898,8 @@ void gf_mx2d_add_skew_y(GF_Matrix2D *_this, Fixed angle)
 	tmp.m[1] = 0;
 	tmp.m[3] = gf_tan(angle);
 	gf_mx2d_add_matrix(_this, &tmp);
+
+	CHECK_MATRIX
 }
 
 
@@ -892,7 +958,11 @@ void gf_mx2d_inverse(GF_Matrix2D *_this)
 #endif
 
 	gf_mx2d_copy(*_this, tmp);
+
+	CHECK_MATRIX
 }
+
+#endif
 
 GF_EXPORT
 Bool gf_mx2d_decompose(GF_Matrix2D *mx, GF_Point2D *scale, Fixed *rotate, GF_Point2D *translate)
@@ -924,6 +994,8 @@ Bool gf_mx2d_decompose(GF_Matrix2D *mx, GF_Point2D *scale, Fixed *rotate, GF_Poi
 	*rotate = angle;
 	return GF_TRUE;
 }
+
+#ifdef DISABLE_MATHS
 
 GF_EXPORT
 void gf_mx2d_apply_coords(GF_Matrix2D *_this, Fixed *x, Fixed *y)
@@ -960,8 +1032,8 @@ void gf_mx2d_apply_rect(GF_Matrix2D *_this, GF_Rect *rc)
 	rc->height = MIN(c1.y, MIN(c2.y, MIN(c3.y, c4.y)));
 	rc->y = MAX(c1.y, MAX(c2.y, MAX(c3.y, c4.y)));
 	rc->height = rc->y - rc->height;
-	assert(rc->height>=0);
-	assert(rc->width>=0);
+//	gf_assert(rc->height>=0);
+//	gf_assert(rc->width>=0);
 }
 
 /*
@@ -981,6 +1053,7 @@ GF_IRect gf_rect_pixelize(GF_Rect *r)
 	return rc;
 }
 
+#endif
 
 /*adds @rc2 to @rc1 - the new @rc1 contains the old @rc1 and @rc2*/
 GF_EXPORT
@@ -1003,6 +1076,8 @@ void gf_rect_union(GF_Rect *rc1, GF_Rect *rc2)
 	if (rc2->y - rc2->height < rc1->y - rc1->height) rc1->height = rc1->y - rc2->y + rc2->height;
 }
 
+#ifdef DISABLE_MATHS
+
 GF_EXPORT
 GF_Rect gf_rect_center(Fixed w, Fixed h)
 {
@@ -1013,6 +1088,7 @@ GF_Rect gf_rect_center(Fixed w, Fixed h)
 	rc.height=h;
 	return rc;
 }
+#endif
 
 GF_EXPORT
 Bool gf_rect_overlaps(GF_Rect rc1, GF_Rect rc2)
@@ -1057,6 +1133,7 @@ void gf_rect_intersect(GF_Rect *rc1, GF_Rect *rc2)
 }
 
 
+#ifdef DISABLE_MATHS
 
 #ifdef GPAC_FIXED_POINT
 
@@ -1238,9 +1315,9 @@ GF_Vec gf_vec_cross_p(GF_Vec *v1, GF_Vec *v2)
 		res.z<<=16;
 		return res;
 	}
-	res.x = gf_mulfix(v1.y, v2.z) - gf_mulfix(v2.y, v1.z);
-	res.y = gf_mulfix(v2.x, v1.z) - gf_mulfix(v1.x, v2.z);
-	res.z = gf_mulfix(v1.x, v2.y) - gf_mulfix(v2.x, v1.y);
+	res.x = gf_mulfix(v1->y, v2->z) - gf_mulfix(v2->y, v1->z);
+	res.y = gf_mulfix(v2->x, v1->z) - gf_mulfix(v1->x, v2->z);
+	res.z = gf_mulfix(v1->x, v2->y) - gf_mulfix(v2->x, v1->y);
 
 #endif
 	return res;
@@ -1503,7 +1580,7 @@ void gf_mx_inverse(GF_Matrix *mx)
 	GF_Matrix rev;
 	gf_mx_init(rev);
 
-	assert(! ((mx->m[3] != 0) || (mx->m[7] != 0) || (mx->m[11] != 0) || (mx->m[15] != FIX_ONE)) );
+	gf_assert(! ((mx->m[3] != 0) || (mx->m[7] != 0) || (mx->m[11] != 0) || (mx->m[15] != FIX_ONE)) );
 
 
 #ifdef GPAC_FIXED_POINT
@@ -1695,7 +1772,7 @@ GF_EXPORT
 void gf_mx_get_yaw_pitch_roll(GF_Matrix *mx, Fixed *yaw, Fixed *pitch, Fixed *roll)
 {
 	Fixed locmat[16];
-	assert(mx->m[15]);
+	gf_assert(mx->m[15]);
 	memcpy(locmat, mx->m, sizeof(Fixed)*16);
 	*pitch = (Float) atan(locmat[4]/locmat[0]);
 	*yaw = (Float) atan(-locmat[8]/gf_sqrt(pow(locmat[9],2) + pow(locmat[10],2)));
@@ -1711,7 +1788,7 @@ void gf_mx_decompose(GF_Matrix *mx, GF_Vec *translate, GF_Vec *scale, GF_Vec4 *r
 	GF_Matrix tmp;
 	GF_Vec row0, row1, row2;
 	Fixed shear_xy, shear_xz, shear_yz;
-	assert(mx->m[15]);
+	gf_assert(mx->m[15]);
 
 	memcpy(locmat, mx->m, sizeof(Fixed)*16);
 	/*no perspective*/
@@ -2053,8 +2130,8 @@ Bool gf_mx_inverse_4x4(GF_Matrix *mx)
 	}
 
 	/* choose pivot - or die */
-	if (fabs(r3[1]) > fabs(r2[1])) SWAP_ROWS(r3, r2);
-	if (fabs(r2[1]) > fabs(r1[1])) SWAP_ROWS(r2, r1);
+	if (ABS(r3[1]) > ABS(r2[1])) SWAP_ROWS(r3, r2);
+	if (ABS(r2[1]) > ABS(r1[1])) SWAP_ROWS(r2, r1);
 	if (r1[1]==0) return GF_FALSE;
 
 	/* eliminate second variable */
@@ -2086,7 +2163,7 @@ Bool gf_mx_inverse_4x4(GF_Matrix *mx)
 	}
 
 	/* choose pivot - or die */
-	if (fabs(r3[2]) > fabs(r2[2])) SWAP_ROWS(r3, r2);
+	if (ABS(r3[2]) > ABS(r2[2])) SWAP_ROWS(r3, r2);
 	if (r2[2]==0) return GF_FALSE;
 
 	/* eliminate third variable */
@@ -2192,7 +2269,7 @@ Bool gf_plane_intersect_plane(GF_Plane *plane, GF_Plane *with, GF_Vec *linepoint
 	Fixed fn01 = gf_vec_dot(plane->normal, with->normal);
 	Fixed fn11 = gf_vec_len(with->normal);
 	Fixed det = gf_mulfix(fn00,fn11) - gf_mulfix(fn01,fn01);
-	if (fabs(det) > FIX_EPSILON) {
+	if (ABS(det) > FIX_EPSILON) {
 		Fixed fc0, fc1;
 		GF_Vec v1, v2;
 		fc0 = gf_divfix( gf_mulfix(fn11, -plane->d) + gf_mulfix(fn01, with->d) , det);
@@ -2787,3 +2864,5 @@ u32 gf_get_next_pow2(u32 s)
 	return res;
 }
 
+
+#endif //DISABLE_MATHS

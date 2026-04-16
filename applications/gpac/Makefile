@@ -10,8 +10,13 @@ LDFLAGS+=-g
 endif
 
 ifeq ($(GPROFBUILD),yes)
+ifeq ($(CONFIG_DARWIN),yes)
+CFLAGS+=-fprofile-instr-generate
+LDFLAGS+=-fprofile-instr-generate
+else
 CFLAGS+=-pg
 LDFLAGS+=-pg
+endif
 endif
 
 LINKFLAGS=-L../../bin/gcc
@@ -19,6 +24,20 @@ ifeq ($(CONFIG_WIN32),yes)
 EXE=.exe
 PROG=gpac$(EXE)
 LINKFLAGS+=$(UNICODEFLAGS)
+else ifeq ($(CONFIG_EMSCRIPTEN),yes)
+EXT="."$(EM_TYPE)
+PROG="gpac"$(EXT)
+
+#export default symbols and modularize as libgpac
+exports=-O$(EM_OPT) -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=libgpac -sEXPORTED_RUNTIME_METHODS=FS,IDBFS,stackSave,stackRestore,getValue,setValue,UTF8ToString,lengthBytesUTF8,stringToUTF8,cwrap,addFunction -sEXPORTED_FUNCTIONS=_malloc,_free,_main
+ifeq ($(DISABLE_THREADS),no)
+LINKFLAGS+=$(exports),PThread -sPTHREAD_POOL_SIZE=1 -sPTHREAD_POOL_SIZE_STRICT=0
+else
+LINKFLAGS+=$(exports)
+endif
+#default demo uses IDBFS
+LINKFLAGS+=-lidbfs.js
+LINKFLAGS+=--pre-js $(SRC_PATH)/share/emscripten/gpac_pre.js
 else
 EXT=
 PROG=gpac
@@ -36,16 +55,21 @@ LINKFLAGS+= $(GPAC_SH_FLAGS)
 LINKFLAGS+=$(EXTRALIBS)
 else
 LINKFLAGS+=-lgpac
-ifeq ($(CONFIG_DARWIN),yes)
+ifeq ($(CONFIG_EMSCRIPTEN),yes)
+else ifeq ($(CONFIG_DARWIN),yes)
 #LINKFLAGS+= -Wl,-rpath,'@loader_path'
 else
-LINKFLAGS+= -Wl,-rpath,'$$ORIGIN' -Wl,-rpath-link,../../bin/gcc
+LINKFLAGS+= -Wl,-rpath,'$$ORIGIN' -Wl,-rpath,$(prefix)/lib -Wl,-rpath-link,../../bin/gcc
 endif
 endif
 
 
 #common objs - insert after ../static if any to overwrite list of objects
 OBJS=gpac.o compositor_tools.o gpac_help.o
+ifeq ($(CONFIG_EMSCRIPTEN),yes)
+OBJS+= ../mp4box/mp4box.o ../mp4box/filedump.o ../mp4box/fileimport.o
+endif
+
 
 SRCS := $(OBJS:.o=.c)
 

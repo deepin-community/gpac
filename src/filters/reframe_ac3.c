@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2017-2022
+ *			Copyright (c) Telecom ParisTech 2017-2025
  *					All rights reserved
  *
  *  This file is part of GPAC / AC3 reframer filter
@@ -27,7 +27,7 @@
 #include <gpac/constants.h>
 #include <gpac/filters.h>
 
-#ifndef GPAC_DISABLE_AV_PARSERS
+#if !defined(GPAC_DISABLE_AV_PARSERS) && !defined(GPAC_DISABLE_RFAC3)
 
 typedef struct
 {
@@ -118,6 +118,12 @@ GF_Err ac3dmx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is_remove
 		ctx->opid = gf_filter_pid_new(filter);
 		gf_filter_pid_copy_properties(ctx->opid, ctx->ipid);
 		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_UNFRAMED, NULL);
+
+		//make sure we move to audio (may happen if source filter is writegen)
+		p = gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_STREAM_TYPE);
+		if (!p || (p->value.uint==GF_STREAM_FILE)) {
+			gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_STREAM_TYPE, &PROP_UINT(GF_STREAM_AUDIO));
+		}
 	}
 	if (ctx->timescale) ctx->copy_props = GF_TRUE;
 	return GF_OK;
@@ -216,9 +222,10 @@ static void ac3dmx_check_pid(GF_Filter *filter, GF_AC3DmxCtx *ctx)
 	ctx->copy_props = GF_FALSE;
 	//copy properties at init or reconfig
 	gf_filter_pid_copy_properties(ctx->opid, ctx->ipid);
-	//don't change codec type if reframing an ES (for HLS SAES)
-	if (!ctx->timescale)
-		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_STREAM_TYPE, & PROP_UINT( GF_STREAM_AUDIO));
+	const GF_PropertyValue *p = gf_filter_pid_get_property(ctx->ipid, GF_PROP_PID_STREAM_TYPE);
+	if (!p || (p->value.uint==GF_STREAM_FILE)) {
+		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_STREAM_TYPE, &PROP_UINT(GF_STREAM_AUDIO));
+	}
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_SAMPLES_PER_FRAME, & PROP_UINT(AC3_FRAME_SIZE) );
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_UNFRAMED, & PROP_BOOL(GF_FALSE) );
 
@@ -240,7 +247,10 @@ static void ac3dmx_check_pid(GF_Filter *filter, GF_AC3DmxCtx *ctx)
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_TIMESCALE, & PROP_UINT(ctx->timescale ? ctx->timescale : ctx->sample_rate));
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_SAMPLE_RATE, & PROP_UINT(ctx->sample_rate));
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_NUM_CHANNELS, & PROP_UINT(ctx->nb_ch) );
-
+	if (!gf_sys_is_test_mode()) {
+		u64 layout = gf_ac3_get_channel_layout(&ctx->hdr);
+		gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_CHANNEL_LAYOUT, &PROP_LONGUINT(layout) );
+	}
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_CODECID, & PROP_UINT(ctx->is_eac3 ? GF_CODECID_EAC3 : GF_CODECID_AC3) );
 
 	ctx->hdr.is_ec3 = ctx->is_eac3;
@@ -334,7 +344,10 @@ GF_Err ac3dmx_process(GF_Filter *filter)
 	u8 *output;
 	u8 *start;
 	u32 pck_size, remain, prev_pck_size;
-	u64 cts = GF_FILTER_NO_TS;
+	u64 cts;
+
+restart:
+	cts = GF_FILTER_NO_TS;
 
 	//always reparse duration
 	if (!ctx->duration.num)
@@ -366,8 +379,8 @@ GF_Err ac3dmx_process(GF_Filter *filter)
 			return GF_OK;
 		}
 
-		//max EAC3 frame is 4096, AC3 is 3840 - if we store more than 2 frames consider we have garbage
-		if (ctx->ac3_buffer_size>10000) {
+		//max EAC3 frame is 4096 but we can have side streams, AC3 is 3840 - if we store more than 2 frames consider we have garbage
+		if (ctx->ac3_buffer_size>100000) {
 			GF_LOG(GF_LOG_WARNING, GF_LOG_MEDIA, ("[AC3Dmx] Trashing %d garbage bytes\n", ctx->ac3_buffer_size));
 			ctx->ac3_buffer_size = 0;
 		}
@@ -428,16 +441,21 @@ GF_Err ac3dmx_process(GF_Filter *filter)
 
 		sync_pos = (u32) gf_bs_get_position(ctx->bs);
 
-		//startcode not found or not enough bytes, gather more
-		if (!res || (remain < sync_pos + ctx->hdr.framesize)) {
-			if (sync_pos && ctx->hdr.framesize) {
-				start += sync_pos;
-				remain -= sync_pos;
+		//if not end of stream or no valid frame
+		if (pck || !ctx->hdr.framesize) {
+			//startcode not found or not enough bytes, gather more
+			if (!res || (remain < sync_pos + ctx->hdr.framesize)) {
+				if (sync_pos && ctx->hdr.framesize) {
+					start += sync_pos;
+					remain -= sync_pos;
+				}
+				break;
 			}
-			break;
+			ac3dmx_check_pid(filter, ctx);
 		}
-
-		ac3dmx_check_pid(filter, ctx);
+		//may happen with very-short streams
+		if (!ctx->sample_rate)
+			ac3dmx_check_pid(filter, ctx);
 
 		if (!ctx->is_playing) {
 			ctx->resume_from = 1 + ctx->ac3_buffer_size - remain;
@@ -465,16 +483,18 @@ GF_Err ac3dmx_process(GF_Filter *filter)
 			cts = GF_FILTER_NO_TS;
 		}
 
-		if (!ctx->in_seek) {
+		if (!ctx->in_seek && remain >= sync_pos + ctx->hdr.framesize) {
 			dst_pck = gf_filter_pck_new_alloc(ctx->opid, ctx->hdr.framesize, &output);
 			if (!dst_pck) return GF_OUT_OF_MEM;
-			
-			if (ctx->src_pck) gf_filter_pck_merge_properties(ctx->src_pck, dst_pck);
 
+			if (ctx->src_pck) gf_filter_pck_merge_properties(ctx->src_pck, dst_pck);
 			memcpy(output, sync, ctx->hdr.framesize);
 			gf_filter_pck_set_dts(dst_pck, ctx->cts);
 			gf_filter_pck_set_cts(dst_pck, ctx->cts);
-			gf_filter_pck_set_duration(dst_pck, AC3_FRAME_SIZE);
+			if (ctx->timescale && (ctx->timescale!=ctx->sample_rate))
+				gf_filter_pck_set_duration(dst_pck, (u32) gf_timestamp_rescale(AC3_FRAME_SIZE, ctx->sample_rate, ctx->timescale));
+			else
+				gf_filter_pck_set_duration(dst_pck, AC3_FRAME_SIZE);
 			gf_filter_pck_set_sap(dst_pck, GF_FILTER_SAP_1);
 			gf_filter_pck_set_framing(dst_pck, GF_TRUE, GF_TRUE);
 
@@ -488,7 +508,9 @@ GF_Err ac3dmx_process(GF_Filter *filter)
 
 		//truncated last frame
 		if (bytes_to_drop>remain) {
-			GF_LOG(GF_LOG_WARNING, GF_LOG_MEDIA, ("[ADTSDmx] truncated AC3 frame!\n"));
+			if (!gf_filter_pid_has_seen_eos(ctx->ipid)) {
+				GF_LOG(GF_LOG_WARNING, GF_LOG_MEDIA, ("[ADTSDmx] truncated AC3 frame!\n"));
+			}
 			bytes_to_drop=remain;
 		}
 
@@ -515,10 +537,15 @@ GF_Err ac3dmx_process(GF_Filter *filter)
 
 	if (!pck) {
 		ctx->ac3_buffer_size = 0;
-		return ac3dmx_process(filter);
+		//avoid recursive call
+		goto restart;
 	} else {
 		if (remain && (remain < ctx->ac3_buffer_size)) {
 			memmove(ctx->ac3_buffer, start, remain);
+		}
+		if (!ctx->src_pck && pck) {
+			ctx->src_pck = pck;
+			gf_filter_pck_ref_props(&ctx->src_pck);
 		}
 		ctx->ac3_buffer_size = remain;
 		gf_filter_pid_drop_packet(ctx->ipid);
@@ -532,6 +559,7 @@ static void ac3dmx_finalize(GF_Filter *filter)
 	if (ctx->bs) gf_bs_del(ctx->bs);
 	if (ctx->ac3_buffer) gf_free(ctx->ac3_buffer);
 	if (ctx->indexes) gf_free(ctx->indexes);
+	if (ctx->src_pck) gf_filter_pck_unref(ctx->src_pck);
 }
 
 static const char *ac3dmx_probe_data(const u8 *_data, u32 _size, GF_FilterProbeScore *score)
@@ -588,7 +616,7 @@ static const char *ac3dmx_probe_data(const u8 *_data, u32 _size, GF_FilterProbeS
 			has_broken_frames = GF_TRUE;
 		nb_frames += ahdr.nb_streams;
 		for (i=0; i<ahdr.nb_streams; i++)
-			nb_frames += ahdr.streams[i].nb_dep_sub;
+			nb_frames += ahdr.streams[i].nb_dep_sub ? 1 : 0;
 		gf_bs_skip_bytes(bs, ahdr.framesize);
 		if (!pos && (nb_frames==1) && !gf_bs_available(bs)) nb_frames++;
 		pos+=ahdr.framesize;
@@ -653,19 +681,18 @@ GF_FilterRegister AC3DmxRegister = {
 	.configure_pid = ac3dmx_configure_pid,
 	.process = ac3dmx_process,
 	.probe_data = ac3dmx_probe_data,
-	.process_event = ac3dmx_process_event
+	.process_event = ac3dmx_process_event,
+	.hint_class_type = GF_FS_CLASS_FRAMING
 };
 
 
-const GF_FilterRegister *ac3dmx_register(GF_FilterSession *session)
+const GF_FilterRegister *rfac3_register(GF_FilterSession *session)
 {
 	return &AC3DmxRegister;
 }
-
 #else
-
-const GF_FilterRegister *ac3dmx_register(GF_FilterSession *session)
+const GF_FilterRegister *rfac3_register(GF_FilterSession *session)
 {
 	return NULL;
 }
-#endif // GPAC_DISABLE_AV_PARSERS
+#endif // !defined(GPAC_DISABLE_AV_PARSERS) && !defined(GPAC_DISABLE_RFAC3)

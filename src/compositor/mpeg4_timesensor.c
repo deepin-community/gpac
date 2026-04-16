@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -28,8 +28,7 @@
 #include <gpac/nodes_mpeg4.h>
 #include <gpac/nodes_x3d.h>
 
-
-#ifndef GPAC_DISABLE_VRML
+#if !defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_COMPOSITOR)
 
 typedef struct
 {
@@ -60,7 +59,7 @@ void timesensor_deactivate(TimeSensorStack *stack, M_TimeSensor *ts)
 {
 	ts->isActive = 0;
 	gf_node_event_out((GF_Node *) ts, 7);//"isActive"
-	assert(stack->time_handle.is_registered);
+	gf_assert(stack->time_handle.is_registered);
 	stack->time_handle.needs_unregister = 1;
 	stack->num_cycles = 0;
 }
@@ -208,4 +207,4 @@ void compositor_timesensor_modified(GF_Node *t)
 	}
 }
 
-#endif /*GPAC_DISABLE_VRML*/
+#endif //!defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_COMPOSITOR)

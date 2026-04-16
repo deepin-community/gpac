@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2005-2022
+ *			Copyright (c) Telecom ParisTech 2005-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / LASeR decoder filter
@@ -25,7 +25,7 @@
 
 #include <gpac/filters.h>
 
-#ifndef GPAC_DISABLE_LASER
+#if !defined(GPAC_DISABLE_LASER) && !defined(GPAC_DISABLE_COMPOSITOR)
 
 #include <gpac/internal/compositor_dev.h>
 #include <gpac/laser.h>
@@ -178,9 +178,8 @@ static GF_Err lsrdec_process(GF_Filter *filter)
 		GF_FilterPid *opid = gf_filter_pid_get_udta(pid);
 
 		GF_ObjectManager *odm = gf_filter_pid_get_udta(opid);
-		if (!odm) continue;
 		//object clock shall be valid
-		assert(odm->ck);
+		if (!odm || !odm->ck) continue;
 
 		pck = gf_filter_pid_get_packet(pid);
 		if (!pck) {
@@ -261,16 +260,17 @@ GF_FilterRegister LSRDecRegister = {
 	.process = lsrdec_process,
 	.configure_pid = lsrdec_configure_pid,
 	.process_event = lsrdec_process_event,
+	.hint_class_type = GF_FS_CLASS_DECODER
 };
 
-#endif /*GPAC_DISABLE_LASER*/
+#endif //!defined(GPAC_DISABLE_LASER) && !defined(GPAC_DISABLE_COMPOSITOR)
 
 const GF_FilterRegister *lsrdec_register(GF_FilterSession *session)
 {
-#ifdef GPAC_DISABLE_LASER
-	return NULL;
-#else
+#if !defined(GPAC_DISABLE_LASER) && !defined(GPAC_DISABLE_COMPOSITOR)
 	return &LSRDecRegister;
+#else
+	return NULL;
 #endif /*GPAC_DISABLE_LASER*/
 }
 

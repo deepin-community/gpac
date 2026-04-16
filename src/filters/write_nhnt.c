@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2017-2022
+ *			Copyright (c) Telecom ParisTech 2017-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / NHNT stream to file filter
@@ -26,6 +26,8 @@
 #include <gpac/filters.h>
 #include <gpac/constants.h>
 #include <gpac/bitstream.h>
+
+#ifndef GPAC_DISABLE_NHNTW
 
 #include <gpac/internal/isomedia_dev.h>
 
@@ -342,7 +344,7 @@ GF_Err nhntdump_process(GF_Filter *filter)
 	//send the complete data packet
 	dst_pck = gf_filter_pck_new_ref(ctx->opid_mdia, 0, pck_size, pck);
 	if (!dst_pck) return GF_OUT_OF_MEM;
-	
+
 	gf_filter_pck_merge_properties(pck, dst_pck);
 	//keep byte offset ?
 //	gf_filter_pck_set_byte_offset(dst_pck, GF_FILTER_NO_BO);
@@ -392,17 +394,23 @@ GF_FilterRegister NHNTDumpRegister = {
 	.name = "nhntw",
 	GF_FS_SET_DESCRIPTION("NHNT writer")
 	GF_FS_SET_HELP("This filter converts a single stream to an NHNT output file.\n"
-	"NHNT documentation is available at https://wiki.gpac.io/NHNT-Format\n")
+	"NHNT documentation is available at https://wiki.gpac.io/xmlformats/NHNT-Format\n")
 	.private_size = sizeof(GF_NHNTDumpCtx),
 	.args = NHNTDumpArgs,
 	.finalize = nhntdump_finalize,
 	SETCAPS(NHNTDumpCaps),
 	.configure_pid = nhntdump_configure_pid,
-	.process = nhntdump_process
+	.process = nhntdump_process,
+	.hint_class_type = GF_FS_CLASS_TOOL
 };
 
-const GF_FilterRegister *nhntdump_register(GF_FilterSession *session)
+const GF_FilterRegister *nhntw_register(GF_FilterSession *session)
 {
 	return &NHNTDumpRegister;
 }
-
+#else
+const GF_FilterRegister *nhntw_register(GF_FilterSession *session)
+{
+	return NULL;
+}
+#endif //#ifndef GPAC_DISABLE_NHNTW

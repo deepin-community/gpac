@@ -2,7 +2,7 @@
  *					GPAC Multimedia Framework
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2020-2022
+ *			Copyright (c) Telecom ParisTech 2020-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / TTML decoder filter
@@ -27,7 +27,7 @@
 #include <gpac/filters.h>
 #include <gpac/constants.h>
 
-#if !defined(GPAC_DISABLE_SVG) && defined(GPAC_HAS_QJS)
+#if !defined(GPAC_DISABLE_SVG) && defined(GPAC_HAS_QJS) && !defined(GPAC_DISABLE_COMPOSITOR)
 
 #include <gpac/internal/scenegraph_dev.h>
 #include <gpac/internal/compositor_dev.h>
@@ -171,7 +171,7 @@ static GF_Err ttmldec_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool i
 	}
 	//TODO: we need to cleanup cap checking upon reconfigure
 	if (ctx->ipid && !gf_filter_pid_check_caps(pid)) return GF_NOT_SUPPORTED;
-	assert(!ctx->ipid || (ctx->ipid == pid));
+	gf_assert(!ctx->ipid || (ctx->ipid == pid));
 
 	ctx->ipid = pid;
 	if (!ctx->opid) {
@@ -580,14 +580,15 @@ GF_FilterRegister TTMLDecRegister = {
 	.process = ttmldec_process,
 	.configure_pid = ttmldec_configure_pid,
 	.process_event = ttmldec_process_event,
-	.update_arg = ttmldec_update_arg
+	.update_arg = ttmldec_update_arg,
+	.hint_class_type = GF_FS_CLASS_DECODER
 };
 
 #endif
 
 const GF_FilterRegister *ttmldec_register(GF_FilterSession *session)
 {
-#if !defined(GPAC_DISABLE_SVG) && defined(GPAC_HAS_QJS)
+#if !defined(GPAC_DISABLE_SVG) && defined(GPAC_HAS_QJS) && !defined(GPAC_DISABLE_COMPOSITOR)
 	return &TTMLDecRegister;
 #else
 	return NULL;

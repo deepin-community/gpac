@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / common tools sub-project
@@ -25,6 +25,8 @@
 
 
 #include <gpac/path2d.h>
+
+#if !defined(GPAC_DISABLE_EVG) || defined(GPAC_HAS_FREETYPE)
 
 GF_EXPORT
 GF_Path *gf_path_new()
@@ -164,7 +166,6 @@ GF_Err gf_path_add_line_to_vec(GF_Path *gp, GF_Point2D *pt) {
 GF_EXPORT
 GF_Err gf_path_close(GF_Path *gp)
 {
-	Fixed diff;
 	GF_Point2D start, end;
 	if (!gp || !gp->n_contours) return GF_BAD_PARAM;
 
@@ -173,8 +174,7 @@ GF_Err gf_path_close(GF_Path *gp)
 	end = gp->points[gp->n_points-1];
 	end.x -= start.x;
 	end.y -= start.y;
-	diff = gf_mulfix(end.x, end.x) + gf_mulfix(end.y, end.y);
-	if (ABS(diff) > FIX_ONE/1000) {
+	if (FIX_ONE/100 < ABS(end.x) || FIX_ONE/100 < ABS(end.y)) {
 		GF_Err e = gf_path_add_line_to(gp, start.x, start.y);
 		if (e) return e;
 	}
@@ -490,7 +490,7 @@ GF_Err gf_path_add_svg_arc_to(GF_Path *gp, Fixed end_x, Fixed end_y, Fixed r_x, 
 
 	rxsq = gf_mulfix(r_x, r_x);
 	rysq = gf_mulfix(r_y, r_y);
-	assert(rxsq && rysq);
+	gf_assert(rxsq && rysq);
 
 	radius_scale = gf_divfix(xmidpsq, rxsq) + gf_divfix(ymidpsq, rysq);
 	if (radius_scale > FIX_ONE) {
@@ -1376,3 +1376,5 @@ u32 gf_polygone2d_get_convexity(GF_Point2D *pts, u32 len)
 	if ( angleSign < 0 ) return GF_POLYGON_CONVEX_CW;
 	return GF_POLYGON_CONVEX_LINE;
 }
+
+#endif // !defined(GPAC_DISABLE_EVG) || defined(GPAC_HAS_FREETYPE)

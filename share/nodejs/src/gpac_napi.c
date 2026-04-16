@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2021-2022
+ *			Copyright (c) Telecom ParisTech 2021-2025
  *					All rights reserved
  *
  *  This file is part of GPAC / NodeJS module
@@ -44,13 +44,15 @@ typedef struct
 	u32 nb_args;
 	char **argv;
 
-	napi_async_context rmt_ctx;
-	napi_ref rmt_ref;
-
 	u32 main_thid;
-	GF_List *rmt_messages;
+
+	napi_async_context rmt_ctx;
+	GF_List *rmt_new_clients;
+	GF_List* rmt_task_calls;
+	GF_List* rmt_delete_calls;
 	struct _napi_session *fs_rmt_handler;
-	Bool rmt_task_scheduled;
+
+
 } GPAC_NAPI;
 
 #define GF_SETUP_ERROR	0
@@ -135,14 +137,19 @@ napi_type_tag filterpid_tag = {0x475041434e4f4445, 0x46696c7472506964};
 napi_type_tag filterpck_tag = {0x475041434e4f4445, 0x47465041434b4554};
 napi_type_tag filterevent_tag = {0x475041434e4f4445, 0x4746464556454e54};
 napi_type_tag dashbind_tag = {0x475041434e4f4445, 0x44415348494e4a53};
-napi_type_tag fileio_tag = {0x475041434e4f4445, 0x474646494c45494f};
+napi_type_tag fileio_tag = {0x475041434e4f4445,   0x474646494c45494f};
+napi_type_tag httpsess_tag = {0x475041434e4f4445, 0x474646494cf0df5c};
+
+napi_type_tag rmtclient_tag = {0x475041434e4f4445, 0x174646494cf0df5c};
 
 napi_value dashin_bind(napi_env env, napi_callback_info info);
 void dashin_detach_binding(NAPI_Filter *napi_f);
 
+napi_value httpout_bind(napi_env env, napi_callback_info info);
+void httpout_detach_binding(NAPI_Filter *napi_f);
 
-void dummy_finalize(napi_env env, void* finalize_data, void* finalize_hint)
-{
+
+void dummy_finalize(napi_env env, void* finalize_data, void* finalize_hint) {
 }
 
 napi_value gpac_init(napi_env env, napi_callback_info info)
@@ -159,7 +166,7 @@ napi_value gpac_init(napi_env env, napi_callback_info info)
 		if (gpac->str_buf) gf_free(gpac->str_buf);
 		gpac->str_buf = NULL;
 		gpac->str_buf_alloc = 0;
-		gf_sys_close(mem_track, profile);
+		gf_sys_close();
 		gf_sys_init(mem_track, profile);
 		gpac->is_init = GF_TRUE;
 		if (profile) free(profile);
@@ -203,113 +210,472 @@ napi_value gpac_sys_clock_high_res(napi_env env, napi_callback_info info)
 	return val;
 }
 
-void gpac_rmt_callback_exec(napi_env env, GPAC_NAPI *gpac)
+napi_value gpac_sys_keyname(napi_env env, napi_callback_info info)
 {
-	napi_status status;
-	napi_value global, fun_val;
+	napi_value val;
+#ifndef GPAC_DISABLE_SVG
+	const char *gf_dom_get_friendly_name(u32 key_identifier);
 
-	status = napi_get_global(env, &global);
-	if (status == napi_ok)
-		status = napi_get_reference_value(env, gpac->rmt_ref, &fun_val);
-
-	if (status == napi_ok) {
-		while (gf_list_count(gpac->rmt_messages)) {
-			napi_value res, arg;
-			char *msg = gf_list_pop_front(gpac->rmt_messages);
-
-			status = napi_create_string_utf8(env, msg, NAPI_AUTO_LENGTH, &arg);
-			if (status == napi_ok)
-				status = napi_make_callback(env, gpac->rmt_ctx, global, fun_val, 1, &arg, &res);
-
-			gf_free(msg);
-		}
-	}
+	NARG_ARGS(1, 1)
+	NARG_S32(code, 0, 0);
+	NAPI_CALL( napi_create_string_utf8(env, gf_dom_get_friendly_name(code), NAPI_AUTO_LENGTH, &val) );
+#else
+	NAPI_CALL( napi_create_string_utf8(env, "unknown", NAPI_AUTO_LENGTH, &val) );
+#endif
+	return val;
 }
+
+
+static u32 RMT_CLIENT_PROP_PEER_ADDRESS = 0;
+static u32 RMT_CLIENT_PROP_ON_DATA = 1;
+static u32 RMT_CLIENT_PROP_ON_CLOSE = 2;
+
+
+#define RMT_CLIENT\
+	RMT_ClientCtx* client=NULL;\
+	bool _tag;\
+	NAPI_CALL( napi_check_object_type_tag(env, this_val, &rmtclient_tag, &_tag) );\
+	if (!_tag) {\
+		napi_throw_error(env, NULL, "Not a RMTClient object");\
+		return NULL;\
+	}\
+	NAPI_CALL( napi_unwrap(env, this_val, (void**) &client) );\
+
+
+napi_value rmt_client_getter(napi_env env, napi_callback_info info) {
+	void *magic;
+	napi_status status;
+	napi_value this_val, ret;
+	NAPI_CALL(napi_get_cb_info(env, info, NULL, NULL, &this_val, &magic) );
+	RMT_CLIENT
+
+	if (!client)
+		return NULL;
+
+	if (magic == &RMT_CLIENT_PROP_PEER_ADDRESS) {
+		const char *peer = gf_rmt_get_peer_address(client);
+		if (!peer) return NULL;
+		NAPI_CALL( napi_create_string_utf8(env, peer, NAPI_AUTO_LENGTH, &ret) );
+		return ret;
+	}
+
+	return NULL;
+
+}
+
+typedef struct {
+	u32 type;
+
+	napi_env env;
+	napi_ref _this;
+	napi_ref fun;
+
+	void* client;
+
+} NAPI_RMT_Task ;
+
+typedef struct {
+
+	NAPI_RMT_Task* task;
+
+	napi_value arg;
+
+} NAPI_RMT_Task_Call ;
+
+
+void napi_rmt_task_del(napi_env env, NAPI_RMT_Task* task) {
+
+	if (task && task->type == RMT_CALLBACK_NODE) {
+		uint32_t res;
+		if (task->_this) {
+			napi_reference_unref(env, task->_this, &res);
+			napi_delete_reference(env, task->_this);
+		}
+		task->_this = NULL;
+
+		if (task->fun) {
+			napi_reference_unref(env, task->fun, &res);
+			napi_delete_reference(env, task->fun);
+		}
+		task->fun = NULL;
+
+		gf_free(task);
+
+	}
+
+}
+
+
+
+Bool fs_flush_rmt(GF_FilterSession *fsess, void *callback, u32 *reschedule_ms);
+
+void gpac_rmt_client_on_delete(void *udta) {
+
+	NAPI_RMT_Task* task = udta;
+
+	if (!task || task->type != RMT_CALLBACK_NODE )
+		return;
+
+	napi_env env = task->env;
+
+	GPAC_NAPI *gpac;
+	if ( napi_get_instance_data(env, (void **) &gpac) != napi_ok) {
+		napi_throw_error(env, NULL, "Cannot get GPAC NAPI instance");
+		return;
+	}
+
+	if (task->client) {
+		RMT_ClientCtx* client = task->client;
+		NAPI_RMT_Task* datatask = gf_rmt_client_get_on_data_task(client);
+		gf_rmt_client_set_on_data_cbk(client, NULL, NULL);
+		napi_rmt_task_del(env, datatask);
+
+		gf_rmt_client_set_on_del_cbk(client, NULL, NULL);
+	}
+
+	if (!gpac->rmt_delete_calls) gpac->rmt_delete_calls = gf_list_new();
+	gf_list_add(gpac->rmt_delete_calls, task );
+
+	if (gpac->fs_rmt_handler) {
+		gf_fs_post_user_task(gpac->fs_rmt_handler->fs, fs_flush_rmt, gpac->fs_rmt_handler, "RMTClientOnData");
+	}
+	else {
+		GF_LOG(GF_LOG_WARNING, GF_LOG_RMTWS, ("gpac_rmt_client_on_delete with no fs_rmt_handler\n"));
+	}
+
+
+
+}
+
+void gpac_rmt_client_on_data(void *udta, const u8* payload, u64 size, Bool is_binary) {
+
+	NAPI_RMT_Task* task = udta;
+
+	if (!task || task->type != RMT_CALLBACK_NODE )
+		return;
+
+	napi_env env = task->env;
+
+	GPAC_NAPI *gpac;
+	if ( napi_get_instance_data(env, (void **) &gpac) != napi_ok) {
+		napi_throw_error(env, NULL, "Cannot get GPAC NAPI instance");
+		return;
+	}
+
+	GF_LOG(GF_LOG_DEBUG, GF_LOG_RMTWS, ("gpac_rmt_client_on_data binary %d size %llu: %.*s\n", is_binary, size, size, payload));
+
+	napi_value arg;
+	// napi_status status; //TODO: check status
+	if (is_binary) {
+		void* abdata;
+		/*status = */napi_create_arraybuffer(env, size, &abdata, &arg);
+		memcpy(abdata, payload, size);
+	}
+	else {
+		/*status = */napi_create_string_utf8(env, (const char*)payload, size, &arg);
+	}
+
+	NAPI_RMT_Task_Call* on_data_call;
+	GF_SAFEALLOC(on_data_call, NAPI_RMT_Task_Call);
+	on_data_call->task = task;
+	on_data_call->arg = arg;
+
+
+	if (!gpac->rmt_task_calls) gpac->rmt_task_calls = gf_list_new();
+	gf_list_add(gpac->rmt_task_calls, on_data_call );
+
+	GF_LOG(GF_LOG_DEBUG, GF_LOG_RMTWS, ("gpac_rmt_client_on_data added call %p\n", on_data_call));
+
+	if (gpac->fs_rmt_handler) {
+
+		gf_fs_post_user_task(gpac->fs_rmt_handler->fs, fs_flush_rmt, gpac->fs_rmt_handler, "RMTClientOnData");
+
+	}
+	else {
+		GF_LOG(GF_LOG_WARNING, GF_LOG_RMTWS, ("gpac_rmt_client_on_data with no fs_rmt_handler\n"));
+	}
+
+
+
+}
+
+napi_value rmt_client_setter(napi_env env, napi_callback_info info) {
+
+	NAPI_GPAC
+
+	NARG_ARGS_THIS_MAGIC(1, 1)
+
+	RMT_CLIENT
+
+	if (magic == &RMT_CLIENT_PROP_ON_DATA) {
+
+		napi_valuetype rtype;
+		napi_typeof(env, argv[0], &rtype);
+
+		if (rtype == napi_null || rtype == napi_undefined ) {
+
+			NAPI_RMT_Task* task = gf_rmt_client_get_on_data_task(client);
+			napi_rmt_task_del(env, task);
+
+			gf_rmt_client_set_on_data_cbk(client, NULL, NULL);
+
+		} else if (rtype == napi_function) {
+
+			if (!gpac->rmt_ctx) {
+				napi_value global, name;
+				NAPI_CALL( napi_get_global(env, &global) );
+				NAPI_CALL( napi_create_string_utf8(env, "GPAC_RMTCallback", NAPI_AUTO_LENGTH, &name) );
+				NAPI_CALL( napi_async_init(env, global, name, &gpac->rmt_ctx) )
+			}
+
+
+			NAPI_RMT_Task *task;
+			GF_SAFEALLOC(task, NAPI_RMT_Task);
+
+			task->type = RMT_CALLBACK_NODE;
+			task->env = env;
+			task->client = client;
+			napi_create_reference(env, this_val, 1, &task->_this);
+			napi_create_reference(env, argv[0], 1, &task->fun);
+
+			gf_rmt_client_set_on_data_cbk(client, task, gpac_rmt_client_on_data);
+
+		}
+
+	}
+	else if (magic == &RMT_CLIENT_PROP_ON_CLOSE) {
+
+		napi_valuetype rtype;
+		napi_typeof(env, argv[0], &rtype);
+
+		if (rtype == napi_null || rtype == napi_undefined ) {
+
+			NAPI_RMT_Task* task = gf_rmt_client_get_on_del_task(client);
+			if (task && task->type == RMT_CALLBACK_NODE) {
+				// reset the js function but keep the ref to the client for on_delete
+				uint32_t res;
+				napi_reference_unref(env, task->fun, &res);
+				napi_delete_reference(env, task->fun);
+				task->fun = NULL;
+			}
+
+
+
+		} else if (rtype == napi_function) {
+
+			if (!gpac->rmt_ctx) {
+				napi_value global, name;
+				NAPI_CALL( napi_get_global(env, &global) );
+				NAPI_CALL( napi_create_string_utf8(env, "GPAC_RMTCallback", NAPI_AUTO_LENGTH, &name) );
+				NAPI_CALL( napi_async_init(env, global, name, &gpac->rmt_ctx) )
+			}
+
+
+			NAPI_RMT_Task *task = gf_rmt_client_get_on_del_task(client);
+			if (!task)
+				GF_SAFEALLOC(task, NAPI_RMT_Task);
+
+			task->type = RMT_CALLBACK_NODE;
+			task->env = env;
+			task->client = client;
+			napi_create_reference(env, this_val, 1, &task->_this);
+			napi_create_reference(env, argv[0], 1, &task->fun);
+
+			gf_rmt_client_set_on_del_cbk(client, task, gpac_rmt_client_on_delete);
+
+		}
+
+	}
+
+	return NULL;
+
+}
+
+napi_value rmt_client_send(napi_env env, napi_callback_info info) {
+
+
+	NARG_ARGS_THIS(1,1)
+	RMT_CLIENT
+
+	GF_LOG(GF_LOG_DEBUG, GF_LOG_RMTWS, ("rmt_client_send got client %p\n", client));
+
+	bool is_arraybuffer = 0;
+	NAPI_CALL( napi_is_arraybuffer(env, argv[0], &is_arraybuffer) );
+
+	if (is_arraybuffer) {
+
+		u8* data=NULL;
+		size_t len=0;
+		NAPI_CALL(napi_get_arraybuffer_info(env, argv[0], (void **)&data, &len) );
+
+		GF_LOG(GF_LOG_DEBUG, GF_LOG_RMTWS, ("rmt_client_send got bin data of size %d\n", len));
+
+		gf_rmt_client_send_to_ws(client, (const char*)data, len, GF_TRUE);
+
+		//free(data); //freed elsewhere???
+	}
+    else {
+		NARG_STR_ALLOC(data, 0, NULL);
+
+		GF_LOG(GF_LOG_DEBUG, GF_LOG_RMTWS, ("rmt_client_send got string data %s\n", data));
+
+		gf_rmt_client_send_to_ws(client, data, strlen(data), GF_FALSE);
+
+		gf_free(data);
+	}
+
+
+	return NULL;
+
+}
+
+napi_value grap_wrap_rmt_new_client(napi_env env, RMT_ClientCtx* client) {
+	napi_status status;
+	napi_value obj;
+
+	napi_property_descriptor rmt_client_properties[] = {
+		{ "peer_address", NULL, NULL, rmt_client_getter, NULL, NULL, napi_enumerable, &RMT_CLIENT_PROP_PEER_ADDRESS},
+		{ "on_data", NULL, NULL, NULL, rmt_client_setter, NULL, napi_enumerable, &RMT_CLIENT_PROP_ON_DATA},
+		{ "on_close", NULL, NULL, NULL, rmt_client_setter, NULL, napi_enumerable, &RMT_CLIENT_PROP_ON_CLOSE},
+		{ "send", NULL, rmt_client_send, NULL, NULL, NULL, napi_enumerable, NULL},
+	};
+
+	NAPI_CALL( napi_create_object(env, &obj) );
+
+	NAPI_CALL( napi_define_properties(env, obj, sizeof(rmt_client_properties)/sizeof(napi_property_descriptor), rmt_client_properties) );
+
+	NAPI_CALL( napi_type_tag_object(env, obj, &rmtclient_tag) );
+
+	NAPI_CALL( napi_wrap(env, obj, client, dummy_finalize, NULL, NULL) );
+
+	NAPI_RMT_Task *task;
+	GF_SAFEALLOC(task, NAPI_RMT_Task);
+
+	task->type = RMT_CALLBACK_NODE;
+	task->env = env;
+	task->client = client;
+	napi_create_reference(env, obj, 1, &task->_this);
+
+	gf_rmt_client_set_on_del_cbk(client, task, gpac_rmt_client_on_delete);
+
+	return obj;
+}
+
 
 Bool fs_flush_rmt(GF_FilterSession *fsess, void *callback, u32 *reschedule_ms)
 {
 	NAPI_Session *napi_fs = callback;
+	napi_env env = napi_fs->env;
 	GPAC_NAPI *gpac=NULL;
-	napi_get_instance_data(napi_fs->env, (void **) &gpac);
+
+	napi_get_instance_data(env, (void **) &gpac);
 	if (!gpac) return GF_FALSE;
 
-	gpac_rmt_callback_exec(napi_fs->env, gpac);
-	if (!gf_list_count(gpac->rmt_messages)) {
-		gpac->rmt_task_scheduled = GF_FALSE;
+
+	GF_LOG(GF_LOG_DEBUG, GF_LOG_RMTWS, ("%s:%d fs_flush_rmt clients %d tasks %d deletes %d gpac->rmt_ctx %p\n", __FILE__, __LINE__, gf_list_count(gpac->rmt_new_clients), gf_list_count(gpac->rmt_task_calls), gf_list_count(gpac->rmt_delete_calls), gpac->rmt_ctx));
+
+	while (gf_list_count(gpac->rmt_delete_calls)) {
+
+		napi_value res;
+
+		NAPI_RMT_Task* task = gf_list_pop_front(gpac->rmt_delete_calls);
+
+		napi_value _this;
+		napi_get_reference_value(env, task->_this, &_this);
+
+		RMT_ClientCtx* client;
+		napi_remove_wrap(env, _this, (void**) &client);
+
+		napi_wrap(env, _this, NULL, NULL, NULL, NULL);
+
+		if (task->fun) {
+			napi_value fun;
+			napi_get_reference_value(env, task->fun, &fun);
+			napi_make_callback(env, gpac->rmt_ctx, _this, fun, 0, NULL, &res);
+		}
+
+		napi_rmt_task_del(env, task);
+
+
+	}
+
+	while (gf_list_count(gpac->rmt_new_clients)) {
+
+		void* client = gf_list_pop_front(gpac->rmt_new_clients);
+
+		RMT_WS* rmt = gf_rmt_client_get_rmt((RMT_ClientCtx*) client);
+		NAPI_RMT_Task* task = gf_rmt_get_on_new_client_task(rmt);
+		if (task && gpac->rmt_ctx) {
+
+			napi_value res, _this, fun;
+			// napi_status status; //TODO: check status
+
+			napi_get_reference_value(env, task->_this, &_this);
+			napi_get_reference_value(env, task->fun, &fun);
+
+			napi_value jsclient = grap_wrap_rmt_new_client(env, client);
+			napi_valuetype rtype;
+			napi_typeof(env, jsclient, &rtype);
+
+			/*status = */napi_make_callback(env, gpac->rmt_ctx, _this, fun, 1, &jsclient, &res);
+		}
+
+
+	}
+
+
+	while (gf_list_count(gpac->rmt_task_calls)) {
+
+		NAPI_RMT_Task_Call* call = gf_list_pop_front(gpac->rmt_task_calls);
+
+		if (call && call->task) {
+
+			if (gpac->rmt_ctx) {
+
+				napi_value res, _this, fun;
+				// napi_status status; //TODO: check status
+
+				napi_get_reference_value(env, call->task->_this, &_this);
+				napi_get_reference_value(env, call->task->fun, &fun);
+
+				/*status = */napi_make_callback(env, gpac->rmt_ctx, _this, fun, 1, &call->arg, &res);
+				// else {
+				// 	napi_extended_error_info* error_info = NULL;
+				// 	napi_get_last_error_info(env, &error_info);
+				// 	const char* err_message = error_info->error_message;
+				// 	fprintf(stderr, "ERR cb status %d err: %s\n", status, err_message);
+				// }
+			}
+
+			gf_free(call);
+		}
+
+
+	}
+
+	if (!gf_list_count(gpac->rmt_task_calls) && !gf_list_count(gpac->rmt_new_clients)) {
 		return GF_FALSE;
 	}
 	*reschedule_ms = 10;
 	return GF_TRUE;
 }
 
-void gpac_rmt_callback(void *udta, const char *message)
-{
-	GPAC_NAPI *gpac=NULL;
-	napi_get_instance_data((napi_env) udta, (void **) &gpac);
-	if (!gpac) return;
-
-	if (!gpac->rmt_messages) gpac->rmt_messages = gf_list_new();
-	gf_list_add(gpac->rmt_messages, gf_strdup(message) );
-
-	//session is running in blocking mode, schedule task to call NodeJS from main thread
-	if (gpac->fs_rmt_handler && !gpac->rmt_task_scheduled) {
-		gpac->rmt_task_scheduled = GF_TRUE;
-		gf_fs_post_user_task(gpac->fs_rmt_handler->fs, fs_flush_rmt, gpac->fs_rmt_handler, "RemoteryFlush");
-	}
-}
-
-
-napi_value gpac_set_rmt_fun(napi_env env, napi_callback_info info)
-{
-	NAPI_GPAC
-	napi_value global, name;
-	NARG_ARGS(1, 0)
-
-	gpac->is_init = GF_TRUE;
-	if (!argc) {
-		if (gpac->rmt_ctx) {
-			uint32_t res;
-			napi_async_destroy(env, gpac->rmt_ctx);
-			napi_reference_unref(env, gpac->rmt_ref, &res);
-			napi_delete_reference(env, gpac->rmt_ref);
-			gpac->rmt_ctx = NULL;
-		}
-		gf_sys_profiler_set_callback(NULL, NULL);
-		return NULL;
-	}
-
-	NAPI_CALL( napi_get_global(env, &global) );
-	NAPI_CALL( napi_create_string_utf8(env, "GPAC_RemoteryCallback", NAPI_AUTO_LENGTH, &name) );
-	NAPI_CALL( napi_async_init(env, global, name, &gpac->rmt_ctx) )
-
-	gf_sys_profiler_set_callback(env, gpac_rmt_callback);
-	napi_create_reference(env, argv[0], 1, &gpac->rmt_ref);
-	return NULL;
-}
-napi_value gpac_rmt_send(napi_env env, napi_callback_info info)
+napi_value gpac_enable_rmtws(napi_env env, napi_callback_info info)
 {
 	NARG_ARGS(1, 1)
-	NARG_STR(msg, 0, NULL);
-	if (msg)
-		gf_sys_profiler_send(msg);
-	return NULL;
-}
-
-napi_value gpac_rmt_on(napi_env env, napi_callback_info info)
-{
-	napi_status status;
-	napi_value val;
-	NAPI_CALL( napi_get_boolean(env, gf_sys_profiler_sampling_enabled(), &val) );
-	return val;
-}
-
-napi_value gpac_rmt_enable(napi_env env, napi_callback_info info)
-{
-	NARG_ARGS(1, 1)
-	NARG_BOOL(val, 0, GF_FALSE);
+	NARG_BOOL(enable, 0, GF_TRUE);
 	NAPI_GPAC
 	gpac->is_init = GF_TRUE;
-	gf_sys_profiler_enable_sampling(val);
+	gf_sys_enable_rmtws(enable);
+	return NULL;
+}
+napi_value gpac_enable_userws(napi_env env, napi_callback_info info)
+{
+	NARG_ARGS(1, 1)
+	NARG_BOOL(enable, 0, GF_TRUE);
+	NAPI_GPAC
+	gpac->is_init = GF_TRUE;
+	gf_sys_enable_userws(enable);
 	return NULL;
 }
 
@@ -355,6 +721,8 @@ napi_value gpac_set_args(napi_env env, napi_callback_info info)
 
 static void gpac_napi_finalize(napi_env env, void* finalize_data, void* finalize_hint)
 {
+
+	GF_LOG(GF_LOG_DEBUG, GF_LOG_RMTWS, ("gpac_napi_finalize() \n"));
 	GPAC_NAPI *inst = finalize_data;
 
 	if (inst->nb_args) {
@@ -365,15 +733,38 @@ static void gpac_napi_finalize(napi_env env, void* finalize_data, void* finalize
 		gf_free(inst->argv);
 	}
 
-	napi_delete_reference(env, inst->rmt_ref);
 	if (inst->str_buf) gf_free(inst->str_buf);
-	if (inst->rmt_messages) {
-		while (gf_list_count(inst->rmt_messages)) {
-			char *msg = gf_list_pop_back(inst->rmt_messages);
-			gf_free(msg);
-		}
-		gf_list_del(inst->rmt_messages);
+
+	RMT_WS* rmt = (RMT_WS*) gf_sys_get_rmtws();
+	NAPI_RMT_Task* task = gf_rmt_get_on_new_client_task(rmt);
+	gf_rmt_set_on_new_client_cbk(rmt, NULL, NULL);
+	napi_rmt_task_del(env, task);
+
+	rmt = (RMT_WS*) gf_sys_get_userws();
+	task = gf_rmt_get_on_new_client_task(rmt);
+	gf_rmt_set_on_new_client_cbk(rmt, NULL, NULL);
+	napi_rmt_task_del(env, task);
+
+	if (inst->rmt_new_clients) {
+		gf_list_del(inst->rmt_new_clients);
+		inst->rmt_new_clients = NULL;
 	}
+	if (inst->rmt_delete_calls) {
+		gf_list_del(inst->rmt_delete_calls);
+		inst->rmt_delete_calls = NULL;
+	}
+	if (inst->rmt_task_calls) {
+		while (gf_list_count(inst->rmt_task_calls)) {
+			NAPI_RMT_Task_Call *call = gf_list_pop_back(inst->rmt_task_calls);
+			gf_free(call);
+		}
+		gf_list_del(inst->rmt_task_calls);
+	}
+	if (inst->rmt_ctx) {
+		napi_async_destroy(env, inst->rmt_ctx);
+		inst->rmt_ctx = NULL;
+	}
+
 	//close gpac
 	gf_sys_close();
 
@@ -938,7 +1329,7 @@ napi_value filterpck_set_prop(napi_env env, napi_callback_info info)
 	if (p4cc) {
 		e = gf_filter_pck_set_property(pck, p4cc, is_null ? NULL : &p);
 	} else {
-		e = gf_filter_pck_set_property_str(pck, pname, is_null ? NULL : &p);
+		e = gf_filter_pck_set_property_dyn(pck, pname, is_null ? NULL : &p);
 	}
 	if (e) {
 		napi_throw_error(env, gf_error_to_string(e), "Cannot set packet property");
@@ -1228,9 +1619,9 @@ napi_value filterpid_set_prop_internal(napi_env env, napi_callback_info info, Bo
 		}
 	} else {
 		if (is_info) {
-			e = gf_filter_pid_set_info_str(pid, pname, is_null ? NULL : &p);
+			e = gf_filter_pid_set_info_dyn(pid, pname, is_null ? NULL : &p);
 		} else {
-			e = gf_filter_pid_set_property_str(pid, pname, is_null ? NULL : &p);
+			e = gf_filter_pid_set_property_dyn(pid, pname, is_null ? NULL : &p);
 		}
 	}
 	if (e) {
@@ -1449,7 +1840,7 @@ napi_value filterpid_query_cap(napi_env env, napi_callback_info info)
 	return ret;
 }
 
-napi_value filterpid_negociate_cap(napi_env env, napi_callback_info info)
+napi_value filterpid_negotiate_cap(napi_env env, napi_callback_info info)
 {
 	u32 p4cc;
 	GF_Err e;
@@ -1464,12 +1855,12 @@ napi_value filterpid_negociate_cap(napi_env env, napi_callback_info info)
 	NAPI_CALL( prop_from_napi(env, argv[1], p4cc, pname, custom_type, &p) );
 
 	if (p4cc) {
-		e = gf_filter_pid_negociate_property(pid, p4cc, &p);
+		e = gf_filter_pid_negotiate_property(pid, p4cc, &p);
 	} else {
-		e = gf_filter_pid_negociate_property_dyn(pid, pname, &p);
+		e = gf_filter_pid_negotiate_property_dyn(pid, pname, &p);
 	}
 	if (e) {
-		napi_throw_error(env, gf_error_to_string(e), "Failed to negociate cap for PID");
+		napi_throw_error(env, gf_error_to_string(e), "Failed to negotiate cap for PID");
 	}
 	gf_props_reset_single(&p);
 	return NULL;
@@ -1862,6 +2253,9 @@ static u32 FILTER_PROP_NAME = 0;
 static u32 FILTER_PROP_ID = 1;
 static u32 FILTER_PROP_IPIDS = 2;
 static u32 FILTER_PROP_OPIDS = 3;
+static u32 FILTER_PROP_STATUS = 4;
+static u32 FILTER_PROP_BYTES_DONE = 5;
+
 
 #define FILTER\
 	GF_Filter *f=NULL;\
@@ -1917,6 +2311,18 @@ napi_value filter_getter(napi_env env, napi_callback_info info)
 	}
 	if (magic == &FILTER_PROP_OPIDS) {
 		NAPI_CALL( napi_create_uint32(env, gf_filter_get_opid_count(f), &ret) );
+		return ret;
+	}
+
+	if (magic == &FILTER_PROP_STATUS) {
+		const char* statusstr = gf_filter_get_status(f);
+		NAPI_CALL( napi_create_string_utf8(env, statusstr, NAPI_AUTO_LENGTH, &ret) );
+		return ret;
+	}
+
+	if (magic == &FILTER_PROP_BYTES_DONE) {
+		u64 bytes_dones = gf_filter_get_bytes_done(f);
+		NAPI_CALL( napi_create_int64(env, bytes_dones, &ret) );
 		return ret;
 	}
 
@@ -2004,14 +2410,94 @@ napi_value filter_insert(napi_env env, napi_callback_info info)
 			}
 		}
 	}
-	NARG_STR(link_ext, offset, NULL);
+	NARG_STR(link_ext, (u32)offset, NULL);
 
 	e = gf_filter_set_source(f, ins_f, link_ext);
-	if (e)
+	if (e) {
 		napi_throw_error(env, gf_error_to_string(e), "Failed to set source");
-	else
-		gf_filter_reconnect_output(f, opid);
+		return NULL;
+	}
+	e = gf_filter_reconnect_output(f, opid);
+	if (e)
+		napi_throw_error(env, gf_error_to_string(e), "Failed to reconnect output");
 	return NULL;
+}
+
+napi_value filter_reconnect(napi_env env, napi_callback_info info)
+{
+	GF_FilterPid *opid=NULL;
+	GF_Err e;
+	NARG_ARGS_THIS(1, 0)
+	FILTER
+
+	//check if 2nd param is int, get opid
+	if (argc) {
+		s32 idx = -1;
+		if (napi_get_value_int32(env, argv[0], &idx) == napi_ok) {
+			if (idx>=0) {
+				opid = gf_filter_get_opid(f, (u32) idx);
+				if (!opid) {
+					napi_throw_error(env, NULL, "Invalid output PID index");
+					return NULL;
+				}
+			}
+		}
+	}
+	e = gf_filter_reconnect_output(f, opid);
+	if (e)
+		napi_throw_error(env, gf_error_to_string(e), "Failed to reconnect output");
+	return NULL;
+}
+
+napi_value filter_probe_link(napi_env env, napi_callback_info info)
+{
+	GF_Err e;
+	char *res=NULL;
+	s32 idx = -1;
+	s32 offset=1;
+	NARG_ARGS_THIS(2, 1)
+	FILTER
+
+	//check if 2nd param is int, get opid
+	if (argc>1) {
+		if (napi_get_value_int32(env, argv[0], &idx) == napi_ok) {
+			offset=2;
+		}
+	}
+	NARG_STR(fdesc, (u32)offset, NULL);
+
+	e = gf_filter_probe_link(f, idx, fdesc, &res);
+	if (e) {
+		napi_throw_error(env, gf_error_to_string(e), "Failed to probe links");
+		return NULL;
+	}
+	napi_value val;
+	NAPI_CALL( napi_create_string_utf8(env, res, NAPI_AUTO_LENGTH, &val) );
+	gf_free(res);
+	return val;
+}
+
+napi_value filter_get_destinations(napi_env env, napi_callback_info info)
+{
+	GF_Err e;
+	char *res=NULL;
+	s32 idx = -1;
+	NARG_ARGS_THIS(1, 0)
+	FILTER
+
+	//check if 2nd param is int, get opid
+	if (argc && (napi_get_value_int32(env, argv[0], &idx) == napi_ok)) {
+	}
+
+	e = gf_filter_get_possible_destinations(f, idx, &res);
+	if (e) {
+		napi_throw_error(env, gf_error_to_string(e), "Failed to get destinations");
+		return NULL;
+	}
+	napi_value val;
+	NAPI_CALL( napi_create_string_utf8(env, res, NAPI_AUTO_LENGTH, &val) );
+	gf_free(res);
+	return val;
 }
 
 napi_value filter_require_source_id(napi_env env, napi_callback_info info)
@@ -2038,7 +2524,9 @@ napi_value filter_bind(napi_env env, napi_callback_info info)
 	const char *fname = gf_filter_get_name(f);
 	if (fname && !strcmp(fname, "dashin")) {
 		return dashin_bind(env, info);
-
+	}
+	if (fname && !strcmp(fname, "httpout")) {
+		return httpout_bind(env, info);
 	}
 	napi_throw_error(env, NULL, "Failed to bind to filter, not dashin filter");
 	return NULL;
@@ -2142,6 +2630,7 @@ napi_value filter_get_statistics(napi_env env, napi_callback_info info)
 	SET_U64(nb_pck_sent)
 	SET_U64(nb_hw_pck_sent)
 	SET_U32(nb_errors)
+	SET_U32(nb_current_errors)
 	SET_U64(nb_bytes_sent)
 	SET_U64(time_process)
 	SET_S32(percent)
@@ -2682,6 +3171,29 @@ napi_value filter_get_pid_property(napi_env env, char *pname, GF_FilterPid *pid,
 			prop = gf_filter_pid_get_property_str(pid, pname);
 	}
 	if (!prop) {
+
+		if (!strcmp(pname, "buffer")) {
+			NAPI_CALL( napi_create_int64(env, (s64) gf_filter_pid_query_buffer_duration(pid, GF_FALSE), &res) );
+			return res;
+		}
+		if (!strcmp(pname, "buffer_total")) {
+			NAPI_CALL( napi_create_int64(env, (s64) gf_filter_pid_query_buffer_duration(pid, GF_TRUE), &res) );
+			return res;
+		}
+		if (!strcmp(pname, "name")) {
+			const char *fname = gf_filter_pid_get_name(pid);
+			if (fname) {
+				NAPI_CALL( napi_create_string_utf8(env, fname, NAPI_AUTO_LENGTH, &res) );
+			} else {
+				NAPI_CALL( napi_get_null(env, &res) );
+			}
+			return res;
+		}
+		if (!strcmp(pname, "eos")) {
+			NAPI_CALL( napi_get_boolean(env, gf_filter_pid_is_eos(pid), &res) );
+			return res;
+		}
+
 		napi_value res;
 		NAPI_CALL(napi_get_null(env, &res) );
 		return res;
@@ -2769,6 +3281,8 @@ napi_value filter_iopid_stats(napi_env env, napi_callback_info info, Bool is_opi
 	SET_U32(rtt)
 	SET_U32(jitter)
 	SET_U32(loss_rate)
+	NAPI_CALL(napi_set_named_property(env, res, "last_ts_sent", frac64_to_napi(env, &stats.last_ts_sent)) );
+	NAPI_CALL(napi_set_named_property(env, res, "last_ts_drop", frac64_to_napi(env, &stats.last_ts_drop)) );
 	return res;
 }
 napi_value filter_ipid_stats(napi_env env, napi_callback_info info)
@@ -2891,6 +3405,13 @@ napi_value filter_all_args(napi_env env, napi_callback_info info)
 		NAPI_CALL( napi_create_int32(env, arg->flags, &val) );
 		NAPI_CALL(napi_set_named_property(env, n_arg, "flags", val) );
 
+		char argval[GF_PROP_DUMP_ARG_SIZE];
+		gf_filter_get_arg_str(f, arg->arg_name, argval);
+		NAPI_CALL( napi_create_string_utf8(env, argval, NAPI_AUTO_LENGTH, &val) );
+		NAPI_CALL(napi_set_named_property(env, n_arg, "value", val) );
+
+
+
 		NAPI_CALL(napi_set_element(env, res, a_idx, n_arg) );
 		a_idx++;
 	}
@@ -2991,7 +3512,7 @@ static NAPI_FilterPid *wrap_filter_pid(napi_env env, GF_Filter *filter, GF_Filte
 		{ "recompute_dts", 0, filterpid_recompute_dts, 0, 0, 0, napi_enumerable, 0 },
 		{ "resolve_template", 0, filterpid_resolve_template, 0, 0, 0, napi_enumerable, 0 },
 		{ "query_cap", 0, filterpid_query_cap, 0, 0, 0, napi_enumerable, 0 },
-		{ "negociate_cap", 0, filterpid_negociate_cap, 0, 0, 0, napi_enumerable, 0 },
+		{ "negotiate_cap", 0, filterpid_negotiate_cap, 0, 0, 0, napi_enumerable, 0 },
 		{ "get_packet", 0, filterpid_get_packet, 0, 0, 0, napi_enumerable, 0 },
 		{ "drop_packet", 0, filterpid_drop_packet, 0, 0, 0, napi_enumerable, 0 },
 		{ "send_event", 0, filterpid_send_event, 0, 0, 0, napi_enumerable, 0 },
@@ -3100,7 +3621,7 @@ static Bool napi_filter_cbk_process_event(GF_Filter *filter, const GF_FilterEven
 	if (!has_fun) return GF_FALSE;
 
 	status = napi_get_named_property(napi_f->env, obj, "process_event", &fun_val);
-	if (status != napi_ok) return GF_BAD_PARAM;
+	if (status != napi_ok) return GF_FALSE;
 
 	arg = wrap_filterevent(napi_f->env, (GF_FilterEvent *)evt, NULL);
 	status = napi_make_callback(napi_f->env, napi_f->async_ctx, obj, fun_val, 1, &arg, &res);
@@ -3356,6 +3877,7 @@ static u32 FS_PROP_NB_FILTERS = 1;
 static u32 FS_PROP_HTTP_RATE = 2;
 static u32 FS_PROP_MAX_HTTP_RATE = 3;
 
+
 napi_value fs_getter(napi_env env, napi_callback_info info)
 {
 	void *magic;
@@ -3404,23 +3926,14 @@ napi_value fs_run(napi_env env, napi_callback_info info)
 	NAPI_GPAC
 	NAPI_Session *napi_fs = gf_fs_get_rt_udta(fs);
 
-	if (napi_fs->blocking) {
-		//session is running in blocking mode, schedule task to call NodeJS from main thread
-		if (gpac->rmt_ref) {
-			gpac->fs_rmt_handler = napi_fs;
-			gpac->rmt_task_scheduled = GF_TRUE;
-			gf_fs_post_user_task(fs, fs_flush_rmt, napi_fs, "RemoteryFlush");
-		}
-		e = gf_fs_run(fs);
-
-		gpac->fs_rmt_handler = NULL;
-	} else {
-		e = gf_fs_run(fs);
-
-		//flush rmt events
-		if (gpac->rmt_ref)
-			gpac_rmt_callback_exec(env, gpac);
+	gpac->fs_rmt_handler = napi_fs;
+	if (gf_list_count(gpac->rmt_new_clients) || gf_list_count(gpac->rmt_task_calls) || gf_list_count(gpac->rmt_delete_calls)) {
+		gf_fs_post_user_task(fs, fs_flush_rmt, napi_fs, "RMTFlush");
 	}
+
+	e = gf_fs_run(fs);
+
+	//TODO: run flush rmt again if not blocking?
 
 	if (e>=GF_OK) {
 		e = gf_fs_get_last_connect_error(fs);
@@ -3464,11 +3977,14 @@ napi_value fs_wrap_filter(napi_env env, GF_FilterSession *fs, GF_Filter *filter)
 		{ "ID", NULL, NULL, filter_getter, NULL, NULL, napi_enumerable, &FILTER_PROP_ID},
 		{ "nb_ipid", NULL, NULL, filter_getter, NULL, NULL, napi_enumerable, &FILTER_PROP_IPIDS},
 		{ "nb_opid", NULL, NULL, filter_getter, NULL, NULL, napi_enumerable, &FILTER_PROP_OPIDS},
+		{ "status", NULL, NULL, filter_getter, NULL, NULL, napi_enumerable, &FILTER_PROP_STATUS},
+		{ "bytes_done", NULL, NULL, filter_getter, NULL, NULL, napi_enumerable, &FILTER_PROP_BYTES_DONE},
 		{ "remove", 0, filter_remove, 0, 0, 0, napi_enumerable, 0 },
 		{ "update", 0, filter_update, 0, 0, 0, napi_enumerable, 0 },
 		{ "set_source", 0, filter_set_source, 0, 0, 0, napi_enumerable, 0 },
 		{ "set_source_restricted", 0, filter_set_source_restricted, 0, 0, 0, napi_enumerable, 0 },
 		{ "insert", 0, filter_insert, 0, 0, 0, napi_enumerable, 0 },
+		{ "reconnect", 0, filter_reconnect, 0, 0, 0, napi_enumerable, 0 },
 		{ "ipid_prop", 0, filter_ipid_prop, 0, 0, 0, napi_enumerable, 0 },
 		{ "ipid_enum_props", 0, filter_ipid_enum_props, 0, 0, 0, napi_enumerable, 0 },
 		{ "opid_prop", 0, filter_opid_prop, 0, 0, 0, napi_enumerable, 0 },
@@ -3482,6 +3998,8 @@ napi_value fs_wrap_filter(napi_env env, GF_FilterSession *fs, GF_Filter *filter)
 		{ "bind", 0, filter_bind, 0, 0, 0, napi_enumerable, 0 },
 		{ "ipid_stats", 0, filter_ipid_stats, 0, 0, 0, napi_enumerable, 0 },
 		{ "opid_stats", 0, filter_opid_stats, 0, 0, 0, napi_enumerable, 0 },
+		{ "probe_link", 0, filter_probe_link, 0, 0, 0, napi_enumerable, 0 },
+		{ "get_destinations", 0, filter_get_destinations, 0, 0, 0, napi_enumerable, 0 },
 	};
 
 	if (napi_f) {
@@ -3864,7 +4382,7 @@ void fs_on_filter_creation(void *udta, GF_Filter *filter, Bool is_destroy)
 	napi_env env = napi_fs->env;
 
 	//set to NULL means final nodeJS addon shutdown, do not notify
-	
+
 	if (napi_fs->async_ctx != NULL) {
 		GPAC_NAPI *gpac;
 		if ( napi_get_instance_data(env, (void **) &gpac) != napi_ok) {
@@ -3906,6 +4424,9 @@ void fs_on_filter_creation(void *udta, GF_Filter *filter, Bool is_destroy)
 			const char *fname = gf_filter_get_name(filter);
 			if (fname && !strcmp(fname, "dashin"))
 				dashin_detach_binding(napi_f);
+
+			if (fname && !strcmp(fname, "httpour"))
+				httpout_detach_binding(napi_f);
 
 			napi_reference_unref(napi_f->env, napi_f->binding_ref, &rcount);
 			napi_delete_reference(napi_f->env, napi_f->binding_ref);
@@ -4125,6 +4646,11 @@ static u32 FEVT_PROP_NTP_REF = 62;
 static u32 FEVT_PROP_NAME = 63;
 static u32 FEVT_PROP_UI_NAME = 64;
 static u32 FEVT_PROP_PID = 65;
+static u32 FEVT_PROP_TO_PCK = 66;
+static u32 FEVT_PROP_ORIG_DELAY = 67;
+static u32 FEVT_PROP_HINT_FIRST_DTS = 68;
+static u32 FEVT_PROP_HINT_START_OFFSET = 69;
+static u32 FEVT_PROP_HINT_END_OFFSET = 70;
 
 
 #define FILTEREVENT\
@@ -4150,6 +4676,11 @@ static u32 FEVT_PROP_PID = 65;
 	EVT_BOOL(FEVT_PROP_FORCED_DASH_SWITCH, evt->play.forced_dash_segment_switch);\
 	EVT_BOOL(FEVT_PROP_DROP_NON_REF, evt->play.drop_non_ref);\
 	EVT_BOOL(FEVT_PROP_NO_BYTERANGE, evt->play.no_byterange_forward);\
+	EVT_U32(FEVT_PROP_TO_PCK, evt->play.to_pck);\
+	EVT_U32(FEVT_PROP_ORIG_DELAY, evt->play.orig_delay);\
+	EVT_U64(FEVT_PROP_HINT_FIRST_DTS, evt->play.hint_first_dts);\
+	EVT_U64(FEVT_PROP_HINT_START_OFFSET, evt->play.hint_start_offset);\
+	EVT_U64(FEVT_PROP_HINT_END_OFFSET, evt->play.hint_end_offset);\
 	EVT_U64(FEVT_PROP_START_OFFSET, evt->seek.start_offset);\
 	EVT_U64(FEVT_PROP_END_OFFSET, evt->seek.end_offset);\
 	EVT_U32(FEVT_PROP_HINT_BLOCK_SIZE, evt->seek.hint_block_size);\
@@ -4410,6 +4941,11 @@ napi_value wrap_filterevent(napi_env env, GF_FilterEvent *evt, napi_value *for_v
 			{ "forced_dash_segment_switch", NULL, NULL, fevt_getter, evt_set, NULL, napi_enumerable, &FEVT_PROP_FORCED_DASH_SWITCH},
 			{ "drop_non_ref", NULL, NULL, fevt_getter, evt_set, NULL, napi_enumerable, &FEVT_PROP_DROP_NON_REF},
 			{ "no_byterange_forward", NULL, NULL, fevt_getter, evt_set, NULL, napi_enumerable, &FEVT_PROP_NO_BYTERANGE},
+			{ "to_pck", NULL, NULL, fevt_getter, evt_set, NULL, napi_enumerable, &FEVT_PROP_TO_PCK},
+			{ "orig_delay", NULL, NULL, fevt_getter, evt_set, NULL, napi_enumerable, &FEVT_PROP_ORIG_DELAY},
+			{ "hint_first_dts", NULL, NULL, fevt_getter, evt_set, NULL, napi_enumerable, &FEVT_PROP_HINT_FIRST_DTS},
+			{ "hint_start_offset", NULL, NULL, fevt_getter, evt_set, NULL, napi_enumerable, &FEVT_PROP_HINT_START_OFFSET},
+			{ "hint_end_offset", NULL, NULL, fevt_getter, evt_set, NULL, napi_enumerable, &FEVT_PROP_HINT_END_OFFSET},
 		};
 		NAPI_CALL( napi_define_properties(env, obj, sizeof(fevt_properties)/sizeof(napi_property_descriptor), fevt_properties) );
 	}
@@ -4655,6 +5191,98 @@ napi_status init_fevt_class(napi_env env, napi_value exports, GPAC_NAPI *inst)
 static napi_status InitConstants(napi_env env, napi_value exports);
 napi_status init_fio_class(napi_env env, napi_value exports, GPAC_NAPI *inst);
 
+
+static u32 NODEGPAC_PROP_RMT_ON_NEW_CLIENT = 0;
+static u32 NODEGPAC_PROP_USERWS_ON_NEW_CLIENT = 1;
+
+
+
+void gpac_rmt_on_new_client(void *udta, void* new_client) {
+
+	NAPI_RMT_Task* task = udta;
+
+	if (!task || task->type != RMT_CALLBACK_NODE )
+		return;
+
+	napi_env env = task->env;
+
+	GPAC_NAPI *gpac;
+	if ( napi_get_instance_data(env, (void **) &gpac) != napi_ok) {
+		napi_throw_error(env, NULL, "Cannot get GPAC NAPI instance");
+		return;
+	}
+
+	GF_LOG(GF_LOG_DEBUG, GF_LOG_RMTWS, ("gpac_rmt_on_new_client %p\n", new_client));
+
+
+	if (!gpac->rmt_new_clients) gpac->rmt_new_clients = gf_list_new();
+	gf_list_add(gpac->rmt_new_clients, new_client );
+
+	if (gpac->fs_rmt_handler) {
+
+		gf_fs_post_user_task(gpac->fs_rmt_handler->fs, fs_flush_rmt, gpac->fs_rmt_handler, "RMTOnNewClient");
+	}
+
+}
+
+
+napi_value nodegpac_setter(napi_env env, napi_callback_info info)
+{
+	NAPI_GPAC
+	NARG_ARGS_THIS_MAGIC(1, 1)
+
+	gpac->is_init = GF_TRUE;
+
+	if (magic == &NODEGPAC_PROP_RMT_ON_NEW_CLIENT || magic == &NODEGPAC_PROP_USERWS_ON_NEW_CLIENT) {
+
+		napi_valuetype rtype;
+		napi_typeof(env, argv[0], &rtype);
+
+		RMT_WS* rmt = NULL;
+		if (magic == &NODEGPAC_PROP_RMT_ON_NEW_CLIENT) 		rmt = (RMT_WS*) gf_sys_get_rmtws();
+		if (magic == &NODEGPAC_PROP_USERWS_ON_NEW_CLIENT) 	rmt = (RMT_WS*) gf_sys_get_userws();
+
+		if (!rmt)
+			return NULL;
+
+		if (rtype == napi_null || rtype == napi_undefined ) {
+
+			if (gpac->rmt_ctx) {
+				napi_async_destroy(env, gpac->rmt_ctx);
+				gpac->rmt_ctx = NULL;
+			}
+			NAPI_RMT_Task* task = gf_rmt_get_on_new_client_task(rmt);
+			napi_rmt_task_del(env, task);
+
+			gf_rmt_set_on_new_client_cbk(rmt, NULL, NULL);
+
+
+		} else if (rtype == napi_function) {
+
+			if (!gpac->rmt_ctx) {
+				napi_value global, name;
+				NAPI_CALL( napi_get_global(env, &global) );
+				NAPI_CALL( napi_create_string_utf8(env, "GPAC_RMTCallback", NAPI_AUTO_LENGTH, &name) );
+				NAPI_CALL( napi_async_init(env, global, name, &gpac->rmt_ctx) )
+			}
+
+			NAPI_RMT_Task *task;
+			GF_SAFEALLOC(task, NAPI_RMT_Task);
+			task->type = RMT_CALLBACK_NODE;
+			task->env = env;
+			napi_create_reference(env, this_val, 1, &task->_this);
+			napi_create_reference(env, argv[0], 1, &task->fun);
+
+			GF_LOG(GF_LOG_DEBUG, GF_LOG_RMTWS, ("setting on new client cb %p\n", gpac_rmt_on_new_client));
+			gf_rmt_set_on_new_client_cbk(rmt, task, gpac_rmt_on_new_client);
+
+		}
+
+	}
+
+	return NULL;
+}
+
 napi_value Init(napi_env env, napi_value exports)
 {
 	GPAC_NAPI *inst;
@@ -4684,12 +5312,19 @@ napi_value Init(napi_env env, napi_value exports)
 	DEF_FUN("set_args", gpac_set_args);
 	DEF_FUN("sys_clock", gpac_sys_clock);
 	DEF_FUN("sys_clock_high_res", gpac_sys_clock_high_res);
+	DEF_FUN("sys_keyname", gpac_sys_keyname);
 
-	DEF_FUN("set_rmt_fun", gpac_set_rmt_fun);
-	DEF_FUN("rmt_send", gpac_rmt_send);
-	DEF_FUN("rmt_on", gpac_rmt_on);
-	DEF_FUN("rmt_enable", gpac_rmt_enable);
+	DEF_FUN("enable_rmtws", gpac_enable_rmtws);
+	napi_property_descriptor rmtws_properties[] = {
+		{ "rmt_on_new_client", NULL, NULL, NULL, nodegpac_setter, NULL, napi_enumerable, &NODEGPAC_PROP_RMT_ON_NEW_CLIENT},
+	};
+	NAPI_CALL( napi_define_properties(env, exports, sizeof(rmtws_properties)/sizeof(napi_property_descriptor), rmtws_properties) );
 
+	DEF_FUN("enable_userws", gpac_enable_userws);
+	napi_property_descriptor userws_properties[] = {
+		{ "userws_on_new_client", NULL, NULL, NULL, nodegpac_setter, NULL, napi_enumerable, &NODEGPAC_PROP_USERWS_ON_NEW_CLIENT},
+	};
+	NAPI_CALL( napi_define_properties(env, exports, sizeof(userws_properties)/sizeof(napi_property_descriptor), userws_properties) );
 
 	status = init_fs_class(env, exports, inst);
 	if (status != napi_ok) return NULL;
@@ -4699,6 +5334,7 @@ napi_value Init(napi_env env, napi_value exports)
 
 	status = init_fio_class(env, exports, inst);
 	if (status != napi_ok) return NULL;
+
 
 	inst->main_thid = gf_th_id();
 
@@ -4751,6 +5387,7 @@ static napi_status InitConstants(napi_env env, napi_value exports)
 	DEF_CONST(GF_LOG_INFO)
 	DEF_CONST(GF_LOG_DEBUG)
 
+	DEF_CONST(GF_PROP_FORBIDDEN)
 	DEF_CONST(GF_PROP_BOOL)
 	DEF_CONST(GF_PROP_UINT)
 	DEF_CONST(GF_PROP_SINT)
@@ -4778,12 +5415,14 @@ static napi_status InitConstants(napi_env env, napi_value exports)
 	DEF_CONST(GF_PROP_4CC)
 	DEF_CONST(GF_PROP_4CC_LIST)
 
+	DEF_CONST(GF_PROP_FIRST_ENUM)
 	DEF_CONST(GF_PROP_PIXFMT)
 	DEF_CONST(GF_PROP_PCMFMT)
 	DEF_CONST(GF_PROP_CICP_COL_PRIM)
 	DEF_CONST(GF_PROP_CICP_COL_TFC)
 	DEF_CONST(GF_PROP_CICP_COL_MX)
-
+	DEF_CONST(GF_PROP_CICP_LAYOUT)
+	DEF_CONST(GF_PROP_FIRST_ENUM)
 
 	DEF_CONST(GF_FEVT_PLAY)
 	DEF_CONST(GF_FEVT_SET_SPEED)
@@ -4855,7 +5494,7 @@ static napi_status InitConstants(napi_env env, napi_value exports)
 	DEF_CONST(GF_IP_NETWORK_EMPTY)
 	DEF_CONST(GF_IP_UDP_TIMEOUT)
 	DEF_CONST(GF_AUTHENTICATION_FAILURE)
-	DEF_CONST(GF_SCRIPT_NOT_READY)
+	DEF_CONST(GF_NOT_READY)
 	DEF_CONST(GF_INVALID_CONFIGURATION)
 	DEF_CONST(GF_NOT_FOUND)
 	DEF_CONST(GF_PROFILE_NOT_SUPPORTED)
@@ -4892,214 +5531,6 @@ static napi_status InitConstants(napi_env env, napi_value exports)
 	DEF_CONST(GF_EVENT_CODEC_SLOW)
 	DEF_CONST(GF_EVENT_CODEC_OK)
 
-	DEF_CONST(GF_KEY_UNIDENTIFIED)
-	DEF_CONST(GF_KEY_ACCEPT)
-	DEF_CONST(GF_KEY_AGAIN)
-	DEF_CONST(GF_KEY_ALLCANDIDATES)
-	DEF_CONST(GF_KEY_ALPHANUM)
-	DEF_CONST(GF_KEY_ALT)
-	DEF_CONST(GF_KEY_ALTGRAPH)
-	DEF_CONST(GF_KEY_APPS)
-	DEF_CONST(GF_KEY_ATTN)
-	DEF_CONST(GF_KEY_BROWSERBACK)
-	DEF_CONST(GF_KEY_BROWSERFAVORITES)
-	DEF_CONST(GF_KEY_BROWSERFORWARD)
-	DEF_CONST(GF_KEY_BROWSERHOME)
-	DEF_CONST(GF_KEY_BROWSERREFRESH)
-	DEF_CONST(GF_KEY_BROWSERSEARCH)
-	DEF_CONST(GF_KEY_BROWSERSTOP)
-	DEF_CONST(GF_KEY_CAPSLOCK)
-	DEF_CONST(GF_KEY_CLEAR)
-	DEF_CONST(GF_KEY_CODEINPUT)
-	DEF_CONST(GF_KEY_COMPOSE)
-	DEF_CONST(GF_KEY_CONTROL)
-	DEF_CONST(GF_KEY_CRSEL)
-	DEF_CONST(GF_KEY_CONVERT)
-	DEF_CONST(GF_KEY_COPY)
-	DEF_CONST(GF_KEY_CUT)
-	DEF_CONST(GF_KEY_DOWN)
-	DEF_CONST(GF_KEY_END)
-	DEF_CONST(GF_KEY_ENTER)
-	DEF_CONST(GF_KEY_ERASEEOF)
-	DEF_CONST(GF_KEY_EXECUTE)
-	DEF_CONST(GF_KEY_EXSEL)
-	DEF_CONST(GF_KEY_F1)
-	DEF_CONST(GF_KEY_F2)
-	DEF_CONST(GF_KEY_F3)
-	DEF_CONST(GF_KEY_F4)
-	DEF_CONST(GF_KEY_F5)
-	DEF_CONST(GF_KEY_F6)
-	DEF_CONST(GF_KEY_F7)
-	DEF_CONST(GF_KEY_F8)
-	DEF_CONST(GF_KEY_F9)
-	DEF_CONST(GF_KEY_F10)
-	DEF_CONST(GF_KEY_F11)
-	DEF_CONST(GF_KEY_F12)
-	DEF_CONST(GF_KEY_F13)
-	DEF_CONST(GF_KEY_F14)
-	DEF_CONST(GF_KEY_F15)
-	DEF_CONST(GF_KEY_F16)
-	DEF_CONST(GF_KEY_F17)
-	DEF_CONST(GF_KEY_F18)
-	DEF_CONST(GF_KEY_F19)
-	DEF_CONST(GF_KEY_F20)
-	DEF_CONST(GF_KEY_F21)
-	DEF_CONST(GF_KEY_F22)
-	DEF_CONST(GF_KEY_F23)
-	DEF_CONST(GF_KEY_F24)
-	DEF_CONST(GF_KEY_FINALMODE)
-	DEF_CONST(GF_KEY_FIND)
-	DEF_CONST(GF_KEY_FULLWIDTH)
-	DEF_CONST(GF_KEY_HALFWIDTH)
-	DEF_CONST(GF_KEY_HANGULMODE)
-	DEF_CONST(GF_KEY_HANJAMODE)
-	DEF_CONST(GF_KEY_HELP)
-	DEF_CONST(GF_KEY_HIRAGANA)
-	DEF_CONST(GF_KEY_HOME)
-	DEF_CONST(GF_KEY_INSERT)
-	DEF_CONST(GF_KEY_JAPANESEHIRAGANA)
-	DEF_CONST(GF_KEY_JAPANESEKATAKANA)
-	DEF_CONST(GF_KEY_JAPANESEROMAJI)
-	DEF_CONST(GF_KEY_JUNJAMODE)
-	DEF_CONST(GF_KEY_KANAMODE)
-	DEF_CONST(GF_KEY_KANJIMODE)
-	DEF_CONST(GF_KEY_KATAKANA)
-	DEF_CONST(GF_KEY_LAUNCHAPPLICATION1)
-	DEF_CONST(GF_KEY_LAUNCHAPPLICATION2)
-	DEF_CONST(GF_KEY_LAUNCHMAIL)
-	DEF_CONST(GF_KEY_LEFT)
-	DEF_CONST(GF_KEY_META)
-	DEF_CONST(GF_KEY_MEDIANEXTTRACK)
-	DEF_CONST(GF_KEY_MEDIAPLAYPAUSE)
-	DEF_CONST(GF_KEY_MEDIAPREVIOUSTRACK)
-	DEF_CONST(GF_KEY_MEDIASTOP)
-	DEF_CONST(GF_KEY_MODECHANGE)
-	DEF_CONST(GF_KEY_NONCONVERT)
-	DEF_CONST(GF_KEY_NUMLOCK)
-	DEF_CONST(GF_KEY_PAGEDOWN)
-	DEF_CONST(GF_KEY_PAGEUP)
-	DEF_CONST(GF_KEY_PASTE)
-	DEF_CONST(GF_KEY_PAUSE)
-	DEF_CONST(GF_KEY_PLAY)
-	DEF_CONST(GF_KEY_PREVIOUSCANDIDATE)
-	DEF_CONST(GF_KEY_PRINTSCREEN)
-	DEF_CONST(GF_KEY_PROCESS)
-	DEF_CONST(GF_KEY_PROPS)
-	DEF_CONST(GF_KEY_RIGHT)
-	DEF_CONST(GF_KEY_ROMANCHARACTERS)
-	DEF_CONST(GF_KEY_SCROLL)
-	DEF_CONST(GF_KEY_SELECT)
-	DEF_CONST(GF_KEY_SELECTMEDIA)
-	DEF_CONST(GF_KEY_SHIFT)
-	DEF_CONST(GF_KEY_STOP)
-	DEF_CONST(GF_KEY_UP)
-	DEF_CONST(GF_KEY_UNDO)
-	DEF_CONST(GF_KEY_VOLUMEDOWN)
-	DEF_CONST(GF_KEY_VOLUMEMUTE)
-	DEF_CONST(GF_KEY_VOLUMEUP)
-	DEF_CONST(GF_KEY_WIN)
-	DEF_CONST(GF_KEY_ZOOM)
-	DEF_CONST(GF_KEY_BACKSPACE)
-	DEF_CONST(GF_KEY_TAB)
-	DEF_CONST(GF_KEY_CANCEL)
-	DEF_CONST(GF_KEY_ESCAPE)
-	DEF_CONST(GF_KEY_SPACE)
-	DEF_CONST(GF_KEY_EXCLAMATION)
-	DEF_CONST(GF_KEY_QUOTATION)
-	DEF_CONST(GF_KEY_NUMBER)
-	DEF_CONST(GF_KEY_DOLLAR)
-	DEF_CONST(GF_KEY_AMPERSAND)
-	DEF_CONST(GF_KEY_APOSTROPHE)
-	DEF_CONST(GF_KEY_LEFTPARENTHESIS)
-	DEF_CONST(GF_KEY_RIGHTPARENTHESIS)
-	DEF_CONST(GF_KEY_STAR)
-	DEF_CONST(GF_KEY_PLUS)
-	DEF_CONST(GF_KEY_COMMA)
-	DEF_CONST(GF_KEY_HYPHEN)
-	DEF_CONST(GF_KEY_FULLSTOP)
-	DEF_CONST(GF_KEY_SLASH)
-	DEF_CONST(GF_KEY_0)
-	DEF_CONST(GF_KEY_1)
-	DEF_CONST(GF_KEY_2)
-	DEF_CONST(GF_KEY_3)
-	DEF_CONST(GF_KEY_4)
-	DEF_CONST(GF_KEY_5)
-	DEF_CONST(GF_KEY_6)
-	DEF_CONST(GF_KEY_7)
-	DEF_CONST(GF_KEY_8)
-	DEF_CONST(GF_KEY_9)
-	DEF_CONST(GF_KEY_COLON)
-	DEF_CONST(GF_KEY_SEMICOLON)
-	DEF_CONST(GF_KEY_LESSTHAN)
-	DEF_CONST(GF_KEY_EQUALS)
-	DEF_CONST(GF_KEY_GREATERTHAN)
-	DEF_CONST(GF_KEY_QUESTION)
-	DEF_CONST(GF_KEY_AT)
-	DEF_CONST(GF_KEY_A)
-	DEF_CONST(GF_KEY_B)
-	DEF_CONST(GF_KEY_C)
-	DEF_CONST(GF_KEY_D)
-	DEF_CONST(GF_KEY_E)
-	DEF_CONST(GF_KEY_F)
-	DEF_CONST(GF_KEY_G)
-	DEF_CONST(GF_KEY_H)
-	DEF_CONST(GF_KEY_I)
-	DEF_CONST(GF_KEY_J)
-	DEF_CONST(GF_KEY_K)
-	DEF_CONST(GF_KEY_L)
-	DEF_CONST(GF_KEY_M)
-	DEF_CONST(GF_KEY_N)
-	DEF_CONST(GF_KEY_O)
-	DEF_CONST(GF_KEY_P)
-	DEF_CONST(GF_KEY_Q)
-	DEF_CONST(GF_KEY_R)
-	DEF_CONST(GF_KEY_S)
-	DEF_CONST(GF_KEY_T)
-	DEF_CONST(GF_KEY_U)
-	DEF_CONST(GF_KEY_V)
-	DEF_CONST(GF_KEY_W)
-	DEF_CONST(GF_KEY_X)
-	DEF_CONST(GF_KEY_Y)
-	DEF_CONST(GF_KEY_Z)
-	DEF_CONST(GF_KEY_LEFTSQUAREBRACKET)
-	DEF_CONST(GF_KEY_BACKSLASH)
-	DEF_CONST(GF_KEY_RIGHTSQUAREBRACKET)
-	DEF_CONST(GF_KEY_CIRCUM)
-	DEF_CONST(GF_KEY_UNDERSCORE)
-	DEF_CONST(GF_KEY_GRAVEACCENT)
-	DEF_CONST(GF_KEY_LEFTCURLYBRACKET)
-	DEF_CONST(GF_KEY_PIPE)
-	DEF_CONST(GF_KEY_RIGHTCURLYBRACKET)
-	DEF_CONST(GF_KEY_DEL)
-	DEF_CONST(GF_KEY_INVERTEXCLAMATION)
-	DEF_CONST(GF_KEY_DEADGRAVE)
-	DEF_CONST(GF_KEY_DEADEACUTE)
-	DEF_CONST(GF_KEY_DEADCIRCUM)
-	DEF_CONST(GF_KEY_DEADTILDE)
-	DEF_CONST(GF_KEY_DEADMACRON)
-	DEF_CONST(GF_KEY_DEADBREVE)
-	DEF_CONST(GF_KEY_DEADABOVEDOT)
-	DEF_CONST(GF_KEY_DEADDIARESIS)
-	DEF_CONST(GF_KEY_DEADRINGABOVE)
-	DEF_CONST(GF_KEY_DEADDOUBLEACUTE)
-	DEF_CONST(GF_KEY_DEADCARON)
-	DEF_CONST(GF_KEY_DEADCEDILLA)
-	DEF_CONST(GF_KEY_DEADOGONEK)
-	DEF_CONST(GF_KEY_DEADIOTA)
-	DEF_CONST(GF_KEY_EURO)
-	DEF_CONST(GF_KEY_DEADVOICESOUND)
-	DEF_CONST(GF_KEY_DEADSEMIVOICESOUND)
-	DEF_CONST(GF_KEY_CHANNELUP)
-	DEF_CONST(GF_KEY_CHANNELDOWN)
-	DEF_CONST(GF_KEY_TEXT)
-	DEF_CONST(GF_KEY_INFO)
-	DEF_CONST(GF_KEY_EPG)
-	DEF_CONST(GF_KEY_RECORD)
-	DEF_CONST(GF_KEY_BEGINPAGE)
-	DEF_CONST(GF_KEY_CELL_SOFT1)
-	DEF_CONST(GF_KEY_CELL_SOFT2)
-	DEF_CONST(GF_KEY_JOYSTICK)
-
 	DEF_CONST(GF_KEY_MOD_SHIFT)
 	DEF_CONST(GF_KEY_MOD_CTRL)
 	DEF_CONST(GF_KEY_MOD_ALT)
@@ -5128,41 +5559,9 @@ static napi_status InitConstants(napi_env env, napi_value exports)
 	DEF_CONST(GF_FS_FLAG_NO_RESERVOIR)
 	DEF_CONST(GF_FS_FLAG_FULL_LINK)
 	DEF_CONST(GF_FS_FLAG_NO_IMPLICIT)
-
-
-	DEF_CONST(GF_PROP_FORBIDEN)
-	DEF_CONST(GF_PROP_SINT)
-	DEF_CONST(GF_PROP_UINT)
-	DEF_CONST(GF_PROP_LSINT)
-	DEF_CONST(GF_PROP_LUINT)
-	DEF_CONST(GF_PROP_BOOL)
-	DEF_CONST(GF_PROP_FRACTION)
-	DEF_CONST(GF_PROP_FRACTION64)
-	DEF_CONST(GF_PROP_FLOAT)
-	DEF_CONST(GF_PROP_DOUBLE)
-	DEF_CONST(GF_PROP_VEC2I)
-	DEF_CONST(GF_PROP_VEC2)
-	DEF_CONST(GF_PROP_VEC3I)
-	DEF_CONST(GF_PROP_VEC4I)
-	DEF_CONST(GF_PROP_STRING)
-	DEF_CONST(GF_PROP_STRING_NO_COPY)
-	DEF_CONST(GF_PROP_DATA)
-	DEF_CONST(GF_PROP_NAME)
-	DEF_CONST(GF_PROP_DATA_NO_COPY)
-	DEF_CONST(GF_PROP_CONST_DATA)
-	DEF_CONST(GF_PROP_POINTER)
-	DEF_CONST(GF_PROP_STRING_LIST)
-	DEF_CONST(GF_PROP_UINT_LIST)
-	DEF_CONST(GF_PROP_SINT_LIST)
-	DEF_CONST(GF_PROP_VEC2I_LIST)
-	DEF_CONST(GF_PROP_4CC)
-	DEF_CONST(GF_PROP_4CC_LIST)
-	DEF_CONST(GF_PROP_FIRST_ENUM)
-	DEF_CONST(GF_PROP_PIXFMT)
-	DEF_CONST(GF_PROP_PCMFMT)
-	DEF_CONST(GF_PROP_CICP_COL_PRIM)
-	DEF_CONST(GF_PROP_CICP_COL_TFC)
-	DEF_CONST(GF_PROP_CICP_COL_MX)
+	DEF_CONST(GF_FS_FLAG_REQUIRE_SOURCE_ID)
+	DEF_CONST(GF_FS_FLAG_FORCE_DEFER_LINK)
+	DEF_CONST(GF_FS_FLAG_PREVENT_PLAY)
 
 	DEF_CONST(GF_FS_ARG_HINT_NORMAL)
 	DEF_CONST(GF_FS_ARG_HINT_ADVANCED)
@@ -5180,6 +5579,7 @@ static napi_status InitConstants(napi_env env, napi_value exports)
 	DEF_CONST(GF_CAPFLAG_LOADED_FILTER)
 	DEF_CONST(GF_CAPFLAG_STATIC)
 	DEF_CONST(GF_CAPFLAG_OPTIONAL)
+	DEF_CONST(GF_CAPFLAG_RECONFIG)
 	DEF_CONST(GF_CAPS_INPUT)
 	DEF_CONST(GF_CAPS_INPUT_OPT)
 	DEF_CONST(GF_CAPS_INPUT_STATIC)
@@ -5329,6 +5729,8 @@ void dashbind_new_group(void *udta, u32 group_idx, void *_dash)
 		QSET_BOOL(is_selected)
 		QSET_DOUBLE(ast_offset)
 		QSET_DOUBLE(average_duration)
+		QSET_STR(hls_variant_url)
+		QSET_U32(ssr)
 
 		p_desc.utf8name = "sizes";
 		napi_create_array(env, &p_desc.value);
@@ -5592,6 +5994,374 @@ void dashin_detach_binding(NAPI_Filter *napi_f)
 	NAPI_Dash *napi_dash = (NAPI_Dash *) napi_f->binding_stack;
 	if (!napi_dash) return;
 	gf_free(napi_dash);
+}
+
+typedef struct
+{
+	napi_ref ref;
+	napi_env env;
+} NAPI_HTTPOut;
+
+void httpoutbind_finalize(napi_env env, void* finalize_data, void* finalize_hint)
+{
+}
+
+typedef struct
+{
+	void *httpout_session;
+	napi_env env;
+	napi_ref req_ref;
+} NAPI_HTTPSession;
+
+void napi_http_del(napi_env env, void *finalize_data, void* finalize_hint)
+{
+	NAPI_HTTPSession *napi_http = (NAPI_HTTPSession *)finalize_data;
+	if (napi_http) gf_free(napi_http);
+}
+
+
+static u32 httpout_throttle_cbk(void *udta, u64 done, u64 total)
+{
+	napi_value req;
+	napi_value fun_val, args[2], res;
+	u32 retval=0;
+	NAPI_HTTPSession *napi_sess = (NAPI_HTTPSession *)udta;
+
+	//call
+	napi_get_reference_value(napi_sess->env, napi_sess->req_ref, &req);
+	napi_get_named_property(napi_sess->env, req, "throttle", &fun_val);
+	napi_create_int64(napi_sess->env, done, &args[0]);
+	napi_create_int64(napi_sess->env, total, &args[1]);
+	napi_call_function(napi_sess->env, req, fun_val, 2, args, &res);
+	napi_get_value_uint32(napi_sess->env, res, &retval);
+
+	return retval;
+}
+static s32 httpout_read_cbk(void *udta, u8 *buffer, u32 buffer_size)
+{
+	napi_value req;
+	napi_value fun_val, arg, ab, res;
+	u32 nb_bytes=0;
+	napi_status status;
+	NAPI_HTTPSession *napi_sess = (NAPI_HTTPSession *)udta;
+
+
+	//call
+	napi_get_reference_value(napi_sess->env, napi_sess->req_ref, &req);
+	napi_get_named_property(napi_sess->env, req, "read", &fun_val);
+
+	//create arg
+#if NAPI_VERSION >= 7
+	status = napi_create_external_arraybuffer(napi_sess->env, buffer, buffer_size, NULL, NULL, &ab);
+#else
+	void *buf_data=NULL;
+	status = napi_create_arraybuffer(napi_sess->env, buffer_size, &buf_data, &ab);
+#endif
+
+	if (status==napi_ok)
+		status = napi_create_typedarray(napi_sess->env, napi_uint8_array, buffer_size, ab, 0, &arg);
+
+	//call
+	if (status==napi_ok)
+		status = napi_call_function(napi_sess->env, req, fun_val, 1, &arg, &res);
+
+	if (status==napi_ok)
+		status = napi_get_value_uint32(napi_sess->env, res, &nb_bytes);
+
+#if NAPI_VERSION >= 7
+	//detach array buffer
+	napi_detach_arraybuffer(napi_sess->env, ab);
+#else
+	if ((status==napi_ok) && buf_data && nb_bytes)
+		memcpy(buffer, buf_data, nb_bytes);
+#endif
+	return nb_bytes;
+}
+static u32 httpout_write_cbk(void *udta, const u8 *buffer, u32 buffer_size)
+{
+	napi_value req;
+	napi_value fun_val, arg, ab, res;
+	u32 nb_bytes=0;
+	napi_status status;
+	NAPI_HTTPSession *napi_sess = (NAPI_HTTPSession *)udta;
+
+	//call
+	napi_get_reference_value(napi_sess->env, napi_sess->req_ref, &req);
+	napi_get_named_property(napi_sess->env, req, "write", &fun_val);
+
+	//create arg
+#if NAPI_VERSION >= 7
+	status = napi_create_external_arraybuffer(napi_sess->env, (void *)buffer, buffer_size, NULL, NULL, &ab);
+#else
+	void *buf_data=NULL;
+	status = napi_create_arraybuffer(napi_sess->env, buffer_size, &buf_data, &ab);
+	if (status == napi_ok) {
+		memcpy(buf_data, buffer, buffer_size);
+	}
+#endif
+
+	if (status==napi_ok)
+		status = napi_create_typedarray(napi_sess->env, napi_uint8_array, buffer_size, ab, 0, &arg);
+
+	//call
+	if (status==napi_ok)
+		status = napi_call_function(napi_sess->env, req, fun_val, 1, &arg, &res);
+
+	if (status==napi_ok)
+		status = napi_get_value_uint32(napi_sess->env, res, &nb_bytes);
+
+#if NAPI_VERSION >= 7
+	//detach arraybuffer
+	napi_detach_arraybuffer(napi_sess->env, ab);
+#endif
+
+	if (status!=napi_ok) return 0;
+	return nb_bytes;
+}
+static void httpout_on_close_cbk(void *udta, GF_Err reason)
+{
+	napi_value req;
+	NAPI_HTTPSession *napi_sess = (NAPI_HTTPSession *)udta;
+
+	//call
+	napi_get_reference_value(napi_sess->env, napi_sess->req_ref, &req);
+
+	Bool has_p = GF_FALSE;
+	napi_has_named_property(napi_sess->env, req, "close", (bool *) &has_p);
+	if (has_p) {
+		napi_value fun_val, arg, res;
+		napi_get_named_property(napi_sess->env, req, "close", &fun_val);
+		napi_create_uint32(napi_sess->env, reason, &arg);
+		napi_call_function(napi_sess->env, req, fun_val, 1, &arg, &res);
+	}
+	napi_delete_reference(napi_sess->env, napi_sess->req_ref);
+}
+
+GF_Err gf_httpout_send_request(void *sess, void *udta,
+	u32 reply,
+	char *body_or_file,
+	u32 nb_headers,
+	const char **headers,
+	u32 (*throttle)(void *udta, u64 done, u64 total),
+	s32 (*read)(void *udta, u8 *buffer, u32 buffer_size),
+	u32 (*write)(void *udta, const u8 *buffer, u32 buffer_size),
+	void (*close)(void *udta, GF_Err reason)
+);
+
+napi_value httpout_send_cbk(napi_env env, napi_callback_info info)
+{
+	napi_value val;
+	u32 i, reply=0;
+	size_t size;
+	char *body_or_file=NULL;
+	u32 nb_headers=0;
+	char **headers=NULL;
+	Bool use_throttle=GF_FALSE;
+	Bool use_read=GF_FALSE;
+	Bool use_write=GF_FALSE;
+
+	NARG_THIS
+
+	NAPI_HTTPSession *napi_hsess;
+	bool _tag;
+	NAPI_CALL( napi_check_object_type_tag(env, this_val, &httpsess_tag, &_tag) );
+	if (!_tag) {
+		napi_throw_error(env, NULL, "Not a HTTP session object");
+		return NULL;
+	}
+	NAPI_CALL( napi_unwrap(env, this_val, (void**) &napi_hsess) );
+
+	napi_get_named_property(env, this_val, "reply", &val);
+	napi_get_value_uint32(env, val, &reply);
+
+	Bool has_p = GF_FALSE;
+	napi_has_named_property(env, this_val, "body", (bool *) &has_p);
+	if (has_p) {
+		napi_get_named_property(env, this_val, "body", &val);
+		napi_get_value_string_utf8(env, val, NULL, 0, &size);
+		body_or_file = gf_malloc(sizeof(char) * (size+1) );
+		napi_get_value_string_utf8(env, val, body_or_file, size+1, &size);
+		body_or_file[size]=0;
+	}
+
+	napi_has_named_property(env, this_val, "headers_out", (bool *) &has_p);
+	if (has_p) {
+		napi_value hdrs;
+		u32 nb_items;
+		napi_get_named_property(env, this_val, "headers_out", &hdrs);
+		napi_get_array_length(env, hdrs, &nb_items);
+		for (i=0; i<nb_items; i++) {
+			napi_value h;
+			napi_get_element(env, hdrs, i, &h);
+			napi_has_named_property(env, h, "name", (bool *) &has_p);
+			if (!has_p) continue;
+			napi_has_named_property(env, h, "value", (bool *) &has_p);
+			if (!has_p) continue;
+
+			headers = gf_realloc(headers, sizeof(char *) * (nb_headers+2));
+
+			napi_get_named_property(env, h, "name", &val);
+			napi_get_value_string_utf8(env, val, NULL, 0, &size);
+			headers[nb_headers] = gf_malloc(sizeof(char) * (size+1) );
+			napi_get_value_string_utf8(env, val, headers[nb_headers], size+1, &size);
+			headers[nb_headers][size]=0;
+
+			napi_get_named_property(env, h, "value", &val);
+			napi_get_value_string_utf8(env, val, NULL, 0, &size);
+			headers[nb_headers+1] = gf_malloc(sizeof(char) * (size+1) );
+			napi_get_value_string_utf8(env, val, headers[nb_headers+1], size+1, &size);
+			headers[nb_headers+1][size]=0;
+			nb_headers += 2;
+		}
+	}
+
+	napi_has_named_property(env, this_val, "throttle", (bool *) &has_p);
+	if (has_p) use_throttle = GF_TRUE;
+	napi_has_named_property(env, this_val, "read", (bool *) &has_p);
+	if (has_p) use_read = GF_TRUE;
+	napi_has_named_property(env, this_val, "write", (bool *) &has_p);
+	if (has_p) use_write = GF_TRUE;
+
+	gf_httpout_send_request(napi_hsess->httpout_session, napi_hsess, reply, body_or_file, nb_headers, (const char**) headers,
+		use_throttle ? httpout_throttle_cbk : NULL,
+		use_read ? httpout_read_cbk : NULL,
+		use_write ? httpout_write_cbk : NULL,
+		httpout_on_close_cbk);
+
+	if (body_or_file) gf_free(body_or_file);
+	if (headers) {
+		for (i=0; i<nb_headers; i++) {
+			gf_free(headers[i]);
+		}
+		gf_free(headers);
+	}
+	return NULL;
+}
+
+s32 httpout_on_request(void *udta, void *session, const char *method, const char *url, u32 auth_code, u32 nb_hdrs, const char **hdrs)
+{
+	napi_status status;
+	napi_value req_obj;
+	u32 i;
+	napi_value obj, fun_val, res;
+	NAPI_HTTPOut *napi_http = (NAPI_HTTPOut *)udta;
+	NAPI_HTTPSession *napi_sess;
+
+	//create request object
+	GF_SAFEALLOC(napi_sess, NAPI_HTTPSession);
+	if (!napi_sess) return 1;
+	napi_sess->httpout_session = session;
+	napi_sess->env = napi_http->env;
+
+	napi_create_object(napi_http->env, &req_obj);
+	napi_create_reference(napi_http->env, req_obj, 1, &napi_sess->req_ref);
+	napi_type_tag_object(napi_http->env, req_obj, &httpsess_tag);
+	napi_wrap(napi_http->env, req_obj, napi_sess, napi_http_del, NULL, NULL);
+
+	//set properties
+	napi_value val;
+	status = napi_create_string_utf8(napi_http->env, method, NAPI_AUTO_LENGTH, &val);
+	if (status==napi_ok) status = napi_set_named_property(napi_http->env, req_obj, "method", val);
+	if (status!=napi_ok) return 1;
+
+	status = napi_create_string_utf8(napi_http->env, url, NAPI_AUTO_LENGTH, &val);
+	if (status==napi_ok) status = napi_set_named_property(napi_http->env, req_obj, "url", val);
+	if (status!=napi_ok) return 1;
+
+	status = napi_create_uint32(napi_http->env, auth_code, &val);
+	if (status==napi_ok) status = napi_set_named_property(napi_http->env, req_obj, "auth_code", val);
+	if (status!=napi_ok) return 1;
+
+	status = napi_create_uint32(napi_http->env, 0, &val);
+	if (status==napi_ok) status = napi_set_named_property(napi_http->env, req_obj, "reply", val);
+	if (status!=napi_ok) return 1;
+
+	status = napi_create_function(napi_http->env, "send", NAPI_AUTO_LENGTH, httpout_send_cbk, napi_http, &val);
+	if (status==napi_ok) status = napi_set_named_property(napi_http->env, req_obj, "send", val);
+	if (status!=napi_ok) return 1;
+
+	napi_value in_headers;
+	napi_create_array(napi_http->env, &in_headers);
+	for (i=0; i<nb_hdrs;i+=2) {
+		napi_value h;
+		napi_create_object(napi_http->env, &h);
+		napi_create_string_utf8(napi_http->env, hdrs[i], NAPI_AUTO_LENGTH, &val);
+		napi_set_named_property(napi_http->env, h, "name", val);
+		napi_create_string_utf8(napi_http->env, hdrs[i+1], NAPI_AUTO_LENGTH, &val);
+		napi_set_named_property(napi_http->env, h, "value", val);
+		napi_set_element(napi_http->env, in_headers, i/2, h);
+	}
+	napi_set_named_property(napi_http->env, req_obj, "headers_in", in_headers);
+
+	napi_value out_headers;
+	napi_create_array(napi_http->env, &out_headers);
+	napi_set_named_property(napi_http->env, req_obj, "headers_out", out_headers);
+
+	//call
+	napi_get_reference_value(napi_http->env, napi_http->ref, &obj);
+	status = napi_get_named_property(napi_http->env, obj, "on_request", &fun_val);
+	if (status!=napi_ok) return 1;
+	napi_call_function(napi_http->env, obj, fun_val, 1, &req_obj, &res);
+	return 0;
+}
+
+GF_Err gf_filter_bind_httpout_callbacks(GF_Filter *filter, void *udta,
+	s32 (*on_request)(void *udta, void *session, const char *method, const char *url, u32 auth_code, u32 nb_hdrs, const char **hdrs)
+);
+
+napi_value httpout_bind(napi_env env, napi_callback_info info)
+{
+	GF_Err e;
+	NAPI_HTTPOut *napi_http;
+
+	NARG_ARGS_THIS(1,1)
+	FILTER
+
+	NAPI_Filter *napi_f = (NAPI_Filter *) gf_filter_get_rt_udta(f);
+
+	Bool has_fun = GF_FALSE;
+	napi_has_named_property(napi_f->env, argv[0], "on_request", (bool *) &has_fun);
+	if (!has_fun) {
+		napi_throw_error(env, NULL, "Invalid httpout binding object, missing on_request callback");
+		return NULL;
+	}
+
+	GF_SAFEALLOC(napi_http, NAPI_HTTPOut);
+	if (!napi_http) {
+		napi_throw_error(env, NULL, "Failed to allocate httpout binding");
+		return NULL;
+	}
+
+	napi_create_reference(env, argv[0], 1, &napi_f->binding_ref);
+	napi_http->ref = napi_f->binding_ref;
+	napi_http->env = env;
+	napi_f->binding_stack = napi_http;
+
+	napi_type_tag_object(env, argv[0], &dashbind_tag);
+	NAPI_CALL( napi_wrap(env, argv[0], napi_http, httpoutbind_finalize, NULL, NULL) );
+
+	e = gf_filter_bind_httpout_callbacks(f, napi_http, httpout_on_request);
+	if (e) {
+		u32 rcount;
+		napi_reference_unref(env, napi_f->binding_ref, &rcount);
+		napi_delete_reference(env, napi_f->binding_ref);
+		napi_f->binding_ref = NULL;
+		napi_f->binding_stack = NULL;
+		gf_free(napi_http);
+
+		napi_throw_error(env, gf_error_to_string(e), "Failed to bind httpout callbacks");
+		return NULL;
+	}
+	//tag httpout filter to run on main thread only
+	gf_filter_force_main_thread(napi_f->f, GF_TRUE);
+	return NULL;
+}
+
+void httpout_detach_binding(NAPI_Filter *napi_f)
+{
+	NAPI_HTTPOut *napi_http = (NAPI_HTTPOut *) napi_f->binding_stack;
+	if (!napi_http) return;
+	gf_free(napi_http);
 }
 
 typedef struct _napi_fio

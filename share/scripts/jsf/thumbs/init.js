@@ -1,15 +1,41 @@
+/*
+ *			GPAC - Multimedia Framework C SDK
+ *
+ *			Authors: Jean Le Feuvre
+ *			Copyright (c) Telecom ParisTech 2020-2024
+ *					All rights reserved
+ *
+ *  This file is part of GPAC / AVGenerator filter
+ *
+ *  GPAC is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU Lesser General Public License as published by
+ *  the Free Software Foundation; either version 2, or (at your option)
+ *  any later version.
+ *
+ *  GPAC is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU Lesser General Public License for more details.
+ *
+ *  You should have received a copy of the GNU Lesser General Public
+ *  License along with this library; see the file COPYING.  If not, write to
+ *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
+ *
+ */
+
 import * as evg from 'evg'
 import { Sys as sys } from 'gpaccore'
 import { File as File } from 'gpaccore'
 
 //metadata
 filter.set_name("thumbs");
-filter.set_desc("Thumbnail collection generator");
+filter.set_class_hint(GF_FS_CLASS_AV);
+filter.set_desc("Thumbnail generator");
 filter.set_version("1.0");
 filter.set_author("GPAC team");
 filter.set_help(`This filter generates screenshots from a video stream.
 
-The input video is downsampled by the [-scale]() factor. The output size is configured based on the number of images per line and per column in the [-grid](). 
+The input video is down-sampled by the [-scale]() factor. The output size is configured based on the number of images per line and per column in the [-grid](). 
 Once configured, the output size is no longer modified.
 
 The [-snap]() option indicates to use one video frame every given seconds. If value is 0, all input frames are used.
@@ -90,7 +116,7 @@ filter.set_arg({ name: "blt", desc: "use blit instead of software rasterizer", t
 filter.set_arg({ name: "scref", desc: "use last inserted image as reference for scene change detection", type: GF_PROP_BOOL, def: "false", hint:"expert"} );
 filter.set_arg({ name: "dropfirst", desc: "drop first image", type: GF_PROP_BOOL, def: "false", hint:"expert"} );
 filter.set_arg({ name: "list", desc: "export json list of frame times and positions to given file", type: GF_PROP_STRING, def: null, hint:"expert"} );
-filter.set_arg({ name: "lxy", desc: "add explict x and y in json export", type: GF_PROP_BOOL, def: "false", hint:"expert"} );
+filter.set_arg({ name: "lxy", desc: "add explicit x and y in json export", type: GF_PROP_BOOL, def: "false", hint:"expert"} );
 
 
 filter.initialize = function() {

@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -29,9 +29,7 @@
 #include "texturing.h"
 #include "nodes_stacks.h"
 
-#ifndef GPAC_DISABLE_3D
-
-
+#if !defined(GPAC_DISABLE_3D) && !defined(GPAC_DISABLE_COMPOSITOR)
 
 /*generic drawable 3D constructor/destructor*/
 Drawable3D *drawable_3d_new(GF_Node *node)
@@ -727,7 +725,7 @@ void visual_3d_register_context(GF_TraverseState *tr_state, GF_Node *geometry)
 	Drawable3DContext *ctx;
 	Drawable3D *drawable;
 
-	assert(tr_state->traversing_mode == TRAVERSE_SORT);
+	gf_assert(tr_state->traversing_mode == TRAVERSE_SORT);
 
 	drawable = (Drawable3D*)gf_node_get_private(geometry);
 
@@ -1026,7 +1024,7 @@ void visual_3d_check_collisions(GF_TraverseState *tr_state, GF_Node *on_node, GF
 	Bool go;
 	Fixed diff, pos_diff;
 
-	assert(tr_state->visual && tr_state->camera);
+	if (!tr_state->visual || !tr_state->camera) return;
 	/*don't collide on VP animations or when modes discard collision*/
 	if ((tr_state->camera->anim_len && !tr_state->camera->jumping) || !tr_state->visual->compositor->collide_mode || (tr_state->camera->navigate_mode>=GF_NAVIGATE_EXAMINE)) {
 		/*reset ground flag*/
@@ -1176,7 +1174,7 @@ Bool visual_3d_node_cull(GF_TraverseState *tr_state, GF_BBox *bbox, Bool skip_ne
 	SFVec3f cdiff, vertices[8];
 
 	if (!tr_state->camera || (tr_state->cull_flag == CULL_INSIDE)) return 1;
-	assert(tr_state->cull_flag != CULL_OUTSIDE);
+	gf_assert(tr_state->cull_flag != CULL_OUTSIDE);
 
 	/*empty bounds*/
 	if (!bbox->is_set) {
@@ -2199,5 +2197,4 @@ void visual_3d_set_fog(GF_VisualManager *visual, const char *type, SFColor color
 	visual->fog_visibility = visibility;
 }
 
-#endif
-
+#endif //!defined(GPAC_DISABLE_3D) && !defined(GPAC_DISABLE_COMPOSITOR)

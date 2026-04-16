@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2019
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / common tools sub-project
@@ -47,7 +47,7 @@ extern "C" {
 This section documents the math and trigo functions used in the GPAC framework. GPAC can be compiled with
  fixed-point support, representing float values on a 16.16 signed integer, which implies a developer
  must take care of float computations when using GPAC.\n
- A developer should not need to know in which mode the framework has been compiled as long as he uses
+ A developer should not need to know in which mode the framework has been compiled as long as (s)he uses
  the math functions of GPAC which work in both float and fixed-point mode.\n
  Using fixed-point version is decided at compilation time and cannot be changed. The feature is signaled
  through the GPAC_FIXED_POINT macro: when defined, GPAC has been compiled in fixed-point mode
@@ -360,6 +360,13 @@ Gets the smallest pixel-aligned rectangle completely containing a rectangle
 \return the pixel-aligned transformed rectangle
 */
 GF_IRect gf_rect_pixelize(GF_Rect *r);
+
+/*! add adds rc2 to rc1 - the new rc1 contains the old rc1 and rc2
+ \param rc1 target rectangle
+ \param rc2 rectangle to add
+*/
+void gf_irect_union(GF_IRect *rc1, GF_IRect *rc2);
+
 
 
 /*!

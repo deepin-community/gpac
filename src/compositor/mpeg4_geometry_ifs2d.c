@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2012
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -28,7 +28,7 @@
 #include "nodes_stacks.h"
 #include "visual_manager.h"
 
-#ifndef GPAC_DISABLE_VRML
+#if !defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_COMPOSITOR)
 
 static void ifs2d_check_changes(GF_Node *node, Drawable *stack, GF_TraverseState *tr_state)
 {
@@ -267,6 +267,8 @@ static void TraverseIFS2D(GF_Node *node, void *rs, Bool is_destroy)
 		return;
 	}
 	if (!ifs2D->coord) return;
+	if ((gf_node_get_tag(ifs2D->coord) != TAG_MPEG4_Coordinate) && (gf_node_get_tag(ifs2D->coord) != TAG_MPEG4_Coordinate2D))
+		return;
 
 	ifs2d_check_changes(node, stack, tr_state);
 
@@ -354,4 +356,4 @@ void compositor_init_indexed_face_set2d(GF_Compositor *compositor, GF_Node *node
 
 }
 
-#endif /*GPAC_DISABLE_VRML*/
+#endif //!defined(GPAC_DISABLE_VRML) && !defined(GPAC_DISABLE_COMPOSITOR)

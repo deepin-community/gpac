@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2018-2021
+ *			Copyright (c) Telecom ParisTech 2018-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / libjpeg encoder filter
@@ -121,7 +121,7 @@ static GF_Err jpgenc_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool is
 
 	//TODO: for now we only allow YUV420p input, we should refine this to allow any YUV
 	if (ctx->pixel_format != GF_PIXEL_YUV) {
-		gf_filter_pid_negociate_property(pid, GF_PROP_PID_PIXFMT, &PROP_UINT(GF_PIXEL_YUV));
+		gf_filter_pid_negotiate_property(pid, GF_PROP_PID_PIXFMT, &PROP_UINT(GF_PIXEL_YUV));
 		ctx->in_fmt_negotiate = GF_TRUE;
 		return GF_OK;
 	}
@@ -403,6 +403,7 @@ GF_FilterRegister JPGEncRegister = {
 	.initialize = jpgenc_initialize,
 	.configure_pid = jpgenc_configure_pid,
 	.process = jpgenc_process,
+	.hint_class_type = GF_FS_CLASS_ENCODER
 };
 
 #endif

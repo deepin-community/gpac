@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2022
+ *			Copyright (c) Telecom ParisTech 2022-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / compressed bitstream splitter filter
@@ -28,7 +28,7 @@
 #include <gpac/internal/media_dev.h>
 #include <gpac/mpeg4_odf.h>
 
-#ifndef GPAC_DISABLE_AV_PARSERS
+#if !defined(GPAC_DISABLE_AV_PARSERS) && !defined(GPAC_DISABLE_BSSPLIT)
 
 typedef struct
 {
@@ -179,8 +179,8 @@ rebrowse_sps:
 			GF_NALUFFParam *sl = gf_list_get(pctx->svcc->sequenceParameterSets, i);
 			if (sl->id == avc_sps_id) {
 				sps_found = GF_TRUE;
-				assert(gf_list_find(c_opid->svcc->sequenceParameterSets, sl)<0);
-				bs_split_svc_add_param(c_opid->svcc->sequenceParameterSets, sl);
+				if (gf_list_find(c_opid->svcc->sequenceParameterSets, sl)<0)
+					bs_split_svc_add_param(c_opid->svcc->sequenceParameterSets, sl);
 				break;
 			}
 		}
@@ -194,7 +194,8 @@ rebrowse_sps:
 			GF_NALUFFParam *sl = gf_list_get(pctx->svcc->pictureParameterSets, i);
 			if (sl->id == avc_pps_id) {
 				pps_found = GF_TRUE;
-				bs_split_svc_add_param(c_opid->svcc->pictureParameterSets, sl);
+				if (gf_list_find(c_opid->svcc->pictureParameterSets, sl)<0)
+					bs_split_svc_add_param(c_opid->svcc->pictureParameterSets, sl);
 				break;
 			}
 		}
@@ -274,6 +275,7 @@ static void bs_split_copy_props_base(BSSplitCtx *ctx, BSSplitOut *c_opid, GF_Fil
 	gf_filter_pid_copy_properties(c_opid->opid, pid);
 	gf_filter_pid_set_property(c_opid->opid, GF_PROP_PID_ID, &PROP_UINT(c_opid->id));
 	gf_filter_pid_set_property(c_opid->opid, GF_PROP_PID_ISOM_STSD_TEMPLATE, NULL);
+	gf_filter_pid_set_property(c_opid->opid, GF_PROP_PID_ISOM_STSD_ALL_TEMPLATES, NULL);
 	gf_filter_pid_set_property(c_opid->opid, GF_PROP_PID_ISOM_SUBTYPE, NULL);
 
 	if (!c_opid->is_base) {
@@ -661,15 +663,10 @@ static GF_Err avc_rewrite_pid_config(BSSplitCtx *ctx, BSSplitIn *pctx)
 
 static GF_Err vvc_hevc_rewrite_pid_config(BSSplitCtx *ctx, BSSplitIn *pctx)
 {
-#ifndef GPAC_DISABLE_HEVC
 	GF_HEVCConfig *hvcc=NULL;
 	GF_HEVCConfig *hvcc_out = NULL;
-#endif
-
 #ifndef GPAC_DISABLE_AV_PARSERS
-#ifndef GPAC_DISABLE_HEVC
 	HEVCState *hvcc_state = NULL;
-#endif
 	VVCState *vvcc_state = NULL;
 #else
 	void *hvcc_state = NULL;
@@ -832,9 +829,7 @@ restart:
 	hvcc = hvcc_out;
 
 #ifndef GPAC_DISABLE_AV_PARSERS
-#ifndef GPAC_DISABLE_HEVC
 	if (hvcc) GF_SAFEALLOC(hvcc_state, HEVCState);
-#endif
 	if (vvcc) GF_SAFEALLOC(vvcc_state, VVCState);
 #endif
 
@@ -988,9 +983,7 @@ restart:
 	}
 
 #ifndef GPAC_DISABLE_AV_PARSERS
-#ifndef GPAC_DISABLE_HEVC
 	if (hvcc_state) gf_free(hvcc_state);
-#endif
 	if (vvcc_state) gf_free(vvcc_state);
 #endif
 
@@ -1023,7 +1016,7 @@ static GF_Err none_split_packet(BSSplitCtx *ctx, BSSplitIn *pctx, GF_FilterPacke
 static GF_Err nalu_split_packet(BSSplitCtx *ctx, BSSplitIn *pctx, GF_FilterPacket *pck, u32 codec_type)
 {
 	u32 size, pck_size, min_nal_size;
-	GF_Err e;
+	GF_Err e = GF_OK;
 	u64 pck_ts;
 	Bool has_svc_prefix = GF_FALSE;
 	const u8 *data = gf_filter_pck_get_data(pck, &pck_size);
@@ -1330,7 +1323,7 @@ static GF_Err bs_split_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool 
 	}
 
 	prop = gf_filter_pid_get_property(pid, GF_PROP_PID_CODECID);
-	assert(prop);
+	gf_fatal_assert(prop);
 
 	switch (prop->value.uint) {
 	case GF_CODECID_AVC:
@@ -1339,13 +1332,11 @@ static GF_Err bs_split_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool 
 		pctx->rewrite_pid_config = avc_rewrite_pid_config;
 		pctx->split_packet = avc_split_packet;
 		break;
-#ifndef GPAC_DISABLE_HEVC
 	case GF_CODECID_HEVC:
 	case GF_CODECID_LHVC:
 		pctx->rewrite_pid_config = vvc_hevc_rewrite_pid_config;
 		pctx->split_packet = hevc_split_packet;
 		break;
-#endif
 	case GF_CODECID_VVC:
 		pctx->rewrite_pid_config = vvc_hevc_rewrite_pid_config;
 		pctx->split_packet = vvc_split_packet;
@@ -1443,7 +1434,7 @@ static const GF_FilterCapability BSSplitCaps[] =
 
 GF_FilterRegister BSSplitRegister = {
 	.name = "bssplit",
-	GF_FS_SET_DESCRIPTION("Compressed layered bitstream splitter")
+	GF_FS_SET_DESCRIPTION("Layered bitstream splitter")
 	GF_FS_SET_HELP("This filter splits input stream by layers and sublayers\n"
 	"\n"
 	"The filter supports AVC|H264, HEVC and VVC stream splitting and is pass-through for other codec types.\n"
@@ -1486,14 +1477,15 @@ GF_FilterRegister BSSplitRegister = {
 	.initialize = bs_split_initialize,
 	.finalize = bs_split_finalize,
 	.configure_pid = bs_split_configure_pid,
-	.process = bs_split_process
+	.process = bs_split_process,
+	.hint_class_type = GF_FS_CLASS_STREAM
 };
 
 #endif
 
-const GF_FilterRegister *bs_split_register(GF_FilterSession *session)
+const GF_FilterRegister *bssplit_register(GF_FilterSession *session)
 {
-#ifndef GPAC_DISABLE_AV_PARSERS
+#if !defined(GPAC_DISABLE_AV_PARSERS) && !defined(GPAC_DISABLE_BSSPLIT)
 	return (const GF_FilterRegister *) &BSSplitRegister;
 #else
 	return NULL;

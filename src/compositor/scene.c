@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -32,6 +32,8 @@
 #include <gpac/internal/compositor_dev.h>
 #include <gpac/nodes_x3d.h>
 
+#if !defined(GPAC_DISABLE_COMPOSITOR)
+
 /*SVG properties*/
 #ifndef GPAC_DISABLE_SVG
 #include <gpac/scenegraph_svg.h>
@@ -44,10 +46,8 @@ Double gf_scene_get_time(void *_is)
 #if 1
 	u64 ret;
 	GF_Clock *ck;
-	assert(scene);
-	assert(scene->root_od);
+	if (!scene || !scene->root_od || !scene->root_od->ck) return 0.0;
 	ck = scene->root_od->ck;
-	if (!ck) return 0.0;
 	ret = gf_clock_time_absolute(ck);
 	if ((scene->root_od->media_stop_time>0) && ((u64) scene->root_od->media_stop_time<ret))
 		ret = scene->root_od->media_stop_time;
@@ -297,7 +297,7 @@ GF_Scene *gf_scene_new(GF_Compositor *compositor, GF_Scene *parentScene)
 	/*init inline scene*/
 	if (parentScene) {
 		tmp->graph = gf_sg_new_subscene(parentScene->graph);
-		assert(!compositor || (compositor==parentScene->compositor));
+		gf_assert(!compositor || (compositor==parentScene->compositor));
 		tmp->compositor = parentScene->compositor;
 	} else {
 		tmp->graph = gf_sg_new();
@@ -345,7 +345,7 @@ GF_EXPORT
 void gf_scene_del(GF_Scene *scene)
 {
 	gf_list_del(scene->resources);
-	assert(!gf_list_count(scene->extra_scenes) );
+	gf_assert(!gf_list_count(scene->extra_scenes) );
 	gf_list_del(scene->extra_scenes);
 
 #ifndef GPAC_DISABLE_VRML
@@ -1070,7 +1070,7 @@ GF_MediaObject *gf_scene_get_media_object(GF_Scene *scene, MFURL *url, u32 obj_t
 static void gf_scene_get_video_size(GF_MediaObject *mo, u32 *w, u32 *h)
 {
 	u32 pixel_ar;
-	if (!gf_mo_get_visual_info(mo, w, h, NULL, &pixel_ar, NULL, NULL)) return;
+	if (!gf_mo_get_visual_info_ex(mo, w, h, NULL, &pixel_ar, NULL, NULL, GF_FALSE)) return;
 	if (mo->c_w && mo->c_h) {
 		*w = (u32) mo->c_w;
 		*h = (u32) mo->c_h;
@@ -1113,7 +1113,6 @@ void gf_scene_setup_object(GF_Scene *scene, GF_ObjectManager *odm)
 		if (obj->odm && (odm->source_id != obj->odm->source_id)) continue;
 
 		if (obj->OD_ID==GF_MEDIA_EXTERNAL_ID) {
-			//assert(obj->odm);
 			if (obj->odm == odm) {
 				/*assign FINAL OD, not parent*/
 				obj->odm = odm;
@@ -1609,7 +1608,11 @@ static void create_movie(GF_Scene *scene, GF_Node *root, const char *tr_name, co
 		((M_Appearance *)app)->material = n2;
 		gf_node_register(n2, app);
 	} else if (scene->vr_type && !is_untransform) {
-		n2 = is_create_node(scene->graph, TAG_MPEG4_Sphere, name_geo);
+		if (scene->vr_type==2) {
+			n2 = load_vr_proto_node(scene->graph, "urn:inet:gpac:builtin:SRDSphere", name_geo);
+		} else {
+			n2 = is_create_node(scene->graph, TAG_MPEG4_Sphere, name_geo);
+		}
 		((M_Shape *)n1)->geometry = n2;
 		gf_node_register(n2, n1);
 	} else {
@@ -1844,8 +1847,8 @@ void gf_scene_regenerate(GF_Scene *scene)
 				create_movie(scene, n1, szName, szTex, szGeom, GF_FALSE);
 			}
 		}
-		assert(max_x>min_x);
-		assert(max_y>min_y);
+		gf_assert(max_x>min_x);
+		gf_assert(max_y>min_y);
 
 		scene->srd_min_x = min_x;
 		scene->srd_min_y = min_y;
@@ -2022,6 +2025,7 @@ static void odm_activate(SFURL *url, GF_Node *n)
 
 	gf_node_changed(n, NULL);
 }
+#endif
 
 GF_EXPORT
 void gf_scene_set_service_id(GF_Scene *scene, u32 service_id)
@@ -2038,7 +2042,7 @@ void gf_scene_set_service_id(GF_Scene *scene, u32 service_id)
 			if (odm->ServiceID != scene->selected_service_id) continue;
 			if (odm->redirect_url) {
 				remote_odm = odm;
-				assert(remote_odm->scene_ns->nb_odm_users);
+				gf_assert(remote_odm->scene_ns->nb_odm_users);
 				remote_odm->scene_ns->nb_odm_users--;
 				remote_odm->scene_ns = scene->root_od->scene_ns;
 				remote_odm->scene_ns->nb_odm_users++;
@@ -2083,6 +2087,8 @@ void gf_scene_set_service_id(GF_Scene *scene, u32 service_id)
 	gf_sc_lock(scene->compositor, 0);
 }
 
+#ifndef GPAC_DISABLE_VRML
+
 GF_EXPORT
 void gf_scene_select_object(GF_Scene *scene, GF_ObjectManager *odm)
 {
@@ -2107,6 +2113,24 @@ void gf_scene_select_object(GF_Scene *scene, GF_ObjectManager *odm)
 	else if (check_odm_deactivate(&scene->subs_url, odm, gf_sg_find_node_by_name(scene->graph, "DYN_SUBT_IMG") )) pre_selected=GF_TRUE;
 	if (pre_selected) {
 		if (odm->state) {
+			if (odm->pid) {
+				const GF_PropertyValue *p = gf_filter_pid_get_property(odm->pid, GF_PROP_PID_FORCED_SUB);
+				if (p && p->value.uint) {
+					if (p->value.uint==2) return;
+					//toggle forced on/off
+					GF_FilterEvent evt;
+					GF_FEVT_INIT(evt, GF_FEVT_QUALITY_SWITCH, odm->pid);
+					if (odm->flags & GF_ODM_SUB_FORCED) {
+						evt.quality_switch.up = 0;
+						odm->flags &= ~GF_ODM_SUB_FORCED;
+					} else {
+						evt.quality_switch.up = 1;
+						odm->flags |= GF_ODM_SUB_FORCED;
+					}
+					gf_filter_pid_send_event(odm->pid, &evt);
+					return;
+				}
+			}
 			gf_odm_stop(odm, GF_FALSE);
 		} else {
 			gf_odm_play(odm);
@@ -2130,6 +2154,13 @@ void gf_scene_select_object(GF_Scene *scene, GF_ObjectManager *odm)
 		//do not update video pos for addons, this is done only when setting up the main video object
 		return;
 	}
+
+	//if same service jump at current media time
+	if (scene->selected_service_id == odm->ServiceID)
+		scene->root_od->media_start_time = gf_clock_media_time(odm->ck);
+	else
+		scene->root_od->media_start_time = 0;
+	scene->selected_service_id = odm->ServiceID;
 
 	if (odm->type == GF_STREAM_AUDIO) {
 		M_AudioClip *ac = (M_AudioClip *) gf_sg_find_node_by_name(scene->graph, "DYN_AUDIO1");
@@ -2168,9 +2199,8 @@ void gf_scene_select_object(GF_Scene *scene, GF_ObjectManager *odm)
 			mt->url.vals[0].url = gf_strdup(url);
 		}
 		mt->startTime = gf_scene_get_time(scene);
-		gf_node_changed((GF_Node *)mt, NULL);
 		if (odm->mo) gf_scene_force_size_to_video(scene, odm->mo);
-		scene->selected_service_id = odm->ServiceID;
+		gf_node_changed((GF_Node *)mt, NULL);
 		return;
 	}
 
@@ -3199,7 +3229,7 @@ void gf_scene_notify_associated_media_timeline(GF_Scene *scene, GF_AssociatedCon
 		GF_AddonMedia *prev_addon = gf_list_get(scene->declared_addons, i);
 		//we are adding a non splicing point: discard all previously declared addons
 		if (!addon->is_splicing
-		        //this is a splicing point, discard all previsously declared splicing addons
+		        //this is a splicing point, discard all previously declared splicing addons
 		        || prev_addon->is_splicing
 		   ) {
 			gf_scene_reset_addon(prev_addon, GF_TRUE);
@@ -3227,8 +3257,8 @@ void gf_scene_notify_associated_media_timeline(GF_Scene *scene, GF_AssociatedCon
 		addon->media_pts = addon_time->media_pts;
 		addon->media_timestamp = addon_time->media_timestamp;
 		addon->media_timescale = addon_time->media_timescale;
-		assert(addon_time->media_timescale);
-		assert(!addon->loop_detected);
+		gf_assert(addon_time->media_timescale);
+		gf_assert(!addon->loop_detected);
 	}
 
 	if (!addon->timeline_ready) {
@@ -3277,7 +3307,7 @@ Bool gf_scene_check_addon_restart(GF_AddonMedia *addon, u64 cts, u64 dts)
 	addon->media_pts = addon->past_media_pts;
 	addon->media_timestamp = addon->past_media_timestamp;
 	addon->media_timescale = addon->past_media_timescale;
-	assert(addon->past_media_timescale);
+	gf_assert(addon->past_media_timescale);
 	addon->past_media_pts = 0;
 	addon->past_media_timestamp = 0;
 	addon->past_media_timescale = 0;
@@ -3329,7 +3359,7 @@ Double gf_scene_adjust_time_for_addon(GF_AddonMedia *addon, Double clock_time, u
 s64 gf_scene_adjust_timestamp_for_addon(GF_AddonMedia *addon, u64 orig_ts)
 {
 	s64 media_ts_ms;
-	assert(addon->timeline_ready);
+	gf_assert(addon->timeline_ready);
 	if (addon->is_splicing) {
 		if (!addon->min_dts_set || (orig_ts<addon->splice_min_dts)) {
 			addon->splice_min_dts = orig_ts;
@@ -3375,3 +3405,5 @@ void gf_scene_switch_quality(GF_Scene *scene, Bool up)
 			gf_scene_switch_quality(odm->subscene, up);
 	}
 }
+
+#endif //!defined(GPAC_DISABLE_COMPOSITOR)

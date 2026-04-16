@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / RTP input module
@@ -240,8 +240,6 @@ static void gf_rtp_parse_mpeg4(GF_RTPDepacketizer *rtp, GF_RTPHeader *hdr, u8 *p
 		if (pay_start >= size) break;
 		num_au ++;
 	}
-//	assert(!au_hdr_size);
-
 	if (hdr->Marker)
 		rtp->flags |= GF_RTP_NEW_AU;
 	else
@@ -573,7 +571,7 @@ static void gf_rtp_parse_ttxt(GF_RTPDepacketizer *rtp, GF_RTPHeader *hdr, u8 *pa
 			rtp->sl_hdr.au_duration = duration;
 			/*done*/
 			if (hdr->Marker) {
-				assert(gf_bs_get_position(rtp->inter_bs) < 1<<7);
+				gf_assert(gf_bs_get_position(rtp->inter_bs) < 1<<7);
 				rtp->txt_len = (u8) gf_bs_get_position(rtp->inter_bs);
 				gf_rtp_ttxt_flush(rtp, ts);
 			}
@@ -581,7 +579,7 @@ static void gf_rtp_parse_ttxt(GF_RTPDepacketizer *rtp, GF_RTPHeader *hdr, u8 *pa
 			if (!rtp->inter_bs) rtp->inter_bs = gf_bs_new(NULL, 0, GF_BITSTREAM_WRITE);
 			/*first modifier, store effective written text*/
 			if (type==3) {
-				assert(gf_bs_get_position(rtp->inter_bs) < 1<<7);
+				gf_assert(gf_bs_get_position(rtp->inter_bs) < 1<<7);
 				rtp->txt_len = (u8) gf_bs_get_position(rtp->inter_bs);
 			}
 			if (ttu_len<6) break;
@@ -793,7 +791,7 @@ static void gf_rtp_hevc_vvc_flush(GF_RTPDepacketizer *rtp, GF_RTPHeader *hdr, Bo
 }
 #endif
 
-#if !defined(GPAC_DISABLE_HEVC) && !defined(GPAC_DISABLE_AV_PARSERS)
+#if !defined(GPAC_DISABLE_AV_PARSERS)
 
 static void gf_rtp_parse_hevc(GF_RTPDepacketizer *rtp, GF_RTPHeader *hdr, u8 *payload, u32 size)
 {
@@ -1042,7 +1040,7 @@ static void gf_rtp_parse_latm(GF_RTPDepacketizer *rtp, GF_RTPHeader *hdr, u8 *pa
 #endif
 
 #if GPAC_ENABLE_3GPP_DIMS_RTP
-static void gf_rtp_parse_3gpp_dims(GF_RTPDepacketizer *rtp, GF_RTPHeader *hdr, char *payload, u32 size)
+static void gf_rtp_parse_3gpp_dims(GF_RTPDepacketizer *rtp, GF_RTPHeader *hdr, u8 *payload, u32 size)
 {
 	u32 du_size, offset, dsize, hdr_size;
 	char *data, dhdr[6];
@@ -1092,7 +1090,7 @@ static void gf_rtp_parse_3gpp_dims(GF_RTPDepacketizer *rtp, GF_RTPHeader *hdr, c
 		case 3:
 			if (!rtp->inter_bs) return;
 			gf_bs_write_data(rtp->inter_bs, payload+offset, size-offset);
-			gf_bs_get_content(rtp->inter_bs, &data, &dsize);
+			gf_bs_get_content(rtp->inter_bs, (u8**)&data, &dsize);
 			gf_bs_del(rtp->inter_bs);
 
 			/*send unit header - if dims size is >0xFFFF, use our internal hack for large units*/
@@ -1974,9 +1972,16 @@ GF_RTPDepacketizer *gf_rtp_depacketizer_new(GF_SDPMedia *media, u32 hdr_payt, gf
 				nb_chan = 1;
 		} else {
 			payt = gf_rtp_get_payload_type(map, media);
-			if (!payt) return NULL;
-			clock_rate = map->ClockRate;
-			nb_chan = map->AudioChannels;
+			if (payt) {
+				clock_rate = map->ClockRate;
+				nb_chan = map->AudioChannels;
+			} else {
+				static_map = gf_rtp_is_valid_static_payt(map->PayloadType);
+				if (!static_map) return NULL;
+				clock_rate = static_map->clock_rate;
+				if (static_map->stream_type==GF_STREAM_AUDIO)
+					nb_chan = 1;
+			}
 		}
 	}
 
@@ -1993,7 +1998,7 @@ GF_RTPDepacketizer *gf_rtp_depacketizer_new(GF_SDPMedia *media, u32 hdr_payt, gf
 		return NULL;
 	}
 
-	assert(tmp->depacketize);
+	gf_assert(tmp->depacketize);
 	tmp->on_sl_packet = sl_packet_cbk;
 	tmp->udta = udta;
 	return tmp;
@@ -2028,7 +2033,7 @@ void gf_rtp_depacketizer_del(GF_RTPDepacketizer *rtp)
 GF_EXPORT
 void gf_rtp_depacketizer_process(GF_RTPDepacketizer *rtp, GF_RTPHeader *hdr, u8 *payload, u32 size)
 {
-	assert(rtp && rtp->depacketize);
+	gf_assert(rtp && rtp->depacketize);
 	rtp->sl_hdr.sender_ntp = hdr->recomputed_ntp_ts;
 	rtp->depacketize(rtp, hdr, payload, size);
 }

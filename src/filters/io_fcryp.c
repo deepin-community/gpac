@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2021-2022
+ *			Copyright (c) Telecom ParisTech 2021-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / file crypt/decrypt for full segment encryption filter
@@ -30,13 +30,14 @@
 #include <gpac/crypt.h>
 #include <gpac/network.h>
 
-#ifndef GPAC_DISABLE_CRYPTO
+#if !defined(GPAC_DISABLE_CRYPTO) && !defined(GPAC_DISABLE_CRYPTFILE)
 
 enum
 {
 	KEY_STATE_NONE=0,
 	KEY_STATE_CHANGED,
 	KEY_STATE_DOWNLOADING,
+	KEY_STATE_DOWNLOAD_DONE,
 	KEY_STATE_SET_IV,
 };
 
@@ -61,7 +62,9 @@ typedef struct
 	char *key_url;
 	bin128 IV;
 
+#ifdef GPAC_USE_DOWNLOADER
 	GF_DownloadSession *key_sess;
+#endif
 	GF_Err in_error;
 
 	u8 key_data[20];
@@ -114,6 +117,10 @@ static Bool cryptfile_on_filter_setup_error(GF_Filter *failed_filter, void *udta
 	//forward failure, but do not send a setup failure (gf_filter_setup_failure) which would remove this filter
 	//we let the final user (dashdmx) decide what to do
 	gf_filter_notification_failure(f, err, GF_FALSE);
+	//we however abort the filter
+	GF_CryptFileCtx *ctx = (GF_CryptFileCtx *) gf_filter_get_udta(f);
+	ctx->in_error = err;
+	gf_filter_abort(f);
 	return GF_FALSE;
 }
 
@@ -182,6 +189,30 @@ static void cryptfile_set_key(GF_CryptFileCtx *ctx)
 	ctx->reload_key_state = KEY_STATE_NONE;
 }
 
+#ifdef GPAC_USE_DOWNLOADER
+void cryptfin_net_io(void *usr_cbk, GF_NETIO_Parameter *parameter)
+{
+	GF_CryptFileCtx *ctx = (GF_CryptFileCtx *) usr_cbk;
+	if (parameter->msg_type==GF_NETIO_DATA_EXCHANGE) {
+		if (ctx->key_size + parameter->size > 16) {
+			GF_LOG(GF_LOG_ERROR, GF_LOG_DASH, ("[CryptFile] Invalid key size, greater than 16 bytes\n"))
+			ctx->reload_key_state = KEY_STATE_NONE;
+			ctx->in_error = GF_SERVICE_ERROR;
+			return;
+		}
+		memcpy(ctx->key_data + ctx->key_size, parameter->data, parameter->size);
+		ctx->key_size += parameter->size;
+	}
+	else if (parameter->msg_type==GF_NETIO_DATA_TRANSFERED) {
+		ctx->reload_key_state = KEY_STATE_DOWNLOAD_DONE;
+	} else if (parameter->msg_type==GF_NETIO_STATE_ERROR) {
+		GF_LOG(GF_LOG_ERROR, GF_LOG_DASH, ("[CryptFile] Error downloading key %s: %s\n",ctx->key_url,  gf_error_to_string(parameter->error) ))
+		ctx->reload_key_state = KEY_STATE_NONE;
+		ctx->in_error = parameter->error;
+	}
+}
+#endif
+
 static GF_Err cryptfin_process(GF_Filter *filter)
 {
 	GF_Err e;
@@ -211,45 +242,47 @@ static GF_Err cryptfin_process(GF_Filter *filter)
 	}
 
 	if (ctx->reload_key_state) {
+#ifdef GPAC_USE_DOWNLOADER
 		if (ctx->reload_key_state==KEY_STATE_CHANGED) {
+			ctx->key_size = 0;
+			//use a threaded session
 			if (!ctx->key_sess) {
 				GF_DownloadManager *dm = gf_filter_get_download_manager(filter);
-				ctx->key_sess = gf_dm_sess_new(dm, ctx->key_url, GF_NETIO_SESSION_NOT_THREADED | GF_NETIO_SESSION_NOT_CACHED, NULL, NULL, &e);
+				if (!dm) {
+					ctx->in_error = GF_NOT_SUPPORTED;
+					ctx->reload_key_state = KEY_STATE_NONE;
+					return ctx->in_error;
+				}
+				ctx->key_sess = gf_dm_sess_new(dm, ctx->key_url, GF_NETIO_SESSION_NOT_CACHED, cryptfin_net_io, ctx, &e);
 			} else {
-				e = gf_dm_sess_setup_from_url(ctx->key_sess, ctx->key_url, GF_TRUE);
+				e = gf_dm_sess_setup_from_url(ctx->key_sess, ctx->key_url, GF_FALSE);
 			}
 			if (e) {
 				GF_LOG(GF_LOG_ERROR, GF_LOG_DASH, ("[CryptFile] Failed to setup download session for key %s: %s\n", ctx->key_url, gf_error_to_string(e)))
 				return ctx->in_error = e;
 			}
 			ctx->reload_key_state = KEY_STATE_DOWNLOADING;
+			gf_dm_sess_process(ctx->key_sess);
 		}
+		//wait for end of download
 		if (ctx->reload_key_state==KEY_STATE_DOWNLOADING) {
-			u32 nb_read;
-			e = gf_dm_sess_fetch_data(ctx->key_sess, ctx->key_data + ctx->key_size, 100-ctx->key_size, &nb_read);
-			ctx->key_size += nb_read;
-			if (ctx->key_size > 16) {
-				GF_LOG(GF_LOG_ERROR, GF_LOG_DASH, ("[CryptFile] Invalid key size, greater than 16 bytes\n"))
-				return ctx->in_error = GF_SERVICE_ERROR;
-			}
-
-			if ((e<0) && (e != GF_IP_NETWORK_EMPTY)) {
-				ctx->in_error = e;
-				ctx->reload_key_state = KEY_STATE_NONE;
-				GF_LOG(GF_LOG_ERROR, GF_LOG_DASH, ("[CryptFile] Failed to download key %s: %s\n", ctx->key_url, gf_error_to_string(e)))
-				return e;
-			}
-			if (e == GF_EOS) {
-				cryptfile_set_key(ctx);
-				if (ctx->in_error) return ctx->in_error;
-			} else {
-				return GF_OK;
-			}
+			return GF_OK;
+		}
+		//good to go
+		if (ctx->reload_key_state==KEY_STATE_DOWNLOAD_DONE) {
+			cryptfile_set_key(ctx);
+			if (ctx->in_error) return ctx->in_error;
 		}
 		if (ctx->reload_key_state == KEY_STATE_SET_IV) {
 			gf_crypt_set_IV(ctx->crypt, ctx->IV, 16);
 			ctx->reload_key_state = KEY_STATE_NONE;
 		}
+#else
+		//todo
+		ctx->in_error = GF_NOT_SUPPORTED;
+		ctx->reload_key_state = KEY_STATE_NONE;
+		return ctx->in_error;
+#endif
 	}
 
 	if (ctx->fullfile) {
@@ -350,11 +383,12 @@ GF_FilterRegister CryptFinRegister = {
 	.finalize = cryptfile_finalize,
 	.configure_pid = cryptfile_configure_pid,
 	.process = cryptfin_process,
-	.probe_url = cryptfile_probe_url
+	.probe_url = cryptfile_probe_url,
+	.hint_class_type = GF_FS_CLASS_CRYPTO
 };
 
 
-const GF_FilterRegister *cryptfin_register(GF_FilterSession *session)
+const GF_FilterRegister *cryptin_register(GF_FilterSession *session)
 {
 	return &CryptFinRegister;
 }
@@ -473,7 +507,7 @@ static GF_Err cryptfout_process(GF_Filter *filter)
 		return ctx->in_error;
 
 	if (!pck_in) {
-		if (gf_filter_pid_is_eos(ctx->ipid)) {
+		if (gf_filter_pid_is_eos(ctx->ipid) && !gf_filter_pid_is_flush_eos(ctx->ipid)) {
 			if (!ctx->remain && ctx->file_done) {
 				gf_filter_pid_set_eos(ctx->opid);
 				return GF_EOS;
@@ -626,11 +660,12 @@ GF_FilterRegister CryptFoutRegister = {
 	.finalize = cryptfile_finalize,
 	.configure_pid = cryptfile_configure_pid,
 	.process = cryptfout_process,
-	.probe_url = cryptfile_probe_url
+	.probe_url = cryptfile_probe_url,
+	.hint_class_type = GF_FS_CLASS_CRYPTO
 };
 
 
-const GF_FilterRegister *cryptfout_register(GF_FilterSession *session)
+const GF_FilterRegister *cryptout_register(GF_FilterSession *session)
 {
 	return &CryptFoutRegister;
 }
@@ -656,11 +691,11 @@ GF_Err gf_cryptfout_push_key(GF_Filter *filter, bin128 *key, bin128 *IV)
 
 
 #else
-const GF_FilterRegister *cryptfin_register(GF_FilterSession *session)
+const GF_FilterRegister *cryptin_register(GF_FilterSession *session)
 {
 	return NULL;
 }
-const GF_FilterRegister *cryptfout_register(GF_FilterSession *session)
+const GF_FilterRegister *cryptout_register(GF_FilterSession *session)
 {
 	return NULL;
 }
@@ -669,4 +704,4 @@ GF_Err gf_cryptfout_push_key(GF_Filter *filter, bin128 *key, bin128 *IV)
 {
 	return GF_NOT_SUPPORTED;
 }
-#endif
+#endif // !defined(GPAC_DISABLE_CRYPTO) && !defined(GPAC_DISABLE_CRYPTFILE)

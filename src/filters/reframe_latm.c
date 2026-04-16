@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / AAC ADTS reframer filter
@@ -28,7 +28,7 @@
 #include <gpac/filters.h>
 #include <gpac/internal/media_dev.h>
 
-#ifndef GPAC_DISABLE_AV_PARSERS
+#if !defined(GPAC_DISABLE_AV_PARSERS) && !defined(GPAC_DISABLE_RFLATM)
 
 #define LATM_DMX_MAX_SIZE	8192
 
@@ -58,10 +58,10 @@ typedef struct
 	u32 timescale;
 
 	GF_M4ADecSpecInfo acfg;
-	
+
 	char *latm_buffer;
 	u32 latm_buffer_size, latm_buffer_alloc;
-	u32 dts_inc;
+	u32 dts_inc, sample_rate;
 
 	Bool is_playing;
 	Bool is_file, file_loaded;
@@ -77,6 +77,8 @@ typedef struct
 	u32 bitrate;
 	GF_Err in_error;
 	Bool copy_props;
+
+	u8 latm_dmx_buffer[LATM_DMX_MAX_SIZE];
 } GF_LATMDmxCtx;
 
 
@@ -130,7 +132,8 @@ static Bool latm_dmx_sync_frame_bs(GF_BitStream *bs, GF_M4ADecSpecInfo *acfg, u3
 
 						if (!same_cfg) {
 							if (amux_version==1) gf_latm_get_value(bs);
-							gf_m4a_parse_config(bs, acfg, GF_FALSE);
+							GF_Err e = gf_m4a_parse_config(bs, acfg, GF_FALSE);
+							if (e) return GF_FALSE;
 						}
 						frameLengthType = gf_bs_read_int(bs, 3);
 						if (!frameLengthType) {
@@ -263,7 +266,7 @@ static void latm_dmx_check_dur(GF_Filter *filter, GF_LATMDmxCtx *ctx)
 	cur_dur = 0;
 	cur_pos = gf_bs_get_position(bs);
 	while (latm_dmx_sync_frame_bs(bs, &acfg, 0, NULL, NULL)) {
-		if ((sr_idx>=0) && (sr_idx != acfg.base_sr_index)) {
+		if ((sr_idx>=0) && (sr_idx != acfg.base_sr_index) && sr_idx < GF_ARRAY_LENGTH(GF_M4ASampleRates) && GF_M4ASampleRates[sr_idx]) {
 			duration *= GF_M4ASampleRates[acfg.base_sr_index];
 			duration /= GF_M4ASampleRates[sr_idx];
 
@@ -273,7 +276,7 @@ static void latm_dmx_check_dur(GF_Filter *filter, GF_LATMDmxCtx *ctx)
 		sr_idx = acfg.base_sr_index;
 		duration += ctx->frame_size;
 		cur_dur += ctx->frame_size;
-		if (cur_dur > ctx->index * GF_M4ASampleRates[sr_idx]) {
+		if (cur_dur > ctx->index * GF_M4ASampleRates[sr_idx]  && sr_idx < GF_ARRAY_LENGTH(GF_M4ASampleRates) && GF_M4ASampleRates[sr_idx]) {
 			if (!ctx->index_alloc_size) ctx->index_alloc_size = 10;
 			else if (ctx->index_alloc_size == ctx->index_size) ctx->index_alloc_size *= 2;
 			ctx->indexes = gf_realloc(ctx->indexes, sizeof(LATMIdx)*ctx->index_alloc_size);
@@ -290,7 +293,7 @@ static void latm_dmx_check_dur(GF_Filter *filter, GF_LATMDmxCtx *ctx)
 	gf_bs_del(bs);
 	gf_fclose(stream);
 
-	if (sr_idx>=0) {
+	if (sr_idx>=0 && sr_idx < GF_ARRAY_LENGTH(GF_M4ASampleRates) && GF_M4ASampleRates[sr_idx]) {
 		if (!ctx->duration.num || (ctx->duration.num  * GF_M4ASampleRates[sr_idx] != duration * ctx->duration.den)) {
 			ctx->duration.num = (s32) duration;
 			ctx->duration.den = GF_M4ASampleRates[sr_idx];
@@ -364,7 +367,7 @@ static void latm_dmx_check_pid(GF_Filter *filter, GF_LATMDmxCtx *ctx)
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_DECODER_CONFIG, & PROP_DATA_NO_COPY(dsi_b, dsi_s) );
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_PROFILE_LEVEL, & PROP_UINT (ctx->acfg.audioPL) );
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_SAMPLE_RATE, & PROP_UINT(sr));
-
+	ctx->sample_rate = sr;
 	timescale = sr;
 
 	gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_TIMESCALE, & PROP_UINT(ctx->timescale ? ctx->timescale : timescale));
@@ -442,7 +445,7 @@ static Bool latm_dmx_process_event(GF_Filter *filter, const GF_FilterEvent *evt)
 
 static GFINLINE void latm_dmx_update_cts(GF_LATMDmxCtx *ctx)
 {
-	assert(ctx->dts_inc);
+	gf_assert(ctx->dts_inc);
 
 	if (ctx->timescale) {
 		u64 inc = ctx->dts_inc;
@@ -459,9 +462,13 @@ GF_Err latm_dmx_process(GF_Filter *filter)
 	GF_LATMDmxCtx *ctx = gf_filter_get_udta(filter);
 	GF_FilterPacket *pck, *dst_pck;
 	u32 pos;
-	u8 *data=NULL, *output;
+	u8 *data, *output;
 	u32 pck_size=0, prev_pck_size;
-	u64 cts = GF_FILTER_NO_TS;
+	u64 cts;
+
+restart:
+	cts = GF_FILTER_NO_TS;
+	data=NULL;
 
 	if (ctx->in_error)
 		return ctx->in_error;
@@ -523,9 +530,8 @@ GF_Err latm_dmx_process(GF_Filter *filter)
 
 	while (1) {
 		pos = (u32) gf_bs_get_position(ctx->bs);
-		u8 latm_buffer[LATM_DMX_MAX_SIZE];
 		u32 latm_frame_size = LATM_DMX_MAX_SIZE;
-		if (!latm_dmx_sync_frame_bs(ctx->bs,&ctx->acfg, &latm_frame_size, latm_buffer, NULL)) break;
+		if (!latm_dmx_sync_frame_bs(ctx->bs,&ctx->acfg, &latm_frame_size, ctx->latm_dmx_buffer, NULL)) break;
 
 		if (ctx->in_seek) {
 			u64 nb_samples_at_seek = (u64) (ctx->start_range * GF_M4ASampleRates[ctx->sr_idx]);
@@ -534,7 +540,10 @@ GF_Err latm_dmx_process(GF_Filter *filter)
 				ctx->in_seek = GF_FALSE;
 			}
 		}
-
+		//don't init until we get audio config
+		if (!ctx->acfg.base_sr) {
+			continue;
+		}
 		latm_dmx_check_pid(filter, ctx);
 
 		if (!ctx->is_playing) {
@@ -550,10 +559,13 @@ GF_Err latm_dmx_process(GF_Filter *filter)
 
 			if (ctx->src_pck) gf_filter_pck_merge_properties(ctx->src_pck, dst_pck);
 
-			memcpy(output, latm_buffer, latm_frame_size);
+			memcpy(output, ctx->latm_dmx_buffer, latm_frame_size);
 
 			gf_filter_pck_set_cts(dst_pck, ctx->cts);
-			gf_filter_pck_set_duration(dst_pck, ctx->dts_inc);
+			if (ctx->timescale && (ctx->timescale!=ctx->sample_rate))
+				gf_filter_pck_set_duration(dst_pck, (u32) gf_timestamp_rescale(ctx->dts_inc, ctx->sample_rate, ctx->timescale) );
+			else
+				gf_filter_pck_set_duration(dst_pck, ctx->dts_inc);
 			gf_filter_pck_set_framing(dst_pck, GF_TRUE, GF_TRUE);
 
 			/*xHE-AAC, check RAP*/
@@ -586,14 +598,22 @@ GF_Err latm_dmx_process(GF_Filter *filter)
 
 	if (pck) {
 		pos = (u32) gf_bs_get_position(ctx->bs);
-		assert(ctx->latm_buffer_size >= pos);
-		memmove(ctx->latm_buffer, ctx->latm_buffer+pos, ctx->latm_buffer_size - pos);
-		ctx->latm_buffer_size -= pos;
+		if (ctx->latm_buffer_size >= pos) {
+			memmove(ctx->latm_buffer, ctx->latm_buffer+pos, ctx->latm_buffer_size - pos);
+			ctx->latm_buffer_size -= pos;
+		} else {
+			ctx->latm_buffer_size = 0;
+		}
+		if (!ctx->src_pck) {
+			ctx->src_pck = pck;
+			gf_filter_pck_ref_props(&ctx->src_pck);
+		}
 		gf_filter_pid_drop_packet(ctx->ipid);
-		assert(!ctx->resume_from);
+		gf_assert(!ctx->resume_from);
 	} else {
 		ctx->latm_buffer_size = 0;
-		return latm_dmx_process(filter);
+		//avoid recursive call
+		goto restart;
 	}
 	return GF_OK;
 }
@@ -604,6 +624,7 @@ static void latm_dmx_finalize(GF_Filter *filter)
 	if (ctx->bs) gf_bs_del(ctx->bs);
 	if (ctx->indexes) gf_free(ctx->indexes);
 	if (ctx->latm_buffer) gf_free(ctx->latm_buffer);
+	if (ctx->src_pck) gf_filter_pck_unref(ctx->src_pck);
 }
 
 static const char *latm_dmx_probe_data(const u8 *data, u32 size, GF_FilterProbeScore *score)
@@ -611,11 +632,12 @@ static const char *latm_dmx_probe_data(const u8 *data, u32 size, GF_FilterProbeS
 	u32 nb_frames=0;
 	u32 nb_skip=0;
 	GF_M4ADecSpecInfo acfg;
+	acfg.base_sr_index = (u32)-1;
 	GF_BitStream *bs = gf_bs_new(data, size, GF_BITSTREAM_READ);
 	while (1) {
 		u32 nb_skipped = 0;
 		if (!latm_dmx_sync_frame_bs(bs, &acfg, 0, NULL, &nb_skipped)) break;
-		if (acfg.base_sr_index > sizeof(GF_M4ASampleRates) / sizeof(GF_M4ASampleRates[0]) || GF_M4ASampleRates[acfg.base_sr_index] == 0) {
+		if (acfg.base_sr_index >= GF_ARRAY_LENGTH(GF_M4ASampleRates) || GF_M4ASampleRates[acfg.base_sr_index] == 0) {
 			nb_frames = 0;
 			break;
 		}
@@ -676,18 +698,18 @@ GF_FilterRegister LATMDmxRegister = {
 	.configure_pid = latm_dmx_configure_pid,
 	.process = latm_dmx_process,
 	.probe_data = latm_dmx_probe_data,
-	.process_event = latm_dmx_process_event
+	.process_event = latm_dmx_process_event,
+	.hint_class_type = GF_FS_CLASS_FRAMING
 };
 
 
-const GF_FilterRegister *latm_dmx_register(GF_FilterSession *session)
+const GF_FilterRegister *rflatm_register(GF_FilterSession *session)
 {
 	return &LATMDmxRegister;
 }
-
 #else
-const GF_FilterRegister *latm_dmx_register(GF_FilterSession *session)
+const GF_FilterRegister *rflatm_register(GF_FilterSession *session)
 {
 	return NULL;
 }
-#endif // GPAC_DISABLE_AV_PARSERS
+#endif // #if !defined(GPAC_DISABLE_AV_PARSERS) && !defined(GPAC_DISABLE_RFLATM)

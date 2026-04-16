@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Rendering sub-project
@@ -24,10 +24,14 @@
  */
 
 #include <gpac/internal/compositor_dev.h>
+
+#ifndef GPAC_DISABLE_FONTS
+
 #include <gpac/modules/font.h>
 #include "visual_manager.h"
 #include "nodes_stacks.h"
 #include "texturing.h"
+
 
 struct _gf_ft_mgr
 {
@@ -84,7 +88,7 @@ void gf_font_predestroy(GF_Font *font)
 		while (gf_list_count(font->spans)) {
 			GF_TextSpan *ts = gf_list_get(font->spans, 0);
 			gf_list_rem(font->spans, 0);
-#ifndef GPAC_DISABLE_PLAYER
+#ifndef GPAC_DISABLE_COMPOSITOR
 			gf_node_dirty_set(ts->user, 0, 0);
 #endif
 			ts->user=NULL;
@@ -178,6 +182,7 @@ GF_Font *gf_font_manager_set_font_ex(GF_FontManager *fm, char **alt_fonts, u32 n
 	for (i=0; i<nb_fonts; i++) {
 		char *font_name;
 		const char *opt;
+		Bool is_def_font=GF_FALSE;
 		u32 weight_diff = 0xFFFFFFFF;
 		GF_Font *best_font = NULL;
 		GF_Font *font = fm->font;
@@ -187,24 +192,30 @@ GF_Font *gf_font_manager_set_font_ex(GF_FontManager *fm, char **alt_fonts, u32 n
 		if (!stricmp(font_name, "SERIF")) {
 			opt = gf_opts_get_key("FontCache", "FontSerif");
 			if (opt) font_name = (char*)opt;
+			is_def_font = GF_TRUE;
 		}
 		else if (!stricmp(font_name, "SANS") || !stricmp(font_name, "sans-serif")) {
 			opt = gf_opts_get_key("FontCache", "FontSans");
 			if (opt) font_name = (char*)opt;
+			is_def_font = GF_TRUE;
 		}
 		else if (!stricmp(font_name, "TYPEWRITER") || !stricmp(font_name, "monospace")) {
 			opt = gf_opts_get_key("FontCache", "FontFixed");
 			if (opt) font_name = (char*)opt;
+			is_def_font = GF_TRUE;
 		}
 
-		while (font) {
+		while (font && font_name) {
 			if (fm->wait_font_load && font->not_loaded && !check_only && !stricmp(font->name, font_name)) {
 				GF_Font *a_font = NULL;
 				if (font->get_alias) a_font = font->get_alias(font->udta);
 				if (!a_font || a_font->not_loaded)
 					return font;
 			}
-			if ((check_only || !font->not_loaded) && font->name && !stricmp(font->name, font_name)) {
+			if ((check_only || !font->not_loaded) && font->name
+				//def font may have a style concatenated if only fonts with styles other than none/italic/bold are present
+				&& (!stricmp(font->name, font_name) || (is_def_font && strncmp(font->name, font_name, strlen(font_name))))
+			) {
 				s32 fw;
 				s32 w;
 				u32 diff;
@@ -437,7 +448,7 @@ GF_TextSpan *gf_font_manager_create_span(GF_FontManager *fm, GF_Font *font, char
 }
 
 
-#ifndef GPAC_DISABLE_PLAYER
+#ifndef GPAC_DISABLE_COMPOSITOR
 
 typedef struct _span_internal
 {
@@ -470,7 +481,7 @@ void gf_font_manager_delete_span(GF_FontManager *fm, GF_TextSpan *span)
 	if (span->dy) gf_free(span->dy);
 	if (span->rot) gf_free(span->rot);
 
-#ifndef GPAC_DISABLE_PLAYER
+#ifndef GPAC_DISABLE_COMPOSITOR
 	if (span->ext) {
 		if (span->ext->path) gf_path_del(span->ext->path);
 #ifndef GPAC_DISABLE_3D
@@ -622,7 +633,7 @@ GF_Path *gf_font_span_create_path(GF_TextSpan *span)
 	return path;
 }
 
-#ifndef GPAC_DISABLE_PLAYER
+#ifndef GPAC_DISABLE_COMPOSITOR
 
 static void span_alloc_extensions(GF_TextSpan *span)
 {
@@ -1505,4 +1516,54 @@ picked:
 	}
 }
 
-#endif // GPAC_DISABLE_PLAYER
+#endif // GPAC_DISABLE_COMPOSITOR
+
+#else
+GF_TextSpan *gf_font_manager_create_span(GF_FontManager *fm, GF_Font *font, char *text, Fixed font_size, Bool needs_x_offset, Bool needs_y_offset, Bool needs_rotate, const char *xml_lang, Bool fliped_text, u32 styles, GF_Node *user)
+{
+	return NULL;
+}
+void gf_font_manager_delete_span(GF_FontManager *fm, GF_TextSpan *span)
+{
+}
+void gf_font_manager_refresh_span_bounds(GF_TextSpan *span)
+{
+}
+GF_Err gf_font_manager_register_font(GF_FontManager *fm, GF_Font *font)
+{
+	return GF_NOT_SUPPORTED;
+}
+GF_Err gf_font_manager_unregister_font(GF_FontManager *fm, GF_Font *font)
+{
+	return GF_NOT_SUPPORTED;
+}
+GF_Font *gf_font_manager_set_font(GF_FontManager *fm, char **alt_fonts, u32 nb_fonts, u32 styles)
+{
+	return NULL;
+}
+GF_Font *gf_font_manager_set_font_ex(GF_FontManager *fm, char **alt_fonts, u32 nb_fonts, u32 styles, Bool check_only)
+{
+	return NULL;
+}
+GF_Path *gf_font_span_create_path(GF_TextSpan *span)
+{
+	return NULL;
+}
+#ifndef GPAC_DISABLE_COMPOSITOR
+#include "visual_manager.h"
+
+void gf_font_spans_draw_2d(GF_List *spans, GF_TraverseState *tr_state, u32 hl_color, Bool force_texture_text, GF_Rect *bounds)
+{
+}
+void gf_font_spans_draw_3d(GF_List *spans, GF_TraverseState *tr_state, DrawAspect2D *asp, u32 text_hl, Bool force_texturing)
+{
+}
+void gf_font_spans_get_selection(GF_Node *node, GF_List *spans, GF_TraverseState *tr_state)
+{
+}
+void gf_font_spans_pick(GF_Node *node, GF_List *spans, GF_TraverseState *tr_state, GF_Rect *node_bounds, Bool use_dom_events, Drawable *drawable)
+{
+}
+#endif
+
+#endif // GPAC_DISABLE_FONTS

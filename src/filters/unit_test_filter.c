@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2017-2021
+ *			Copyright (c) Telecom ParisTech 2017-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / unit test filters
@@ -25,6 +25,8 @@
 
 #include <gpac/filters.h>
 #include <gpac/list.h>
+
+#ifndef GPAC_DISABLE_UNITS
 
 typedef struct
 {
@@ -68,7 +70,7 @@ static void test_pck_del(GF_Filter *filter, GF_FilterPid *pid, GF_FilterPacket *
 {
 	PIDCtx *stack = (PIDCtx *) gf_filter_pid_get_udta(pid);
 	stack->pck_del++;
-	assert(stack->nb_packets >= stack->pck_del);
+	gf_assert(stack->nb_packets >= stack->pck_del);
 	GF_LOG(GF_LOG_DEBUG, GF_LOG_APP, ("%s: Packet deleted - %d out there (%d sent %d destroyed)\n", gf_filter_get_name(filter), stack->nb_packets - stack->pck_del, stack->nb_packets, stack->pck_del));
 }
 
@@ -177,8 +179,8 @@ static GF_Err ut_filter_process_filter(GF_Filter *filter)
 		u32 data_offset=0;
 		PIDCtx *pidctx = gf_list_get(stack->pids, i);
 		GF_FilterPacket *pck = gf_filter_pid_get_packet(pidctx->src_pid);
-		assert (pck);
-		assert(pidctx == gf_filter_pid_get_udta(pidctx->src_pid));
+		gf_assert (pck);
+		gf_assert(pidctx == gf_filter_pid_get_udta(pidctx->src_pid));
 
 		data = gf_filter_pck_get_data(pck, &size);
 		gf_sha1_update(pidctx->sha_ctx, (u8*)data, size);
@@ -474,7 +476,7 @@ static GF_Err ut_filter_config_input(GF_Filter *filter, GF_FilterPid *pid, Bool 
 	for (i=0; i<count; i++) {
 		pidctx = gf_list_get(stack->pids, i);
 
-		//something is being reconfigured. We check we have the same custum arg, otherwise we do not support
+		//something is being reconfigured. We check we have the same custom arg, otherwise we do not support
 		if (pidctx->src_pid == pid) {
 			format = gf_filter_pid_get_property(pidctx->src_pid, GF_4CC('c','u','s','t') );
 			if (!format || !format->value.string || strcmp(format->value.string, stack->pid_att)) {
@@ -510,7 +512,7 @@ static GF_Err ut_filter_config_input(GF_Filter *filter, GF_FilterPid *pid, Bool 
 	if (!pidctx) return GF_OUT_OF_MEM;
 	pidctx->src_pid = pid;
 	gf_list_add(stack->pids, pidctx);
-	assert(pidctx->src_pid);
+	gf_assert(pidctx->src_pid);
 	
 	//coverage mode
 	if (stack->cov) {
@@ -808,7 +810,7 @@ GF_Err utfilter_initialize(GF_Filter *filter)
 
 		memset(&p, 0, sizeof(GF_PropertyValue));
 		p2=p;
-		for (i=GF_PROP_FORBIDEN; i<GF_PROP_LAST_DEFINED; i++) {
+		for (i=GF_PROP_FORBIDDEN; i<GF_PROP_LAST_DEFINED; i++) {
 			char dump[GF_PROP_DUMP_ARG_SIZE];
 			gf_props_get_type_name(i);
 			p.type = p2.type = i;
@@ -966,26 +968,27 @@ const GF_FilterRegister UTSourceRegister = {
 	.initialize = utfilter_initialize,
 	.finalize = ut_filter_finalize,
 	.process = ut_filter_process_source,
-	.update_arg = ut_filter_update_arg
+	.update_arg = ut_filter_update_arg,
+	.hint_class_type = GF_FS_CLASS_TOOL
 };
 
 
-const GF_FilterRegister *ut_filter_register(GF_FilterSession *session, Bool load_meta_filters)
+const GF_FilterRegister *ut_filter_register(GF_FilterSession *session)
 {
 	return &UTFilterRegister;
 }
-const GF_FilterRegister *ut_source_register(GF_FilterSession *session, Bool load_meta_filters)
+const GF_FilterRegister *ut_source_register(GF_FilterSession *session)
 {
 	return &UTSourceRegister;
 }
-const GF_FilterRegister *ut_sink_register(GF_FilterSession *session, Bool load_meta_filters)
+const GF_FilterRegister *ut_sink_register(GF_FilterSession *session)
 {
 	return &UTSinkRegister;
 }
-const GF_FilterRegister *ut_sink2_register(GF_FilterSession *session, Bool load_meta_filters)
+const GF_FilterRegister *ut_sink2_register(GF_FilterSession *session)
 {
 	return &UTSink2Register;
 }
 
-
+#endif //#ifndef GPAC_DISABLE_UNITS
 

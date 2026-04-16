@@ -2,7 +2,7 @@
 *			GPAC - Multimedia Framework C SDK
 *
 *			Authors: Jean Le Feuvre
-*			Copyright (c) Telecom ParisTech 2019-2021
+*			Copyright (c) Telecom ParisTech 2019-2023
 *					All rights reserved
 *
 *  This file is part of GPAC / software 3D rasterizer module
@@ -26,6 +26,7 @@
 
 #include "rast_soft.h"
 
+#ifndef GPAC_DISABLE_EVG
 
 
 #if defined(WIN32) && !defined(__GNUC__)
@@ -1019,7 +1020,7 @@ GF_Err evg_raster_render3d_path(GF_EVGSurface *surf, GF_Path *path, Float z)
 	int   n;         /* index of contour in outline     */
 	int   first;     /* index of first point in contour */
 	TPos _x, _y, _sx, _sy;
-	u32 size_y, fill_rule = 0;;
+	u32 size_y, fill_rule = 0;
 	EVG_Outline *outline;
 	GF_Matrix projModeView;
 	GF_EVGFragmentParam fparam;
@@ -1392,3 +1393,6 @@ GF_Err gf_evg_surface_set_depth_buffer(GF_EVGSurface *surf, Float *depth)
 	surf->ext3d->depth_buffer = depth;
 	return GF_OK;
 }
+
+
+#endif // GPAC_DISABLE_EVG

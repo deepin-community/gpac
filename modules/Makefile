@@ -14,18 +14,26 @@ else
 #PLUGDIRS+=freenect
 endif
 
-ifeq ($(CONFIG_ALSA),yes)
+ifeq ($(CONFIG_ALSA),no)
+else
 PLUGDIRS+=alsa
 endif
 
-ifeq ($(CONFIG_JACK),yes)
+ifeq ($(CONFIG_JACK),no)
+else
 PLUGDIRS+=jack
 endif
 
 ifeq ($(CONFIG_SDL),yes)
 PLUGDIRS+=sdl_out
 endif
-ifeq ($(CONFIG_PULSEAUDIO),yes)
+
+ifeq ($(CONFIG_CACA),yes)
+PLUGDIRS+=caca_out
+endif
+
+ifeq ($(CONFIG_PULSEAUDIO),no)
+else
 PLUGDIRS+=pulseaudio
 endif
 
@@ -70,7 +78,7 @@ endif
 #PLUGDIRS+=platinum
 #endif
 
-ifeq ($(DISABLE_PLAYER),yes)
+ifeq ($(DISABLE_COMPOSITOR),yes)
 PLUGDIRS=
 endif
 

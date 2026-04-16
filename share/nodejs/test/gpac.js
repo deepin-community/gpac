@@ -27,6 +27,7 @@ let memtrack=0;
 let is_verbose=false;
 let start_time=0;
 let custom_dash=false;
+let custom_httpout=false;
 
 let fileio_sources=false;
 let fileio_sinks=false;
@@ -73,6 +74,7 @@ print_usage = () => {
 	console.log("-task=N:      runs user test task every second for N seconds (0 means until end)");
 	console.log("-play=N:      overrides PLAY event in forward mode to the given start time in seconds");
 	console.log("-cdash:       test custom DASH algo");
+	console.log("-chttp:       test custom HTTP request handler");
 	console.log("-v:           enables info dump, property dump for PIDs and packets");
 	console.log("-h:           prints help");
 	console.log();
@@ -87,6 +89,7 @@ print_usage = () => {
 	console.log();
 	console.log('GPAC NodeJS version ' + gpac.version + ' libgpac ' + gpac.abi_major + ':' + gpac.abi_minor + '.' + gpac.abi_micro);
 	console.log('' + gpac.copyright_cite);
+
 	process.exit(0);
 }
 bad_param = (v) => {
@@ -262,6 +265,7 @@ args.forEach( val => {
 	else if (val == '-ib') fileio_sources = true;
 	else if (val == '-ob') fileio_sinks = true;
 	else if (val == '-cdash') custom_dash = true;
+	else if (val == '-chttp') custom_httpout = true;
 
 	else if (val.startsWith('-')) {
 		other_args.push(val);
@@ -296,11 +300,21 @@ if (custom_dash) {
 	};
 }
 
+let http_req = null;
+if (custom_httpout) {
+	http_req = {
+		on_request: function (req) {
+			console.log('got resquest ' + JSON.stringify(req));
+			req.headers_out = [{name: "x-GPAC", value: "foo"}];
+			req.close = function(error) {
+				console.log("Closing: " + gpac.e2s(error));
+			}
+			req.replys=0;
+			req.send();
+		}
+	};
+}
 
-gpac.set_rmt_fun( (msg) => {
-	console.log('RMT got message ' + msg);
-	gpac.rmt_send('ACK for ' + msg);
-}); 
 
 let fs;
 if (run_mode==RUN_SYNC) {
@@ -311,7 +325,7 @@ if (run_mode==RUN_SYNC) {
 
 fs.on_filter_new = function(f)
 {
-	if (is_verbose) 
+	if (is_verbose)
 		console.log('New filter created: ' + f.name);
 	if (dash_algo && (f.name=="dashin")) {
 		try {
@@ -320,9 +334,16 @@ fs.on_filter_new = function(f)
 			console.log('Failed to bind dash algo: ' + e);
 		}
 	}
+	else if (http_req && (f.name=="httpout")) {
+		try {
+			f.bind(http_req);
+		} catch (e) {
+			console.log('Failed to bind http request handler: ' + e);
+		}
+	}
 }
 fs.on_filter_del = function(f) {
-	if (is_verbose) 
+	if (is_verbose)
 		console.log('Filter deleted: ' + f.name);
 }
 

@@ -2,7 +2,7 @@
 *			GPAC - Multimedia Framework C SDK
 *
 *			Authors: Jean Le Feuvre - Romain Bouqueau
-*			Copyright (c) Telecom ParisTech 2000-2022
+*			Copyright (c) Telecom ParisTech 2000-2023
 *					All rights reserved
 *
 *  This file is part of GPAC / SDL audio and video module
@@ -428,10 +428,10 @@ static void SDLVid_DestroyObjects(SDLVidCtx *ctx)
 #endif
 #endif
 
-#if SDL_VERSION_ATLEAST(2,0,0) && !defined(GPAC_CONFIG_IOS)
 #include <gpac/media_tools.h>
 void SDLVid_SetIcon(SDLVidCtx *ctx)
 {
+#if SDL_VERSION_ATLEAST(2,0,0) && !defined(GPAC_CONFIG_IOS) && !defined(GPAC_DISABLE_AV_PARSERS)
 	u8 *buffer, *dec_buf;
 	u32 size, w, h, pf, Bpp, dst_size=0;
 	const char cfg[GF_MAX_PATH];
@@ -457,8 +457,8 @@ void SDLVid_SetIcon(SDLVidCtx *ctx)
 	}
 	gf_free(buffer);
 	gf_free(dec_buf);
-}
 #endif
+}
 
 
 GF_Err SDLVid_ResizeWindow(GF_VideoOutput *dr, u32 width, u32 height)
@@ -466,6 +466,8 @@ GF_Err SDLVid_ResizeWindow(GF_VideoOutput *dr, u32 width, u32 height)
 	Bool hw_reset;
 	SDLVID();
 	GF_Event evt;
+
+	if (!width || !height) return GF_BAD_PARAM;
 
 	/*lock X mutex to make sure the event queue is not being processed*/
 	gf_mx_p(ctx->evt_mx);
@@ -507,9 +509,6 @@ GF_Err SDLVid_ResizeWindow(GF_VideoOutput *dr, u32 width, u32 height)
 		SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, nb_bits);
 		SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, nb_bits);
 
-		assert(width);
-		assert(height);
-
 #if SDL_VERSION_ATLEAST(2,0,0)
 		if (ctx->hidden)
 			flags |= SDL_WINDOW_HIDDEN;
@@ -520,6 +519,9 @@ GF_Err SDLVid_ResizeWindow(GF_VideoOutput *dr, u32 width, u32 height)
 		/* Set the correct attributes for MASK and MAJOR version */
 		SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
 		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+#endif
 #endif
 
 		if (!ctx->screen) {
@@ -531,9 +533,7 @@ GF_Err SDLVid_ResizeWindow(GF_VideoOutput *dr, u32 width, u32 height)
 			GF_LOG(GF_LOG_INFO, GF_LOG_MMIO, ("[SDL] Window created\n"));
 			dr->window_id = SDL_GetWindowID(ctx->screen);
 
-#if !defined(GPAC_CONFIG_IOS)
 			SDLVid_SetIcon(ctx);
-#endif
 
 			/*creating a window, at least on OSX, changes the locale and screws up float parsing !!
 			force setting the local back and pray that it will be changed before any other atof/strtod is called
@@ -584,7 +584,7 @@ GF_Err SDLVid_ResizeWindow(GF_VideoOutput *dr, u32 width, u32 height)
 
 
 		if (!ctx->disable_vsync)
-			ctx->disable_vsync = gf_opts_get_bool("core", "disable-vsync");
+			ctx->disable_vsync = !gf_module_get_bool((GF_BaseInterface *)dr, "vsync");
 
 		if (ctx->disable_vsync) {
 #if defined(__APPLE__) && !defined(GPAC_CONFIG_IOS)
@@ -650,9 +650,7 @@ GF_Err SDLVid_ResizeWindow(GF_VideoOutput *dr, u32 width, u32 height)
 			}
 			dr->window_id = SDL_GetWindowID(ctx->screen);
 
-#if SDL_VERSION_ATLEAST(2,0,0) && !defined(GPAC_CONFIG_IOS)
 			SDLVid_SetIcon(ctx);
-#endif
 
 			/*see above note*/
 #ifndef _WIN32_WCE
@@ -663,7 +661,7 @@ GF_Err SDLVid_ResizeWindow(GF_VideoOutput *dr, u32 width, u32 height)
 		}
 		if ( !ctx->renderer ) {
 			u32 flags = SDL_RENDERER_ACCELERATED;
-			if (! gf_opts_get_bool("core", "disable-vsync")) {
+			if (gf_module_get_bool((GF_BaseInterface *)dr, "vsync")) {
 				flags |= SDL_RENDERER_PRESENTVSYNC;
 			}
 
@@ -777,12 +775,11 @@ static Bool SDLVid_InitializeWindow(SDLVidCtx *ctx, GF_VideoOutput *dr)
 	{
 		SDL_Rect** modes;
 		modes = SDL_ListModes(NULL, SDL_FULLSCREEN|SDL_HWSURFACE);
-		assert( (modes != (SDL_Rect**)0));
 		if ( modes == (SDL_Rect**)-1 ) {
 			fprintf(stderr, "SDL : DONT KNOW WHICH MODE TO USE, using 640x480\n");
 			dr->max_screen_width = 640;
 			dr->max_screen_height = 480;
-		} else {
+		} else if (modes) {
 			int i;
 			dr->max_screen_width = 0;
 			for (i=0; modes[i]; ++i) {
@@ -993,14 +990,14 @@ Bool SDLVid_ProcessMessageQueue(SDLVidCtx *ctx, GF_VideoOutput *dr)
 		case SDL_TEXTINPUT: /* Since SDL 1.3, text-input is handled in a specific event */
 		{
 			u32 len = (u32) strlen( sdl_evt.text.text);
-			u32 ucs4_len;
-			assert( len < 5 );
-			ucs4_len = utf8_to_ucs4 (&(gpac_evt.character.unicode_char), len, (unsigned char*)(sdl_evt.text.text));
-			if (ucs4_len) {
-				gpac_evt.type = GF_EVENT_TEXTINPUT;
-				dr->on_event(dr->evt_cbk_hdl, &gpac_evt);
+			if (len < 5 ) {
+				gpac_evt.character.window_id = dr->window_id;
+				u32 ucs4_len = utf8_to_ucs4 (&(gpac_evt.character.unicode_char), len, (unsigned char*)(sdl_evt.text.text));
+				if (ucs4_len) {
+					gpac_evt.type = GF_EVENT_TEXTINPUT;
+					dr->on_event(dr->evt_cbk_hdl, &gpac_evt);
+				}
 			}
-			gpac_evt.character.window_id = dr->window_id;
 			break;
 		}
 #endif /* SDL_TEXTINPUTEVENT_TEXT_SIZE */
@@ -1350,7 +1347,7 @@ GF_Err SDLVid_SetFullScreen(GF_VideoOutput *dr, Bool bFullScreenOn, u32 *screen_
 #if ! ( SDL_VERSION_ATLEAST(2,0,0) )
 		u32 flags = ctx->output_3d ? SDL_GL_FULLSCREEN_FLAGS : SDL_FULLSCREEN_FLAGS;
 #endif
-		Bool switch_res = gf_opts_get_bool("core", "switch-vres");
+		Bool switch_res = gf_module_get_bool((GF_BaseInterface*)dr, "switch-vres");
 		if (!dr->max_screen_width || !dr->max_screen_height) switch_res = GF_TRUE;
 
 		ctx->store_width = *screen_width;
@@ -1434,7 +1431,7 @@ GF_Err SDLVid_SetBackbufferSize(GF_VideoOutput *dr, u32 newWidth, u32 newHeight,
 
 	if (ctx->output_3d) return GF_BAD_PARAM;
 
-	opt = gf_opts_get_key("core", "hwvmem");
+	opt = gf_module_get_key((GF_BaseInterface*)dr, "hwvmem");
 	if (system_mem) {
 		if (opt && !strcmp(opt, "always")) system_mem = GF_FALSE;
 	} else {
@@ -1568,13 +1565,19 @@ static GF_Err SDLVid_Flush(GF_VideoOutput *dr, GF_Window *dest)
 
 	if (ctx->output_3d) {
 		//with SDL2 we have to disable vsync by overriding swap interval
-#if defined(__APPLE__) && !defined(GPAC_CONFIG_IOS)
+#if defined(__APPLE__) && !defined(GPAC_CONFIG_IOS) && !defined(GPAC_DISABLE_3D)
 		if (ctx->disable_vsync) {
 			GLint sync = 0;
 			CGLContextObj gl_ctx = CGLGetCurrentContext();
 			CGLSetParameter(gl_ctx, kCGLCPSwapInterval, &sync);
 		}
 #endif
+
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+		void gpac_on_video_swap();
+		gpac_on_video_swap();
+#endif
+
 		SDL_GL_SwapWindow(ctx->screen);
 		return GF_OK;
 	}
@@ -1957,7 +1960,7 @@ static GF_Err SDL_Blit(GF_VideoOutput *dr, GF_VideoSurface *video_src, GF_Window
 	case GF_PIXEL_YUV_10:
 		need_copy=1;
 		pool = &ctx->pool_yuv;
-		format=SDL_PIXELFORMAT_YV12;
+		format=SDL_PIXELFORMAT_IYUV;
 		break;
 	/*FIXME we need to upgrade our SDL build*/
 #if !defined(GPAC_CONFIG_IOS) && SDL_VERSION_ATLEAST(2,0,0)
@@ -2165,17 +2168,25 @@ static GF_Err SDL_Blit(GF_VideoOutput *dr, GF_VideoSurface *video_src, GF_Window
 
 #endif
 
+static GF_GPACArg SDLArgs[] = {
+	GF_DEF_ARG("vsync", NULL, "enable vertical synchro", "true", NULL, GF_ARG_BOOL, 0),
+	GF_DEF_ARG("switch-vres", NULL, "enable resolution switching of display", "false", NULL, GF_ARG_BOOL, 0),
+	GF_DEF_ARG("defer", NULL, "enable defer mode when bliting", "false", NULL, GF_ARG_BOOL, 0),
+	GF_DEF_ARG("hwvmem", NULL, "specify (2D rendering only) memory type of main video backbuffer. Depending on the scene type, this may drastically change the playback speed\n"
+ "- always: always on hardware\n"
+ "- never: always on system memory\n"
+ "- auto: selected by GPAC based on content type (graphics or video)", "auto", "auto|always|never", GF_ARG_INT, GF_ARG_HINT_EXPERT|GF_ARG_SUBSYS_VIDEO),
+	{0},
+};
+
 void *SDL_NewVideo()
 {
-#if SDL_VERSION_ATLEAST(2,0,0)
-	const char *opt;
-#endif
 	SDLVidCtx *ctx;
 	GF_VideoOutput *driv;
 
 	driv = (GF_VideoOutput*)gf_malloc(sizeof(GF_VideoOutput));
 	memset(driv, 0, sizeof(GF_VideoOutput));
-	GF_REGISTER_MODULE_INTERFACE(driv, GF_VIDEO_OUTPUT_INTERFACE, "SDL Video Output", "gpac distribution");
+	GF_REGISTER_MODULE_INTERFACE(driv, GF_VIDEO_OUTPUT_INTERFACE, "sdl", "gpac distribution");
 
 	ctx = (SDLVidCtx*)gf_malloc(sizeof(SDLVidCtx));
 	memset(ctx, 0, sizeof(SDLVidCtx));
@@ -2191,9 +2202,12 @@ void *SDL_NewVideo()
 	driv->SetFullScreen = SDLVid_SetFullScreen;
 	driv->Flush = SDLVid_Flush;
 	driv->ProcessEvent = SDLVid_ProcessEvent;
+
+	driv->args = SDLArgs;
+	driv->description = "Video output using SDL";
+
 	/*no offscreen opengl with SDL*/
 	driv->hw_caps |= GF_VIDEO_HW_OPENGL;
-
 	/*no YUV hardware blitting in SDL (only overlays)*/
 	driv->hw_caps |= GF_VIDEO_HW_HAS_RGB ;
 
@@ -2201,11 +2215,7 @@ void *SDL_NewVideo()
 
 	driv->hw_caps |= GF_VIDEO_HW_HAS_YUV | GF_VIDEO_HW_HAS_STRETCH | GF_VIDEO_HW_HAS_RGBA;
 
-
-	opt = gf_opts_get_key("core", "sdl-defer");
-	ctx->enable_defer_mode = 0;
-	if (opt && !strcmp(opt, "yes"))
-		ctx->enable_defer_mode = 1;
+	ctx->enable_defer_mode = gf_module_get_bool((GF_BaseInterface *)driv, "defer");
 
 	if (! ctx->enable_defer_mode)
 		driv->hw_caps |= GF_VIDEO_HW_DIRECT_ONLY;

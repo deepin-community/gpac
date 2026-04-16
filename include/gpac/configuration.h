@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2008-2022
+ *			Copyright (c) Telecom ParisTech 2008-2023
  *					All rights reserved
  *
  *  This file is part of GPAC
@@ -46,6 +46,8 @@ This section documents the base data types of GPAC.
 /*Configuration for visual studio, 32/64 bits */
 #if defined(_WIN32) && !defined(_WIN32_WCE)
 
+#define WIN32_LEAN_AND_MEAN
+
 #ifndef GPAC_MP4BOX_MINI
 
 #define GPAC_HAS_SSL
@@ -66,8 +68,15 @@ This section documents the base data types of GPAC.
 #define GPAC_HAS_FFMPEG
 #define GPAC_HAS_DTAPI
 #define GPAC_HAS_HTTP2
+#define GPAC_HAS_LIBCAPTION
+#define GPAC_HAS_MPEGHDECODER
+#define GPAC_HAS_LIBCACA
+#define GPAC_HAS_CURL
+#define GPAC_HAS_FD
 
-/*IPv6 enabled - for win32, this is evaluated at compile time, !! do not uncomment !!*/
+#ifdef _WIN64
+//#define GPAC_HAS_NGTCP2
+#endif
 
 #define GPAC_MEMORY_TRACKING
 
@@ -127,6 +136,9 @@ This section documents the base data types of GPAC.
 #define GPAC_HAS_JPEG
 #define GPAC_HAS_PNG
 #define GPAC_HAS_HTTP2
+#define GPAC_HAS_IFADDRS
+#define GPAC_HAS_LIBCAPTION
+#define GPAC_HAS_MPEGHDECODER
 
 /*Configuration for XCode OSX (not iOS) */
 #elif defined(GPAC_CONFIG_DARWIN) && !defined(GPAC_CONFIG_IOS)
@@ -136,6 +148,9 @@ This section documents the base data types of GPAC.
 #define GPAC_HAS_SSL
 //#endif
 #define GPAC_HAS_SOCK_UN
+
+#define GPAC_HAS_FD
+#define GPAC_HAS_IFADDRS
 
 //64-bits OSX
 #ifdef __LP64__
@@ -151,8 +166,14 @@ This section documents the base data types of GPAC.
 #define GPAC_HAS_VTB
 #define GPAC_HAS_HTTP2
 #define GPAC_HAS_POLL
+#define GPAC_HAS_LIBCACA
+
+#define GPAC_HAS_NGTCP2
 
 #define GPAC_MEMORY_TRACKING
+
+#define GPAC_HAS_LIBCAPTION
+#define GPAC_HAS_MPEGHDECODER
 
 /*Configuration for XCode iOS*/
 #elif defined(GPAC_CONFIG_DARWIN) && defined(GPAC_CONFIG_IOS)
@@ -167,6 +188,7 @@ This section documents the base data types of GPAC.
 #define GPAC_HAS_JPEG
 #define GPAC_HAS_PNG
 #define GPAC_HAS_SOCK_UN
+#define GPAC_HAS_IFADDRS
 
 /*don't use fixed-point version on iOS, not needed*/
 //#define GPAC_FIXED_POINT
@@ -191,6 +213,8 @@ This section documents the base data types of GPAC.
 #define GPAC_HAS_VTB
 #define GPAC_HAS_HTTP2
 #define GPAC_HAS_POLL
+#define GPAC_HAS_LIBCAPTION
+#define GPAC_HAS_MPEGHDECODER
 
 /*Configuration for Symbian*/
 #elif defined(__SYMBIAN32__)
@@ -208,8 +232,11 @@ This section documents the base data types of GPAC.
 #endif
 
 
+#define GPAC_SCHED_DEFAULT "free"
+
+
 /*disables player */
-//#define GPAC_DISABLE_PLAYER
+//#define GPAC_DISABLE_COMPOSITOR
 
 /*disables scene manager */
 //#define GPAC_DISABLE_SMGR
@@ -322,9 +349,6 @@ this macro is currently defined in setup.h */
 /*disables IETF RTP/SDP/RTSP*/
 //#define GPAC_DISABLE_STREAMING
 
-/*disables dashclient */
-//#define GPAC_DISABLE_DASH_CLIENT
-
 /*disables Timed Text support */
 //#define GPAC_DISABLE_TTXT
 
@@ -337,15 +361,8 @@ this macro is currently defined in setup.h */
 /*disables DASH MPD */
 //#define GPAC_DISABLE_MPD
 
-/*disables HEVC */
-//#define GPAC_DISABLE_HEVC
-
-/*disables AOM AV1 */
-//#define GPAC_DISABLE_AV1
-
 /*disables VOBSUB */
 //#define GPAC_DISABLE_VOBSUB
-
 
 /*! @} */
 

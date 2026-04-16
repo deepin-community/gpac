@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / FreeType font engine module
@@ -28,6 +28,9 @@
 #include <gpac/list.h>
 #include <gpac/utf.h>
 #include <gpac/tools.h>
+
+#ifndef GPAC_DISABLE_EVG
+
 
 #if !defined(__GNUC__)
 # if defined(_WIN32_WCE)
@@ -92,8 +95,6 @@ static const char * BEST_SANS_FONTS[] = {
  */
 static Bool isBestFontFor(const char * listOfFonts[], const char * currentBestFont, const char * fontName) {
 	u32 i;
-	assert( fontName );
-	assert( listOfFonts );
 	for (i = 0 ; listOfFonts[i]; i++) {
 		const char * best = listOfFonts[i];
 		if (!stricmp(best, fontName))
@@ -140,17 +141,6 @@ static Bool ft_enum_fonts(void *cbck, char *file_name, char *file_path, GF_FileE
 			if (!szfont) continue;
 			strcpy(szfont, face->family_name);
 
-			/*remember first font found which looks like a alphabetical one*/
-			if (!ftpriv->font_default) {
-				u32 gidx;
-				FT_Select_Charmap(face, FT_ENCODING_UNICODE);
-				gidx = FT_Get_Char_Index(face, (u32) 'a');
-				if (gidx) gidx = FT_Get_Char_Index(face, (u32) 'z');
-				if (gidx) gidx = FT_Get_Char_Index(face, (u32) '1');
-				if (gidx) gidx = FT_Get_Char_Index(face, (u32) '@');
-				if (gidx) ftpriv->font_default = gf_strdup(szfont);
-			}
-
 			bold = italic = 0;
 
 			if (face->style_name) {
@@ -173,8 +163,34 @@ static Bool ft_enum_fonts(void *cbck, char *file_name, char *file_path, GF_FileE
 			}
 			gf_opts_set_key("FontCache", szfont, file_path);
 
+			/*remember first font found which looks like a alphabetical one*/
+			if (!ftpriv->font_default) {
+				u32 gidx;
+				FT_Select_Charmap(face, FT_ENCODING_UNICODE);
+				gidx = FT_Get_Char_Index(face, (u32) 'a');
+				if (gidx) gidx = FT_Get_Char_Index(face, (u32) 'z');
+				if (gidx) gidx = FT_Get_Char_Index(face, (u32) '1');
+				if (gidx) gidx = FT_Get_Char_Index(face, (u32) '@');
+				if (gidx) ftpriv->font_default = gf_strdup(szfont);
+			}
+
 			/*try to assign default fixed fonts*/
 			if (!bold && !italic) {
+
+				/* if a bold or italic default has been set, prefer a regular one */
+				if (ftpriv->font_default && (strstr(ftpriv->font_default, " Bold") || strstr(ftpriv->font_default, " Italic"))) {
+					u32 gidx;
+					FT_Select_Charmap(face, FT_ENCODING_UNICODE);
+					gidx = FT_Get_Char_Index(face, (u32) 'a');
+					if (gidx) gidx = FT_Get_Char_Index(face, (u32) 'z');
+					if (gidx) gidx = FT_Get_Char_Index(face, (u32) '1');
+					if (gidx) gidx = FT_Get_Char_Index(face, (u32) '@');
+					if (gidx) {
+						gf_free(ftpriv->font_default);
+						ftpriv->font_default = gf_strdup(szfont);
+					}
+				}
+
 				strcpy(szfont, face->family_name);
 				strlwr(szfont);
 
@@ -252,6 +268,7 @@ static void ft_rescan_fonts(GF_FontReader *dr)
 		const char *opt;
 		char fkey[GF_MAX_PATH];
 		const char *key = gf_opts_get_key_name("FontCache", i);
+		if (!key) continue;
 		opt = gf_opts_get_key("FontCache", key);
 		if (!strchr(opt, '/') && !strchr(opt, '\\')) continue;
 
@@ -302,7 +319,7 @@ static void ft_rescan_fonts(GF_FontReader *dr)
 	gf_opts_set_key("FontCache", "FontSans", ftpriv->font_sans);
 	gf_opts_save();
 
-	GF_LOG(GF_LOG_INFO, GF_LOG_MODULE, ("[FreeType] Font directories scanned\n"));
+	GF_LOG(GF_LOG_INFO, GF_LOG_MODULE, ("[FreeType] Font directories scanned - defaults: SANS %s FIXED %s SERIF %s\n", ftpriv->font_sans, ftpriv->font_fixed, ftpriv->font_serif));
 }
 
 
@@ -407,7 +424,7 @@ rescan_fonts:
 	}
 	if (rescan==2) {
 		void gf_get_default_font_dir(char szPath[GF_MAX_PATH]);
-		
+
 		char szPath[GF_MAX_PATH];
 		//check if font directory is default one, if not reset and rescan
 		gf_get_default_font_dir(szPath);
@@ -499,6 +516,7 @@ static GF_Err ft_set_font(GF_FontReader *dr, const char *OrigFontName, u32 style
 	char *fontName;
 	const char *opt;
 	Bool is_def_font = GF_FALSE;
+	Bool no_style_check = GF_FALSE;
 	FTBuilder *ftpriv = (FTBuilder *)dr->udta;
 
 	fontName = (char *) OrigFontName;
@@ -521,6 +539,11 @@ static GF_Err ft_set_font(GF_FontReader *dr, const char *OrigFontName, u32 style
 		fontName = ftpriv->font_fixed;
 		is_def_font = GF_TRUE;
 		OrigFontName = "TYPEWRITER";
+	}
+	if (!styles) {
+		if (ftpriv->font_fixed && !strcmp(fontName, ftpriv->font_fixed)) no_style_check = GF_TRUE;
+		else if (ftpriv->font_sans && !strcmp(fontName, ftpriv->font_sans)) no_style_check = GF_TRUE;
+		else if (ftpriv->font_serif && !strcmp(fontName, ftpriv->font_serif)) no_style_check = GF_TRUE;
 	}
 
 	/*first look in loaded fonts*/
@@ -567,7 +590,7 @@ checkFont:
 		//handle collections, figure out which face matches our styles
 		num_faces = face->num_faces;
 		for (i=0; i<num_faces; i++) {
-			if ( ft_check_face(face, NULL, checkStyles)) {
+			if (no_style_check || ft_check_face(face, NULL, checkStyles)) {
 				gf_free(fname);
 				gf_list_add(ftpriv->loaded_fonts, face);
 				ftpriv->active_face = face;
@@ -672,7 +695,7 @@ typedef struct
 	s32 last_x, last_y;
 } ft_outliner;
 
-#if defined(GPAC_CONFIG_IOS) || defined(GPAC_CONFIG_ANDROID)
+#if defined(GPAC_CONFIG_ANDROID)
 #define FTCST
 #else
 #define FTCST const
@@ -790,7 +813,7 @@ static GF_FontReader *ft_load()
 	FTBuilder *ftpriv;
 	dr = gf_malloc(sizeof(GF_FontReader));
 	memset(dr, 0, sizeof(GF_FontReader));
-	GF_REGISTER_MODULE_INTERFACE(dr, GF_FONT_READER_INTERFACE, "FreeType Font Reader", "gpac distribution");
+	GF_REGISTER_MODULE_INTERFACE(dr, GF_FONT_READER_INTERFACE, "freetype", "gpac distribution");
 
 	ftpriv = gf_malloc(sizeof(FTBuilder));
 	memset(ftpriv, 0, sizeof(FTBuilder));
@@ -829,8 +852,6 @@ static void ft_delete(GF_BaseInterface *ifce)
 	if (ftpriv->font_sans) gf_free(ftpriv->font_sans);
 	if (ftpriv->font_fixed) gf_free(ftpriv->font_fixed);
 	if (ftpriv->font_default) gf_free(ftpriv->font_default);
-	assert(!gf_list_count(ftpriv->loaded_fonts) );
-
 	gf_list_del(ftpriv->loaded_fonts);
 
 	gf_free(dr->udta);
@@ -870,3 +891,4 @@ GPAC_MODULE_STATIC_DECLARATION( ftfont )
 
 #endif
 
+#endif //GPAC_DISABLE_EVG

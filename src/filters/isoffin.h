@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / ISOBMFF reader filter
@@ -41,37 +41,45 @@
 
 //#define DASH_USE_PULL
 
-enum
-{
+GF_OPT_ENUM (ISOMReaderScalableTileLoadMode,
 	MP4DMX_SPLIT=0,
 	MP4DMX_SPLIT_EXTRACTORS,
 	MP4DMX_SINGLE,
-};
+);
 
-enum
-{
+GF_OPT_ENUM (ISOMReaderParamSetsExtractMode,
 	MP4DMX_XPS_AUTO=0,
 	MP4DMX_XPS_KEEP,
 	MP4DMX_XPS_REMOVE,
-};
+);
+
+GF_OPT_ENUM (ISOMReaderEditListMode,
+	EDITS_AUTO=0,
+	EDITS_NO,
+	EDITS_STRICT,
+);
 
 typedef struct
 {
 	//options
 	char *src, *initseg;
-	Bool allt, noedit, itt, itemid;
-	u32 smode;
+	Bool allt, itt, itemid;
+	ISOMReaderScalableTileLoadMode smode;
+	ISOMReaderEditListMode edits;
 	u32 stsd;
 	Bool expart;
-	Bool alltk;
+	Bool alltk, keepc;
 	u32 frame_size;
 	char* tkid;
-	Bool analyze;
-	u32 xps_check;
+	u32 analyze;
+	Bool norw;
+	ISOMReaderParamSetsExtractMode xps_check;
 	char *catseg;
 	Bool sigfrag;
-	Bool nocrypt, strtxt, nodata;
+	Bool nocrypt, strtxt, lightp;
+	u32 nodata;
 	u32 mstore_purge, mstore_samples, mstore_size;
+	s32 ctso;
 
 	//internal
 
@@ -90,6 +98,7 @@ typedef struct
 	//fragmented file to be refreshed before processing it
 	Bool refresh_fragmented;
 	Bool input_is_stop;
+	Bool was_aborted;
 	u64 missing_bytes, last_size;
 
 	Bool seg_name_changed;
@@ -108,6 +117,7 @@ typedef struct
 	u32 has_pending_segments, nb_force_flush;
 
 	Bool disconnected;
+	Bool in_is_eos;
 	Bool no_order_check;
 	u32 moov_not_loaded;
     Bool invalid_segment;
@@ -128,6 +138,11 @@ typedef struct
 	u64 last_min_offset;
 	GF_Err in_error;
 	Bool force_fetch;
+
+	u32 extkid, orig_id;
+	GF_ISOFile *extkmov;
+	u32 extk_flags;
+	Bool extk;
 } ISOMReader;
 
 typedef struct
@@ -146,12 +161,13 @@ typedef struct
 	GF_ISOSample *sample;
 	u64 sample_data_offset, last_valid_sample_data_offset;
 	GF_Err last_state;
-	Bool sap_3;
+	Bool sap_3, switch_frame;
 	GF_ISOSampleRollType sap_4_type;
 	s32 roll;
 	u32 xps_mask;
+	u32 cts_offset;
 	
-	u32 sample_num;
+	u32 sample_num, sample_last;
 	s64 ts_offset;
 
 	/*for edit lists*/
@@ -187,10 +203,9 @@ typedef struct
 	u32 last_sample_desc_index;
 	u32 isLeading, dependsOn, dependedOn, redundant;
 	u64 dts, cts;
-	u8 skip_byte_block, crypt_byte_block;
+	u32 skip_byte_block, crypt_byte_block;
 	u32 au_seq_num;
 	u64 sender_ntp, ntp_at_server_ntp;
-	u32 au_duration;
 
 	u64 isma_BSO;
 	Bool pck_encrypted;
@@ -205,6 +220,12 @@ typedef struct
 	GF_AVCConfig *avcc;
 	GF_VVCConfig *vvcc;
 	u32 dsi_crc;
+	u64 hint_first_tfdt;
+
+	GF_FilterPacket *pck;
+	u32 alloc_size;
+
+	u32 nb_empty_retry;
 } ISOMChannel;
 
 void isor_reset_reader(ISOMChannel *ch);

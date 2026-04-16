@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -29,6 +29,7 @@
 #include <gpac/nodes_svg.h>
 #include <gpac/network.h>
 
+#ifndef GPAC_DISABLE_COMPOSITOR
 
 #ifndef GPAC_DISABLE_SVG
 static GF_MediaObject *get_sync_reference(GF_Scene *scene, XMLRI *iri, u32 o_type, GF_Node *orig_ref, Bool *post_pone)
@@ -207,8 +208,31 @@ GF_MediaObject *gf_mo_new()
 	return mo;
 }
 
+void compositor_get_srdmap_size(const GF_PropertyValue *srd_map, u32 *width, u32 *height, u32 *min_x, u32 *min_y)
+{
+	u32 i, nb_items = srd_map->value.uint_list.nb_items / 8;
+	u32 min_x_plus_one=0, min_y_plus_one=0;
+	u32 max_x=0, max_y=0;
+	u32 *vals = srd_map->value.uint_list.vals;
+	for (i=0; i<nb_items; i++) {
+		if (!min_x_plus_one || (min_x_plus_one-1 > vals[8*i]))
+			min_x_plus_one = vals[8*i] + 1;
+		if (!min_y_plus_one || (min_y_plus_one-1 > vals[8*i+1]))
+			min_y_plus_one = vals[8*i+1] + 1;
+		if (max_x < vals[8*i] + vals[8*i+2])
+			max_x = vals[8*i] + vals[8*i+2];
+
+		if (max_y < vals[8*i+1] + vals[8*i+3])
+			max_y = vals[8*i+1] + vals[8*i+3];
+	}
+	*width = max_x - (min_x_plus_one-1);
+	*height = max_y - (min_y_plus_one-1);
+	if (min_x) *min_x = min_x_plus_one-1;
+	if (min_y) *min_y = min_y_plus_one-1;
+}
+
 GF_EXPORT
-Bool gf_mo_get_visual_info(GF_MediaObject *mo, u32 *width, u32 *height, u32 *stride, u32 *pixel_ar, u32 *pixelFormat, Bool *is_flipped)
+Bool gf_mo_get_visual_info_ex(GF_MediaObject *mo, u32 *width, u32 *height, u32 *stride, u32 *pixel_ar, u32 *pixelFormat, Bool *is_flipped, Bool for_texture)
 {
 	if ((mo->type != GF_MEDIA_OBJECT_VIDEO) && (mo->type!=GF_MEDIA_OBJECT_TEXT)) return GF_FALSE;
 
@@ -221,9 +245,19 @@ Bool gf_mo_get_visual_info(GF_MediaObject *mo, u32 *width, u32 *height, u32 *str
 	if (pixel_ar) *pixel_ar = mo->pixel_ar;
 	if (pixelFormat) *pixelFormat = mo->pixelformat;
 	if (is_flipped) *is_flipped = mo->is_flipped;
+	if (for_texture) return GF_TRUE;
+	if (!width || !height) return GF_FALSE;
+	if (!mo->odm || !mo->odm->pid) return GF_TRUE;
+	const GF_PropertyValue *srd_map = gf_filter_pid_get_property(mo->odm->pid, GF_PROP_PID_SRD_MAP);
+	if (!srd_map) return GF_TRUE;
+	compositor_get_srdmap_size(srd_map, width, height, NULL, NULL);
 	return GF_TRUE;
 }
+Bool gf_mo_get_visual_info(GF_MediaObject *mo, u32 *width, u32 *height, u32 *stride, u32 *pixel_ar, u32 *pixelFormat, Bool *is_flipped)
+{
+	return gf_mo_get_visual_info_ex(mo, width, height, stride, pixel_ar, pixelFormat, is_flipped, GF_TRUE);
 
+}
 GF_EXPORT
 void gf_mo_get_nb_views(GF_MediaObject *mo, u32 *nb_views)
 {
@@ -348,10 +382,12 @@ void gf_mo_update_caps_ex(GF_MediaObject *mo, Bool check_unchanged)
 		}
 
 		v = gf_filter_pid_get_property(mo->odm->pid, GF_PROP_PID_SAR);
-		if (v) {
+		if (v && (v->value.frac.num>0)) {
 			u32 n_par = (v->value.frac.num) << 16 | (v->value.frac.den);
 			if (mo->pixel_ar && (mo->pixel_ar!=n_par)) changed = GF_TRUE;
 			mo->pixel_ar = n_par;
+		} else {
+			mo->pixel_ar = 0;
 		}
 
 		v = gf_filter_pid_get_property(mo->odm->pid, GF_PROP_PID_SRD);
@@ -397,6 +433,8 @@ void gf_mo_update_caps_ex(GF_MediaObject *mo, Bool check_unchanged)
 				mo->srd_full_h = v2->value.vec2i.y;
 			}
 		}
+		v = gf_filter_pid_get_property(mo->odm->pid, GF_PROP_PID_SRD_MAP);
+		if (v) compositor_get_srdmap_size(v, &mo->srd_full_w, &mo->srd_full_h, &mo->srd_map_ox, &mo->srd_map_oy);
 
 		v = gf_filter_pid_get_property(mo->odm->pid, GF_PROP_PID_NUM_VIEWS);
 		mo->nb_views = v ? v->value.uint : 0;
@@ -444,7 +482,7 @@ void gf_mo_update_caps_ex(GF_MediaObject *mo, Bool check_unchanged)
 		evt.type = GF_EVENT_QUALITY_SWITCHED;
 		gf_sc_send_event(scene->compositor, &evt);
 	} else if (check_unchanged) {
-		//reset config changed if nothing changed, this avoid resetting up texture or mixer input
+		//reset config changed if nothing changed, this avoids resetting up texture or mixer input
 		mo->config_changed = GF_FALSE;
 	}
 }
@@ -619,7 +657,8 @@ retry:
 		}
 		is_first = GF_TRUE;
 	}
-	assert(mo->pck);
+	if (!mo->pck) return NULL;
+
 	mo->first_frame_fetched = GF_TRUE;
 	*eos = mo->is_eos = GF_FALSE;
 
@@ -720,7 +759,7 @@ retry:
 		//if no buffer playout we are in low latency configuration, don"t skip resync
 		&& mo->odm->buffer_playout_ms
 	) {
-		assert(mo->odm->parentscene);
+		gf_assert(mo->odm->parentscene);
 		if (! mo->odm->parentscene->compositor->drop) {
 			if (mo->odm->parentscene->compositor->force_late_frame_draw) {
 				mo->flags |= GF_MO_IN_RESYNC;
@@ -795,7 +834,7 @@ retry:
 			gf_filter_pck_unref(mo->pck);
 			mo->pck = gf_filter_pid_get_packet(mo->odm->pid);
 			gf_odm_check_clock_mediatime(mo->odm);
-			assert(mo->pck);
+			gf_fatal_assert(mo->pck);
 			gf_filter_pck_ref( &mo->pck);
 			check_temi(mo);
 
@@ -988,7 +1027,7 @@ void gf_mo_release_data(GF_MediaObject *mo, u32 nb_bytes, s32 drop_mode)
 	if (nb_bytes==0xFFFFFFFF) {
 		mo->RenderedLength = mo->size;
 	} else {
-		assert(mo->RenderedLength + nb_bytes <= mo->size);
+		gf_assert(mo->RenderedLength + nb_bytes <= mo->size);
 		mo->RenderedLength += nb_bytes;
 	}
 
@@ -1074,7 +1113,7 @@ void gf_mo_play(GF_MediaObject *mo, Double clipBegin, Double clipEnd, Bool can_l
 			}
 		}
 		/*done prefetching*/
-		assert(! (mo->odm->flags & GF_ODM_PREFETCH) );
+		gf_assert(! (mo->odm->flags & GF_ODM_PREFETCH) );
 
 		gf_odm_start(mo->odm);
 	} else if (mo->odm) {
@@ -1652,7 +1691,7 @@ u32 gf_mo_event_target_count(GF_MediaObject *mo)
 
 void gf_mo_del(GF_MediaObject *mo)
 {
-	assert(gf_list_count(mo->evt_targets) == 0);
+	gf_assert(gf_list_count(mo->evt_targets) == 0);
 	gf_list_del(mo->evt_targets);
 	if (mo->pck) gf_filter_pck_unref(mo->pck);
 	gf_sg_mfurl_del(mo->URLs);
@@ -1747,3 +1786,4 @@ void gf_mo_hint_gaze(GF_MediaObject *mo, u32 gaze_x, u32 gaze_y)
 
 
 
+#endif //GPAC_DISABLE_COMPOSITOR

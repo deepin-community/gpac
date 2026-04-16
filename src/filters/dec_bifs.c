@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / BIFS decoder filter
@@ -29,7 +29,7 @@
 #include <gpac/compositor.h>
 #include <gpac/internal/compositor_dev.h>
 
-#ifndef GPAC_DISABLE_BIFS
+#if !defined(GPAC_DISABLE_BIFS) && !defined(GPAC_DISABLE_COMPOSITOR)
 
 
 typedef struct
@@ -167,9 +167,8 @@ GF_Err bifs_dec_process(GF_Filter *filter)
 		GF_FilterPid *opid = gf_filter_pid_get_udta(pid);
 
 		GF_ObjectManager *odm = gf_filter_pid_get_udta(opid);
-		if (!odm) continue;
 		//object clock shall be valid
-		assert(odm->ck);
+		if (!odm || !odm->ck) continue;
 
 		pck = gf_filter_pid_get_packet(pid);
 		if (!pck) {
@@ -278,16 +277,17 @@ GF_FilterRegister BIFSDecRegister = {
 	.process = bifs_dec_process,
 	.configure_pid = bifs_dec_configure_pid,
 	.process_event = bifs_dec_process_event,
+	.hint_class_type = GF_FS_CLASS_DECODER
 };
 
-#endif /*GPAC_DISABLE_BIFS*/
+#endif //!defined(GPAC_DISABLE_BIFS) && !defined(GPAC_DISABLE_COMPOSITOR)
 
-const GF_FilterRegister *bifs_dec_register(GF_FilterSession *session)
+const GF_FilterRegister *bifsdec_register(GF_FilterSession *session)
 {
-#ifdef GPAC_DISABLE_BIFS
-	return NULL;
-#else
+#if !defined(GPAC_DISABLE_BIFS) && !defined(GPAC_DISABLE_COMPOSITOR)
 	return &BIFSDecRegister;
+#else
+	return NULL;
 #endif /*GPAC_DISABLE_BIFS*/
 }
 

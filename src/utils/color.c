@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / common tools sub-project
@@ -28,7 +28,7 @@
 #include <gpac/constants.h>
 #include <gpac/color.h>
 
-#ifndef GPAC_DISABLE_PLAYER
+#ifndef GPAC_DISABLE_COMPOSITOR
 
 static GF_Err color_write_nv12_10_to_yuv(GF_VideoSurface *vs_dst, GF_VideoSurface *vs_src, GF_Window *_src_wnd, Bool swap_up);
 static GF_Err color_write_yv12_10_to_yuv(GF_VideoSurface *vs_dst, GF_VideoSurface *vs_src, const GF_Window *_src_wnd, Bool swap_up);
@@ -2334,7 +2334,13 @@ GF_Err gf_stretch_bits(GF_VideoSurface *dst, GF_VideoSurface *src, GF_Window *ds
 	return GF_OK;
 }
 
-#endif // GPAC_DISABLE_PLAYER
+#else
+GF_EXPORT
+GF_Err gf_stretch_bits(GF_VideoSurface *dst, GF_VideoSurface *src, GF_Window *dst_wnd, GF_Window *src_wnd, u8 alpha, Bool flip, GF_ColorKey *key, GF_ColorMatrix *cmat)
+{
+	return GF_NOT_SUPPORTED;
+}
+#endif // GPAC_DISABLE_COMPOSITOR
 
 
 /*
@@ -2533,7 +2539,7 @@ void gf_cmx_apply_fixed(GF_ColorMatrix *_this, Fixed *a, Fixed *r, Fixed *g, Fix
 }
 
 
-#ifndef GPAC_DISABLE_PLAYER
+#ifndef GPAC_DISABLE_COMPOSITOR
 
 
 //intrinsic code segfaults on 32 bit, need to check why
@@ -3557,8 +3563,8 @@ static GF_Err color_write_yuv420_to_yuv(GF_VideoSurface *vs_dst, GF_VideoSurface
 	if (is_planar_yuv(vs_dst->pixel_format)) {
 		/*complete source copy*/
 		if ((vs_dst->pitch_y == (s32)vs_src->pitch_y) && (w == vs_src->width) && (h == vs_src->height)) {
-			assert(!ox);
-			assert(!oy);
+			gf_assert(!ox);
+			gf_assert(!oy);
 			memcpy(vs_dst->video_buffer, pY, sizeof(u8)*w*h);
 			if (vs_dst->pixel_format == GF_PIXEL_YUV) {
 				memcpy(vs_dst->video_buffer + vs_dst->pitch_y * vs_dst->height, pV, sizeof(u8)*w*h/ 4);

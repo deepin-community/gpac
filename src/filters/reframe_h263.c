@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2022
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / H263 reframer filter
@@ -26,6 +26,8 @@
 #include <gpac/avparse.h>
 #include <gpac/constants.h>
 #include <gpac/filters.h>
+
+#ifndef GPAC_DISABLE_RFH263
 
 typedef struct
 {
@@ -318,8 +320,8 @@ static Bool h263dmx_process_event(GF_Filter *filter, const GF_FilterEvent *evt)
 
 static GFINLINE void h263dmx_update_cts(GF_H263DmxCtx *ctx)
 {
-	assert(ctx->fps.num);
-	assert(ctx->fps.den);
+	gf_assert(ctx->fps.num);
+	gf_assert(ctx->fps.den);
 
 	if (!ctx->notime) {
 		u64 inc = ctx->fps.den;
@@ -611,6 +613,7 @@ GF_Err h263dmx_process(GF_Filter *filter)
 				memcpy(ctx->hdr_store, start+remain-3, 3);
 				remain -= 3;
 				ctx->bytes_in_header = 3;
+				current=0; //skip test below
 			}
 			size = remain;
 			full_frame = GF_FALSE;
@@ -649,7 +652,7 @@ GF_Err h263dmx_process(GF_Filter *filter)
 		h263dmx_update_cts(ctx);
 
 
-		//don't demux too much of input, abort when we would block. This avoid dispatching
+		//don't demux too much of input, abort when we would block. This avoids dispatching
 		//a huge number of frames in a single call
 		if (gf_filter_pid_would_block(ctx->opid)) {
 			ctx->resume_from = (u32) ( (char *)start -  (char *)data);
@@ -764,11 +767,19 @@ GF_FilterRegister H263DmxRegister = {
 	.configure_pid = h263dmx_configure_pid,
 	.process = h263dmx_process,
 	.probe_data = h263dmx_probe_data,
-	.process_event = h263dmx_process_event
+	.process_event = h263dmx_process_event,
+	.hint_class_type = GF_FS_CLASS_FRAMING
 };
 
 
-const GF_FilterRegister *h263dmx_register(GF_FilterSession *session)
+const GF_FilterRegister *rfh263_register(GF_FilterSession *session)
 {
 	return &H263DmxRegister;
 }
+#else
+const GF_FilterRegister *rfh263_register(GF_FilterSession *session)
+{
+	return NULL;
+}
+#endif //GPAC_DISABLE_RFH263
+

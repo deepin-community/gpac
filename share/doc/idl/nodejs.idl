@@ -15,7 +15,7 @@ This section documents the JavaScript API used to query the filter session.
 
 Unless explictly stated, errors are handled through exceptions.
 
-All constants from GPAC are exported in the module object (e.g. use gpac.GF_Err ...) 
+All constants from GPAC are exported in the module object (e.g. use gpac.GF_Err ...)
 
 
 The API is very close to the GPAC python bindings.
@@ -32,7 +32,6 @@ When loading the module, libgpac is innitialized with no memory tracking and the
 
 \param mem_track mem tracker mode
 \param profile profile name, null for default
-\return
 */
 void init(unsigned long mem_track=0, DOMString profile=null);
 
@@ -47,7 +46,6 @@ DOMString e2s(long err);
 
 \param logs
 \param reset if true, resets all logs to default
-\return
 */
 void set_logs(DOMString logs, boolean reset=false);
 
@@ -66,25 +64,29 @@ unsigned long long sys_clock_high_res();
 */
 void set_args(Array args);
 
-/*! set profiler (Remotery) callback - see \ref gf_sys_profiler_set_callback
-\param callback function for Remotery message, takes a single string parameter and no return values
+/*! enables websocket monitoring server - see \ref gf_sys_enable_rmtws
+*
+* define the \ref rmt_on_new_client attribute to set callbacks
+\param enable enable or disable server
 */
-void set_rmt_fun(function callback);
+void enable_rmtws(boolean enable);
 
-/*! send message to profiler (Remotery) - see \ref gf_sys_profiler_send
-\param text text to send
+/*! enables user websocket server - see \ref gf_sys_enable_userws
+*
+* define the \ref userws_on_new_client attribute to set callbacks
+* \param enable (default: true) will enable the server if true, stop it if false
 */
-void rmt_send(DOMString text);
+void enable_userws(bool enable);
 
-/*! check if profiler (Remotery) sampling is enabled - see \ref gf_sys_profiler_sampling_enabled
-\return true if enabled, false otherwise
+/*! set the callback function when new clients connect to the monitoring websocket server
+* the function shall take one parameter of type \ref _RMTClient
 */
-boolean rmt_on();
+optional attribute function rmt_on_new_client;
 
-/*! enable or disable sampling in profiler (Remotery) - see \ref gf_sys_profiler_enable_sampling
-\param do_enable enable or disable sampling
+/*! set the callback function when new clients connect to the user websocket server
+* the function shall take one parameter of type \ref _RMTClient
 */
-void rmt_enable(boolean do_enable);
+optional attribute function userws_on_new_client;
 
 /*! GPAC event proc callback, initially set to null
 \param evt the user event being dispatched
@@ -119,6 +121,41 @@ attribute _FilterEvent FilterEvent;
 /*! FileIO constructor*/
 attribute _FileIO FileIO;
 
+
+
+/*! Object representing a monitoring websocket client
+*
+* will be passed to the session \ref rmt_on_new_client callback
+* and to \ref userws_on_new_client if the user websocket server is enabled
+*/
+interface _RMTClient {
+
+	/*! a callback called when the client receives data
+	 *
+	 * the function shall be of type function(data)
+	 * where data will be either of type string (for utf8 data) or arraybuffer (for binary data)
+	 */
+	optional attribute function on_data;
+
+	/*! a callback called when the client disconnects or is deleted */
+	optional attribute function on_close;
+
+	/*! a string of format ip:port representing the client */
+	readonly attribute string peer_address;
+
+	/*! sends data to the client on the websocket
+	\param data the data to send as a utf8 string
+	*/
+	void send(string data);
+
+	/*! sends data to the client on the websocket
+	\param data the data to send as a binary arraybuffer
+	*/
+	void send(arraybuffer data);
+
+
+}
+
 /*! @} */
 
 
@@ -129,7 +166,7 @@ attribute _FileIO FileIO;
 \ingroup nodejs_grp
 \brief FilterSession management
 
-See \ref GF_FilterSession
+See \ref fs_grp
 
 The default behaviour is to run the session in blocking mode, which will prevent executing anything until the end of a session.
 While this may be OK for workers or simple applications, it is obviously problematic if you have async tasks to be performed by your node app.
@@ -153,7 +190,7 @@ const FilterSessionPromise = (fs_run_task) => {
 
 const run_task = () => {
 	return new Promise((resolve, reject) => {
-	  resolve( fs.run_step() );
+	  resolve( fs.run() );
 	});
 }
 FilterSessionPromise(run_task).then( ).finally( ()=> { console.log('session is done'); } ) );
@@ -171,7 +208,7 @@ However it is currently not capable of running asynchronous callbacks into Node.
 The consequences are:
 - any custom JS filter will run on the main thread (EventLoop or worker thread)
 - any packet dispatched by a custom filter and requiring a JS callback upon packet destruction (shared data dispatch) will force filters consuming these packets to run on the main thread as well.
-- any filter assigned with a JS binding (only `dashin` for now) will be scheduled on the main thread
+- any filter assigned with a JS binding will be scheduled on the main thread
 
 For better multithreaded usage, it is therefore not recommended to use packets with shared JS data.
 
@@ -185,7 +222,7 @@ By default the filter session will run with implicit linking.
 /*! FilterSession object*/
 interface _FilterSession {
 
-/*! constructor for filter session - see \ref gf_fs_new_defaults. Other options MUST be passed as libgpac options using \ref set_args 
+/*! constructor for filter session - see \ref gf_fs_new_defaults. Other options MUST be passed as libgpac options using \ref set_args
 \param flags session flags
 */
 FilterSession(unsigned long flags=0);
@@ -237,7 +274,7 @@ _Filter load(DOMString fname);
 
 /*! post a user task to the filter sesison - see \ref gf_fs_post_user_task
 
-The task object must have an execute callback with no parameter and returning false to cancel the task or the reschedule time in milliseconds 
+The task object must have an execute callback with no parameter and returning false to cancel the task or the reschedule time in milliseconds
 
 \param task task object to post
 */
@@ -295,11 +332,13 @@ boolean is_supported_source(DOMString url, DOMString parent=null);
 
 \note Custom filters are always created with the flag GF_FS_REG_MAIN_THREAD set, so that they always run in the main thread
 
+\note If the custom filter is a source, it must be initially scheduled using reschedule
+
 \param name name for the filter
 \param flags filter flags
 \return new custom filter
 */
-CustomFilter new_filter(DOMString name="Custom", unsigend long flags=0);
+CustomFilter new_filter(DOMString name="Custom", unsigned long flags=0);
 
 };
 
@@ -311,7 +350,7 @@ CustomFilter new_filter(DOMString name="Custom", unsigend long flags=0);
 \ingroup nodejs_grp
 \brief Filter management
 
-See \ref GF_Filter
+See \ref fs_filter
 
 @{
 */
@@ -361,6 +400,25 @@ void set_source_restricted(_Filter src, DOMString link_args=null);
 \param link_args link options
 */
 void insert(_Filter f, long pid_idx=-1, DOMString link_args=null);
+
+
+/*! reconnect the filter output - see \ref gf_filter_set_source and \ref gf_filter_reconnect_output
+\param pid_idx index of output pid to reconnect, -1 for all pids
+*/
+void reconnect(long pid_idx=-1);
+
+/*! Resolves link from given output pid of filter to a filter description. The described filter is not loaded in the graph - see \ref gf_filter_probe_link
+\param pid_idx 0-based index of the output pid
+\param name filter description to link to; this can be any filter description
+\return comma-spearated string list of the filter names in the resolved chain from current filter to destination
+*/
+DOMString probe_link(long pid_idx, DOMString name);
+
+/*! Gets all possible destination filter for this filter or one of its output PID - see \ref gf_filter_get_possible_destinations
+\param pid_idx 0-based index of the output pid, use -1 to check all output pids
+\return None if no possible connections to known filter, or a comma-separated string list containing all possible direct connections
+*/
+DOMString get_destinations(long pid_idx=-1);
 
 /*! get an input pid property by name
 \param idx index of input pid
@@ -434,9 +492,10 @@ FilterStatistics get_statistics();
 /*! enforces sourceID to be present for output pids of this filter - see \ref gf_filter_require_source_id*/
 void require_source_id();
 
-/*!  Binds the given object to the underlying filter for callbacks override - only supported by DASH demuxer for the current time
+/*!  Binds the given object to the underlying filter for callbacks override - only supported by DASH demuxer and httpout  for the current time
 
-For DASH, the object must derive implement the methods of the \ref _DASHCustomAlgorithm interface
+For DASH, the object must implement the methods of the \ref _DASHCustomAlgorithm interface
+For DASH, the object must implement the methods of the \ref _HTTPRequestHandler interface
 
 \param interf interface object to bind
 */
@@ -451,7 +510,7 @@ Fields have the same types, names and semantics as \ref GF_FilterStats, except:
 -  filter_alias which is exposed as a boolean.
 */
 interface FilterStatistics {
-	
+
 };
 
 /*! Statistics object for pid as defined in libgpac.
@@ -463,7 +522,7 @@ interface PidStatistics {
 };
 
 
-/*! PropertyValue for filter, PIDs and packets are passed as 
+/*! PropertyValue for filter, PIDs and packets are passed as
 :
 - native JS types for integers and strings
 - nFraction for 32 and 64 bit fractions
@@ -478,7 +537,7 @@ Pointer properties are passed back as "INTERNAL_POINTER" string and cannot be se
 Properties corresponding to constants are usually passed as strings, for example `StreamType`, `CodecID`, `PixelFormat`, `AudioFormat`.
 */
 interface PropertyValue {
-	
+
 };
 
 /*! fraction object */
@@ -538,9 +597,9 @@ A custom filter must implement the \ref CustomFilter class, and optionally provi
 - configure_pid: callback for PID configuration, mandatory if your filter is not a source
 - process: callback for processing
 - process_event: callback for processing and event
-- reconfigure_output: callback for output reconfiguration (PID capability negociation)
+- reconfigure_output: callback for output reconfiguration (PID capability negotiation)
 
-A custom filter must also declare its capabilities, input and output, using push_cap method 
+A custom filter must also declare its capabilities, input and output, using push_cap method
 \code
 
 let fs = new gpac.FilterSession();
@@ -596,7 +655,7 @@ cust.process_event = function(evt)
 \endcode
 
 
-See \ref GF_Filter
+See \ref fs_filter
 
 @{
 */
@@ -838,7 +897,7 @@ void forward(_FilterPacket ipck);
 \param prop property value to set, or null to remove property
 \param custom_type type of property if user-defined property. If not set and user-defined, property is a string
 */
-void set_prop(DOMString pcode, PropertyValue prop, unsigend long custom_type);
+void set_prop(DOMString pcode, PropertyValue prop, unsigned long custom_type);
 
 /*! set a info property the current pid - see \ref gf_filter_pid_set_info and \ref gf_filter_pid_set_info_str
 \param pcode property type
@@ -862,7 +921,7 @@ void discard_block();
 void allow_direct_dispatch();
 
 /*! get current clock type info - see \ref gf_filter_pid_get_clock_info
-\return clock type 
+\return clock type
 */
 unsigned long get_clock_type();
 
@@ -914,12 +973,12 @@ void recompute_dts(boolean do_compute);
 */
 PropertyValue query_cap(DOMString pcode);
 
-/*! negociates a capability property on input PID - see \ref gf_filter_pid_negociate_property and \ref gf_filter_pid_negociate_property_dyn
+/*! negotiates a capability property on input PID - see \ref gf_filter_pid_negotiate_property and \ref gf_filter_pid_negotiate_property_dyn
 \param pcode property to negotiate
 \param prop property to negotiate
 \param custom_type type of property if user-defined property. If not set and user-defined, property is a string
 */
-void negociate_cap(DOMString pcode, PropertyValue prop, unsigned long custom_type=0);
+void negotiate_cap(DOMString pcode, PropertyValue prop, unsigned long custom_type=0);
 
 /*! resolves a template string - see \ref gf_filter_pid_resolve_file_template
 \param template the template string
@@ -945,7 +1004,7 @@ _FilterPacket new_pck_ref(_FilterPacket ipck, unsigned long size=0, unsigned lon
 _FilterPacket new_pck(unsigned long size=0);
 
 /*! creates a new packet sharing memory of the filter - see \ref gf_filter_pck_new_shared
-The filter object must have a `packet_release` method with arguments [ FilterPid,  FilterPacket ] 
+The filter object must have a `packet_release` method with arguments [ FilterPid,  FilterPacket ]
 \param data the data to use
 \return the new FilterPacket or None if failure
 */
@@ -982,7 +1041,7 @@ unsigned long dur;
 
 /*! if true, the session has been aborted and this is the final flush for this buffer*/
 boolean is_final_flush;
-	
+
 };
 
 /*! filter packet for custom filters
@@ -1128,7 +1187,7 @@ Events properties are read-only for input events and read/write for events creat
 */
 interface _FilterEvent
 {
-	
+
 };
 
 
@@ -1143,7 +1202,7 @@ interface _FilterEvent
 \brief DASH and HLS user-defined rate adaptation algorithms
 
 
-The DASH demuxer can be provided with a custom JS algorithm, provided as an object implementing the the DASHAlgorithm interface.
+The DASH demuxer can be provided with a custom JS algorithm, provided as an object implementing the DASHAlgorithm interface.
 
 When running the session in multithreaded mode, the dash demuxer will always be scheduled on the main thread if a custom algorithm is bound.
 
@@ -1154,7 +1213,7 @@ When running the session in multithreaded mode, the dash demuxer will always be 
 /*! interface for custom DASH algorithms
 
 Callbacks may be changed at runtime, however if the object passed to initialize the binding has no on_download_monitor function, rate monitoring will be disabled for the binding*/
-interface _DASHCustomAlgorithm 
+interface _DASHCustomAlgorithm
 {
 
 /*! Callback (optional) called upon a period reset.
@@ -1199,7 +1258,7 @@ long on_download_monitor(_DASHGroup group, _DASHGroupDownloadStatistics stats);
 
 
 /*! interface for custom DASH groups*/
-interface _DASHGroup 
+interface _DASHGroup
 {
 
 /*!  Index of group, as used in callbacks */
@@ -1216,7 +1275,7 @@ _DASHSRD SRD;
 };
 
 /*! interface for custom DASH groups*/
-interface _DASHQualityInfo 
+interface _DASHQualityInfo
 {
 
 /*! bandwidth in bits per second*/
@@ -1270,7 +1329,7 @@ attribute readonly Array sizes;
 };
 
 /*! segemnt size info*/
-interface _DASHSegmentInfo 
+interface _DASHSegmentInfo
 {
 /*! segemnt size*/
 attribute readonly unsigned long long size;
@@ -1314,7 +1373,7 @@ attribute readonly unsigned long self.buffer;
 /*! degradation hint, 0 means no degradation, 100 means tile completely hidden*/
 attribute readonly unsigned long self.quality_degradation_hint;
 
-/*! cumulated download rate of all active groups - 0 means all files are local*/
+/*! cumulated download rate of all active groups in bytes per seconds - 0 means all files are local*/
 attribute readonly unsigned long self.total_rate;
 
 };
@@ -1340,7 +1399,7 @@ attribute readonly unsigned long buffer_dur;
 
 /*! duration of segment being downloaded, in milliseconds - 0 if unknown*/
 attribute readonly unsigned long current_seg_dur;
-	
+
 };
 
 /*! Spacial Relationship Descriptor for DASH group*/
@@ -1363,7 +1422,7 @@ attribute readonly unsigned long fw;
 
 /*! total height of SRD descriptor for this tile*/
 attribute readonly unsigned long fh;
-	
+
 };
 
 
@@ -1382,7 +1441,7 @@ FileIO allows redirecting calls to file access (open, close, read, write) to Nod
 
 This allows generating content in NodeJS without any disk IO, or passing NodeJS data as input to GPAC without intermediate file.
 
-See \ref GF_FileIO for more details
+See \ref osfile_grp for more details
 
 A FileIO object is constructed from the URL to wrap and a factory object with callbacks used to access the file.
 For example, to wrap a file for input:
@@ -1517,7 +1576,105 @@ boolean exists(DOMString URL);
 
 };
 
-
 /*! @} */
 
 
+
+/*!
+
+\defgroup nodehttp_grp HTTPRequestHandler interface
+\ingroup nodejs_grp
+\brief HTTP server user-defined request handler
+
+
+The httpout server can use a custom request handler, provided as an object implementing the HTTPRequestHandler interface.
+
+When running the session in multithreaded mode, the httpout filter  will always be scheduled on the main thread if a custom request handler is bound.
+
+@{
+
+*/
+
+/*! interface for HTTP custom request handler
+*/
+interface _HTTPRequestHandler
+{
+
+/*! Callback called upon a period reset.
+\param request the request to process
+*/
+void on_request(_HTTPRequest request);
+
+};
+
+
+/*! interface for HTTP request */
+interface _HTTPRequest
+{
+
+/*! send the response to the request*/
+attribute void send();
+
+/*! HTTP reply code to use. If 0, the request is handled by GPAC as usual. Otherwise, the request is handled by your script if the reply does not indicate an error*/
+attribute unsigned long reply;
+
+/*! HTTP method of the request */
+attribute readonly DOMString method;
+
+/*! HTTP URL of the request */
+attribute readonly DOMString url;
+
+/*! Authentication reply code - requests are pre-identified using GPAC credentials: a value of 401 indicates no identification, 200 indicates identification OK, 403 indicates failure */
+attribute readonly unsigned long auth_code;
+
+/*! HTTP headers of the request, array of _HTTPHeader objects*/
+attribute readonly Array headers_in;
+
+/*! HTTP headers to set on the response, array of _HTTPHeader objects (initialized as empty)*/
+attribute Array headers_out;
+
+/*! reply body. It is undefined by default
+ - if reply is 0, this can be set to a file path to serve. If not set, usual URL resolving of httpout is done
+ - if reply is not 0, this can be set to a string containing the body. To deliver a binary file or a large file, use the read function
+*/
+attribute DOMString body
+
+
+/*! callback function used to throttle the download, can be used even if the request is handled by gpac. It is undefined by default
+\param done amount of bytes already sent in request
+\param total total amount of bytes in request
+\return a delay for next send in milliseconds
+*/
+attribute unsigned long throttle(unsigned long long done, unsigned long long total);
+
+/*! callback function used to get data (GET requests). It is undefined by default
+\param buffer array buffer to fill (shared array, do NOT keep)
+\return the number of bytes read, negative value means no data available yet, 0 means end of file
+*/
+attribute signed long read(ArrayBuffer buffer);
+
+/*! callback function used to receive data (PUT/POST requests). It is undefined by default
+\param buffer array buffer received. If null, end of stream is reached
+\return the number of bytes written (informative only)
+*/
+attribute unsigned long write(ArrayBuffer buffer);
+
+/*! callback function used to monitor end of session. It is undefined by default
+\param error GPAC error code for the session. If 1 (GF_EOS), the session is ended but underlying network is kept alive, otherwise session is destroyed
+*/
+attribute void close(unsigned long error);
+
+};
+
+/*! interface for HTTP header */
+interface _HTTPHeader
+{
+
+/*! header name */
+attribute readonly DOMString name;
+
+/*! header value */
+attribute readonly DOMString value;
+};
+
+/*! @} */

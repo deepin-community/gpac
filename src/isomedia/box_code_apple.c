@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2006-2021
+ *			Copyright (c) Telecom ParisTech 2006-2025
  *				All rights reserved
  *
  *  This file is part of GPAC / ISO Media File Format sub-project
@@ -38,7 +38,7 @@ GF_Err ilst_box_read(GF_Box *s, GF_BitStream *bs)
 {
 	GF_Err e;
 	u32 sub_type;
-	GF_Box *a;
+	GF_Box *a = NULL;
 	GF_ItemListBox *ptr = (GF_ItemListBox *)s;
 	while (ptr->size) {
 		/*if no ilst type coded, break*/
@@ -47,7 +47,7 @@ GF_Err ilst_box_read(GF_Box *s, GF_BitStream *bs)
 			e = gf_isom_box_parse_ex(&a, bs, s->type, GF_FALSE, s->size);
 
 			/* the macro will return in this case before we can free */
-			if (!e && ptr->size < a->size) {
+			if (!e && a && ptr->size < a->size) {
 				GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[isom] not enough bytes in box %s: %d left, reading %d (file %s, line %d)\n", gf_4cc_to_str(ptr->type), ptr->size, a->size, __FILE__, __LINE__ )); \
 				e = GF_ISOM_INVALID_FILE;
 			}
@@ -55,6 +55,7 @@ GF_Err ilst_box_read(GF_Box *s, GF_BitStream *bs)
 				if (a) gf_isom_box_del(a);
 				return e;
 			}
+			if (!a) return GF_NON_COMPLIANT_BITSTREAM;
 
 			ISOM_DECREASE_SIZE(ptr, a->size);
 			gf_list_add(ptr->child_boxes, a);
@@ -175,6 +176,25 @@ GF_Box *ilst_item_box_new()
 	return (GF_Box *)tmp;
 }
 
+GF_Err ilst_item_on_child_box(GF_Box *s, GF_Box *a, Bool is_rem)
+{
+	GF_ListItemBox *ptr = (GF_ListItemBox*)s;
+	switch (a->type) {
+	case GF_QT_BOX_TYPE_NAME:
+		BOX_FIELD_ASSIGN(name, GF_NameBox)
+		break;
+	case GF_QT_BOX_TYPE_MEAN:
+		BOX_FIELD_ASSIGN(mean, GF_NameBox)
+		break;
+	case GF_ISOM_BOX_TYPE_DATA:
+		BOX_FIELD_ASSIGN(data, GF_DataBox)
+		break;
+	default:
+		return GF_OK;
+	}
+	return GF_OK;
+}
+
 #ifndef GPAC_DISABLE_ISOM_WRITE
 
 GF_Err ilst_item_box_write(GF_Box *s, GF_BitStream *bs)
@@ -214,6 +234,8 @@ GF_Err ilst_item_box_size(GF_Box *s)
 	/*iTune way: data-box-encapsulated box list*/
 	else if (ptr->data && !ptr->data->qt_style) {
 		u32 pos=0;
+		gf_isom_check_position(s, (GF_Box* ) ptr->mean, &pos);
+		gf_isom_check_position(s, (GF_Box* ) ptr->name, &pos);
 		gf_isom_check_position(s, (GF_Box* ) ptr->data, &pos);
 	}
 	/*QT way: raw data*/
@@ -240,7 +262,7 @@ GF_Err databox_box_read(GF_Box *s,GF_BitStream *bs)
 	GF_DataBox *ptr = (GF_DataBox *)s;
 
 	ISOM_DECREASE_SIZE(ptr, 4);
-	ptr->reserved = gf_bs_read_u32(bs);
+	ptr->locale = gf_bs_read_u32(bs);
 
 	if (ptr->size) {
 		ptr->dataSize = (u32) ptr->size;
@@ -269,7 +291,7 @@ GF_Err databox_box_write(GF_Box *s, GF_BitStream *bs)
 
 	e = gf_isom_full_box_write(s, bs);
 	if (e) return e;
-	gf_bs_write_int(bs, ptr->reserved, 32);
+	gf_bs_write_int(bs, ptr->locale, 32);
 	if(ptr->data != NULL && ptr->dataSize > 0) {
 		gf_bs_write_data(bs, ptr->data, ptr->dataSize);
 	}
@@ -422,7 +444,7 @@ GF_Box *gf_isom_create_meta_extensions(GF_ISOFile *mov, u32 meta_type)
 	meta = (GF_MetaBox *)gf_isom_box_new(udta_subtype);
 
 	if (meta) {
-		udta_on_child_box((GF_Box *)mov->moov->udta, (GF_Box *)meta, GF_FALSE);
+		udta_on_child_box_ex((GF_Box *)mov->moov->udta, (GF_Box *)meta, GF_FALSE, GF_TRUE);
 		if (meta_type!=1) {
 			meta->handler = (GF_HandlerBox *)gf_isom_box_new_parent(&meta->child_boxes, GF_ISOM_BOX_TYPE_HDLR);
 			if(meta->handler == NULL) {
@@ -857,7 +879,7 @@ GF_Err chan_box_read(GF_Box *s, GF_BitStream *bs)
 
 	ptr->audio_descs = gf_malloc(sizeof(GF_AudioChannelDescription) * ptr->num_audio_description);
 	if (!ptr->audio_descs) return GF_OUT_OF_MEM;
-	
+
 	for (i=0; i<ptr->num_audio_description; i++) {
 		GF_AudioChannelDescription *adesc = &ptr->audio_descs[i];
 		ISOM_DECREASE_SIZE(s, 20);

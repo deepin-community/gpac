@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean le Feuvre
- *			Copyright (c) Telecom ParisTech 2005-2012
+ *			Copyright (c) Telecom ParisTech 2005-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / Scene Compositor sub-project
@@ -25,7 +25,9 @@
 
 #include "visual_manager.h"
 
-#ifndef GPAC_DISABLE_SVG
+
+#if !defined(GPAC_DISABLE_SVG) &&  !defined(GPAC_DISABLE_COMPOSITOR)
+
 #include "nodes_stacks.h"
 #include "texturing.h"
 
@@ -105,10 +107,10 @@ void apply_feComponentTransfer(GF_Node *node, GF_TextureHandler *source, GF_Rect
 			else ptr = source->data+3;
 			break;
 		}
+		if (!ptr) return;
 
 		if ((type==SVG_FILTER_TRANSFER_LINEAR) && (intercept || (slope!=FIX_ONE)) ) {
 			intercept *= 255;
-			assert( ptr );
 			for (i=0; i<source->height; i++) {
 				for (j=0; j<source->width; j++) {
 					Fixed p = (*ptr) * slope + intercept;
@@ -117,7 +119,6 @@ void apply_feComponentTransfer(GF_Node *node, GF_TextureHandler *source, GF_Rect
 				}
 			}
 		} else if (type==SVG_FILTER_TRANSFER_GAMMA) {
-			assert( ptr );
 			for (i=0; i<source->height; i++) {
 				for (j=0; j<source->width; j++) {
 					Fixed p = 255 * gf_mulfix(amplitude,  FLT2FIX( pow( INT2FIX(*ptr)/255, FIX2FLT(exponent) ) ) ) + offset;
@@ -128,7 +129,6 @@ void apply_feComponentTransfer(GF_Node *node, GF_TextureHandler *source, GF_Rect
 		} else if ((type==SVG_FILTER_TRANSFER_TABLE) && table && (gf_list_count(table)>=2) ) {
 			u32 count = gf_list_count(table);
 			u32 N = count-1;
-			assert( ptr );
 			for (i=0; i<source->height; i++) {
 				for (j=0; j<source->width; j++) {
 					SVG_Number *vk, *vk1;
@@ -145,7 +145,6 @@ void apply_feComponentTransfer(GF_Node *node, GF_TextureHandler *source, GF_Rect
 			}
 		} else if ((type==SVG_FILTER_TRANSFER_DISCRETE) && table && gf_list_count(table) ) {
 			u32 count = gf_list_count(table);
-			assert( ptr );
 			for (i=0; i<source->height; i++) {
 				for (j=0; j<source->width; j++) {
 					SVG_Number *vk;
@@ -202,7 +201,7 @@ void svg_draw_filter(GF_Node *filter, GF_Node *node, GF_TraverseState *tr_state)
 	GF_Matrix2D backup;
 	SVGAllAttributes all_atts;
 	GF_FilterStack *st = gf_node_get_private(filter);
-	assert(tr_state->traversing_mode==TRAVERSE_SORT);
+	gf_assert(tr_state->traversing_mode==TRAVERSE_SORT);
 
 	/*store the current transform matrix, create a new one for group_cache*/
 	gf_mx2d_copy(backup, tr_state->transform);
@@ -446,6 +445,4 @@ void compositor_init_svg_filter(GF_Compositor *compositor, GF_Node *node)
 
 #endif //GPAC_ENABLE_SVG_FILTERS
 
-#endif
-
-
+#endif // !defined(GPAC_DISABLE_SVG) &&  !defined(GPAC_DISABLE_COMPOSITOR)

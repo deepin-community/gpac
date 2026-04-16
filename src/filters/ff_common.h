@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2017-2022
+ *			Copyright (c) Telecom ParisTech 2017-2023
  *					All rights reserved
  *
  *  This file is part of GPAC / common ffmpeg filters
@@ -32,7 +32,9 @@
 #include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/dict.h>
+#ifndef FFMPEG_DISABLE_AVDEVICE
 #include <libavdevice/avdevice.h>
+#endif
 #include <libswscale/swscale.h>
 #include <libavutil/channel_layout.h>
 
@@ -60,6 +62,10 @@
 #if (LIBAVCODEC_VERSION_MAJOR > 58)
 #define FFMPEG_HAS_BSF
 #include <libavcodec/bsf.h>
+#endif
+
+#if AV_VERSION_INT(LIBAVUTIL_VERSION_MAJOR, LIBAVUTIL_VERSION_MINOR, 0) < AV_VERSION_INT(59, 0, 0)
+#define FFMPEG_OLD_CHLAYOUT
 #endif
 
 
@@ -91,6 +97,7 @@ u32 ffmpeg_audio_fmt_from_gpac(u32 sfmt);
 u32 ffmpeg_audio_fmt_to_gpac(u32 sfmt);
 u32 ffmpeg_codecid_from_gpac(u32 codec_id, u32 *ff_codectag);
 u32 ffmpeg_codecid_to_gpac(u32 codec_id);
+u32 ffmpeg_codecid_to_gpac_audio_fmt(u32 codec_id);
 
 u32 ffmpeg_stream_type_from_gpac(u32 streamtype);
 u32 ffmpeg_stream_type_to_gpac(u32 streamtype);
@@ -129,3 +136,5 @@ GF_Err ffmpeg_codec_par_to_gpac(AVCodecParameters *codecpar, GF_FilterPid *opid,
 #endif
 
 GF_Err ffmpeg_update_arg(const char *log_name, void *ctx, AVDictionary **options, const char *arg_name, const GF_PropertyValue *arg_val);
+
+void ffmpeg_check_threads(GF_Filter *filter, AVDictionary *options, AVCodecContext *codecctx);
